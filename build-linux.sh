@@ -74,19 +74,7 @@ install_tree() {
 # Portable tarball: extract anywhere, or into ~/.local for a per-user install.
 tar_root="$stage/codex-minibar-$version"
 install_tree "$tar_root"
-cat > "$tar_root/install.sh" <<'INSTALL'
-#!/usr/bin/env sh
-# Installs Codex Minibar for the current user into ~/.local.
-set -eu
-here="$(cd "$(dirname "$0")" && pwd)"
-prefix="${PREFIX:-$HOME/.local}"
-mkdir -p "$prefix"
-cp -R "$here/bin" "$here/share" "$prefix/"
-command -v update-desktop-database >/dev/null 2>&1 &&
-    update-desktop-database "$prefix/share/applications" 2>/dev/null || true
-echo "Installed to $prefix. Make sure $prefix/bin is on your PATH."
-INSTALL
-chmod 755 "$tar_root/install.sh"
+install -m755 packaging/linux/install.sh "$tar_root/install.sh"
 tarball="$dist/codex-minibar-$version-linux-$arch.tar.gz"
 tar -C "$stage" -czf "$tarball" "codex-minibar-$version"
 echo "Built $tarball"

@@ -48,8 +48,7 @@ fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -
     let directory = data_home.join("applications");
     std::fs::create_dir_all(&directory).context("create desktop entry directory")?;
     let path = directory.join(DESKTOP_FILE);
-    let quoted = super::autostart::quote_exec(executable);
-    let entry = DESKTOP_ENTRY.replace("Exec=codex-minibar", &format!("Exec={quoted}"));
+    let entry = desktop_entry(DESKTOP_ENTRY, executable);
     let mut file = match OpenOptions::new().write(true).create_new(true).open(&path) {
         Ok(file) => file,
         Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
@@ -60,6 +59,20 @@ fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -
         return Err(error).context("write desktop entry for portal identity");
     }
     Ok(())
+}
+
+pub(super) fn desktop_entry(template: &str, executable: &Path) -> String {
+    let quoted = super::autostart::quote_exec(executable);
+    template
+        .lines()
+        .map(|line| match line {
+            "Exec=codex-minibar" => format!("Exec={quoted}"),
+            "Exec=codex-minibar --toggle" => format!("Exec={quoted} --toggle"),
+            _ => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        + "\n"
 }
 
 #[cfg(test)]
@@ -110,5 +123,43 @@ mod tests {
         .unwrap();
         ensure_entry_in(&home, &[system], Path::new("/usr/bin/codex-minibar")).unwrap();
         assert!(!home.exists());
+    }
+
+    #[test]
+    fn tarball_installer_uses_absolute_launchers_with_desktop_entry_escaping() {
+        let root = tempfile::tempdir().unwrap();
+        let package = root.path().join("package");
+        let applications = package.join("share/applications");
+        std::fs::create_dir_all(&applications).unwrap();
+        std::fs::create_dir(package.join("bin")).unwrap();
+        std::fs::write(package.join("bin/codex-minibar"), "fixture, never launched").unwrap();
+        std::fs::write(applications.join(DESKTOP_FILE), DESKTOP_ENTRY).unwrap();
+        let installer = package.join("install.sh");
+        std::fs::write(&installer, include_str!("../../packaging/linux/install.sh")).unwrap();
+        for name in [
+            "normal",
+            "spaces and Юникод",
+            "quote\" $`%\\",
+            "line\nbreak",
+        ] {
+            let prefix = root.path().join(name);
+            let output = std::process::Command::new("/bin/sh")
+                .arg(&installer)
+                .env("PREFIX", &prefix)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let installed =
+                std::fs::read_to_string(prefix.join("share/applications").join(DESKTOP_FILE))
+                    .unwrap();
+            assert_eq!(
+                installed,
+                desktop_entry(DESKTOP_ENTRY, &prefix.join("bin/codex-minibar"))
+            );
+        }
     }
 }

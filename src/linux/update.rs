@@ -233,6 +233,14 @@ fn unpack_tarball(archive: &Path, destination: &Path) -> Result<PathBuf> {
 /// The program goes last: until then the old version stays complete enough to
 /// run and retry, and only gains newer icons and a newer desktop entry.
 fn apply_tarball(root: &Path, prefix: &Path, binary: &Path) -> Result<()> {
+    // Keep a per-user launcher independent of the graphical session's PATH,
+    // including after an update replaces the packaged desktop entry.
+    let desktop = root.join("share/applications/io.github.vertopolkalf.CodexMinibar.desktop");
+    if desktop.is_file() {
+        let template = fs::read_to_string(&desktop).context("read updated desktop entry")?;
+        fs::write(&desktop, super::identity::desktop_entry(&template, binary))
+            .context("set updated desktop entry executable")?;
+    }
     copy_tree(&root.join("share"), &prefix.join("share"))?;
     swap_in(&root.join("bin").join(BINARY), binary)
 }
@@ -525,6 +533,11 @@ mod tests {
                 "codex-minibar-2.0.0/share/applications/a.desktop",
                 "entry",
             );
+            append(
+                builder,
+                "codex-minibar-2.0.0/share/applications/io.github.vertopolkalf.CodexMinibar.desktop",
+                "[Desktop Entry]\nExec=codex-minibar\n[Desktop Action Toggle]\nExec=codex-minibar --toggle\n",
+            );
             append(builder, "codex-minibar-2.0.0/install.sh", "#!/bin/sh");
         });
 
@@ -535,6 +548,16 @@ mod tests {
         assert_eq!(
             fs::read_to_string(prefix.join("share/applications/a.desktop")).unwrap(),
             "entry"
+        );
+        let quoted = super::super::autostart::quote_exec(&binary);
+        assert_eq!(
+            fs::read_to_string(
+                prefix.join("share/applications/io.github.vertopolkalf.CodexMinibar.desktop")
+            )
+            .unwrap(),
+            format!(
+                "[Desktop Entry]\nExec={quoted}\n[Desktop Action Toggle]\nExec={quoted} --toggle\n"
+            )
         );
         assert!(!prefix.join("install.sh").exists());
         assert_eq!(
