@@ -227,12 +227,11 @@ fn family_from_font_name(value: &str) -> Option<String> {
 }
 
 fn fontconfig_family(pattern: &str) -> Option<String> {
-    let output = std::process::Command::new("fc-match")
-        .args(["--format=%{family[0]}", pattern])
-        .output()
-        .ok()?;
-    let family = String::from_utf8(output.stdout).ok()?.trim().to_owned();
-    (output.status.success() && !family.is_empty()).then_some(family)
+    let mut command = std::process::Command::new("fc-match");
+    command.args(["--format=%{family[0]}", pattern]);
+    let (status, stdout, _) = super::command::output(command, Duration::from_secs(2)).ok()?;
+    let family = stdout.trim().to_owned();
+    (status.success() && !family.is_empty()).then_some(family)
 }
 
 /// GNOME Shell (and the Ubuntu, Pantheon and Budgie shells derived from its

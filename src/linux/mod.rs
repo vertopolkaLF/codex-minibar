@@ -6,6 +6,7 @@
 
 pub mod apps;
 pub mod autostart;
+pub(crate) mod command;
 pub mod dbus;
 pub mod desktop;
 pub mod identity;
