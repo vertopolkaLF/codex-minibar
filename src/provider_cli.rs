@@ -44,6 +44,10 @@ pub(crate) fn executable_candidates(known: &[PathBuf], names: &[&str]) -> Vec<Pa
         let Ok(candidate) = fs::canonicalize(candidate) else {
             continue;
         };
+        #[cfg(not(windows))]
+        if !crate::linux::apps::is_executable(&candidate) {
+            continue;
+        }
         if candidate.is_absolute() && candidate.is_file() && seen.insert(candidate.clone()) {
             candidates.push(candidate);
         }
@@ -193,11 +197,34 @@ mod tests {
         }
     }
 
+    #[cfg(not(windows))]
+    #[test]
+    fn unusable_files_do_not_mask_a_runnable_cli_and_symlinks_are_deduplicated() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let root = tempfile::tempdir().unwrap();
+        let incomplete = root.path().join("incomplete");
+        let cli = root.path().join("cli");
+        let alias = root.path().join("alias");
+        fs::write(&incomplete, b"unfinished download").unwrap();
+        fs::write(&cli, b"fixture").unwrap();
+        fs::set_permissions(&cli, fs::Permissions::from_mode(0o755)).unwrap();
+        symlink(&cli, &alias).unwrap();
+        assert_eq!(
+            executable_candidates(&[incomplete, alias, cli.clone()], &[]),
+            vec![cli.canonicalize().unwrap()]
+        );
+    }
+
     #[test]
     fn known_candidates_are_resolved_to_existing_absolute_files() {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("provider.exe");
         fs::write(&executable, b"fixture").unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        }
 
         let candidates = executable_candidates(&[executable], &[]);
 
@@ -211,6 +238,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("agy.exe");
         fs::write(&executable, b"fixture").unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+        }
 
         let candidates = candidates_from(Some(directory.path()), [], &["agy.exe"]);
 

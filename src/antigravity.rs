@@ -984,6 +984,11 @@ mod tests {
         let cli = directory.path().join(CLI_NAMES[0]);
         let app = directory.path().join("Antigravity.exe");
         std::fs::write(&cli, b"cli").unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         std::fs::write(&app, b"app").unwrap();
 
         assert_eq!(

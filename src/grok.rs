@@ -446,6 +446,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("grok.exe");
         fs::write(&executable, b"fixture").unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&executable, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
 
         assert_eq!(
             cli_available(Some(directory.path())),

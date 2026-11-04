@@ -793,6 +793,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let launcher = directory.path().join("cmdc.cmd");
         fs::write(&launcher, b"fixture").unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&launcher, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         assert_eq!(
             cli_available(Some(directory.path())),
             Some(fs::canonicalize(launcher).unwrap())
