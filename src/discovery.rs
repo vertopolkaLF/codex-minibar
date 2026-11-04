@@ -233,18 +233,22 @@ fn desktop_app_locations() -> Vec<PathBuf> {
 
 fn push_candidate(
     candidates: &mut Vec<CodexCandidate>,
-    seen: &mut HashSet<String>,
+    seen: &mut HashSet<PathBuf>,
     path: &Path,
     source: CandidateSource,
 ) {
     if !path.is_file() {
         return;
     }
-    let normalized = path
-        .canonicalize()
-        .unwrap_or_else(|_| path.to_path_buf())
-        .to_string_lossy()
-        .to_lowercase();
+    #[cfg(not(windows))]
+    if !crate::linux::apps::is_executable(path) {
+        return;
+    }
+    let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    // Unix paths are case-sensitive byte strings. Only Windows path identity
+    // uses case folding; lossy UTF-8 conversion would merge valid Unix names.
+    #[cfg(windows)]
+    let normalized = PathBuf::from(normalized.to_string_lossy().to_lowercase());
     if seen.insert(normalized) {
         candidates.push(CodexCandidate {
             path: path.to_path_buf(),
@@ -348,6 +352,65 @@ fn common_locations() -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_candidates_preserve_case_and_non_utf8_path_identity() {
+        use std::{
+            ffi::OsString,
+            os::unix::{
+                ffi::OsStringExt,
+                fs::{PermissionsExt, symlink},
+            },
+        };
+        let root = tempfile::tempdir().unwrap();
+        let mut candidates = Vec::new();
+        let mut seen = HashSet::new();
+        let mut binaries = Vec::new();
+        for name in [
+            OsString::from("Tools"),
+            OsString::from("tools"),
+            OsString::from_vec(vec![b'a', 0x80]),
+            OsString::from_vec(vec![b'a', 0x81]),
+        ] {
+            let directory = root.path().join(name);
+            std::fs::create_dir(&directory).unwrap();
+            let binary = directory.join("codex");
+            std::fs::write(&binary, b"fixture").unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            push_candidate(&mut candidates, &mut seen, &binary, CandidateSource::Path);
+            binaries.push(binary);
+        }
+        assert_eq!(
+            candidates
+                .iter()
+                .map(|c| c.path.clone())
+                .collect::<Vec<_>>(),
+            binaries
+        );
+        let alias = root.path().join("alias");
+        symlink(&binaries[0], &alias).unwrap();
+        push_candidate(&mut candidates, &mut seen, &alias, CandidateSource::Path);
+        assert_eq!(candidates.len(), 4);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn non_executable_candidates_do_not_enter_the_discovery_list() {
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("codex");
+        std::fs::write(&binary, b"unfinished download").unwrap();
+        let mut candidates = Vec::new();
+        let mut seen = HashSet::new();
+        push_candidate(
+            &mut candidates,
+            &mut seen,
+            &binary,
+            CandidateSource::Explicit,
+        );
+        assert!(candidates.is_empty());
+        assert!(seen.is_empty());
+    }
 
     #[cfg(windows)]
     #[test]
