@@ -174,17 +174,13 @@ pub(crate) struct CachedSessionFile {
 
 impl CachedSessionFile {
     fn reset_scan_state(&mut self) {
-        self.persisted = false;
-        self.offset = 0;
-        self.daily.clear();
-        self.model_daily.clear();
-        self.last_usage_signature = None;
-        self.saw_session_meta = false;
-        self.suppressing_fork_copies = false;
-        self.fork_copy_anchor_ms = 0;
-        self.session_id.clear();
-        // The rebuilt scan re-reads session_meta, which may name a new session.
-        self.cwd_persisted = false;
+        // A replacement may omit context that existed in the previous log.
+        // Keep only the filesystem identity; never inherit its project,
+        // pricing model, service tier or event state into the rebuilt scan.
+        *self = Self {
+            file_identity: self.file_identity.take(),
+            ..Self::default()
+        };
     }
 
     fn set_cwd(&mut self, cwd: String) {
@@ -1759,6 +1755,28 @@ mod tests {
         assert_eq!(delta.events.len(), 1);
         assert_eq!(cached.daily[0].usage.total_tokens(), 10);
         assert_eq!(cached.daily[0].usage.requests, 1);
+    }
+
+    #[test]
+    fn truncated_codex_log_does_not_inherit_old_project_or_pricing_context() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        fs::write(&path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"old\",\"cwd\":\"/old-project\"}}\n{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.4\",\"service_tier\":\"fast\"}}\n").unwrap();
+        let mut cached = CachedSessionFile::default();
+        scan_file_delta(&path, "source", &mut cached).unwrap();
+        assert_eq!(cached.current_model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(cached.cwd.as_deref(), Some("/old-project"));
+        cached.fast_service_tier = true;
+        fs::write(&path, "{}\n").unwrap();
+        assert!(
+            scan_file_delta(&path, "source", &mut cached)
+                .unwrap()
+                .rebuilt
+        );
+        assert_eq!(cached.current_model, None);
+        assert!(!cached.fast_service_tier);
+        assert_eq!(cached.cwd.as_deref(), Some(""));
+        assert!(cached.session_id.is_empty());
     }
 
     #[cfg(not(windows))]
