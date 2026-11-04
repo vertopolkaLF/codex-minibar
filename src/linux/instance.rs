@@ -150,8 +150,39 @@ fn try_lock(file: &File) -> std::io::Result<bool> {
     }
 }
 
+fn connect_with_retry(
+    mut connect: impl FnMut() -> std::io::Result<UnixStream>,
+    timeout: Duration,
+) -> std::io::Result<UnixStream> {
+    let started = Instant::now();
+    loop {
+        match connect() {
+            Ok(stream) => return Ok(stream),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::ConnectionRefused
+                ) && started.elapsed() < timeout =>
+            {
+                // The primary can own the lock before it binds its socket.
+                // A stale socket may also exist during this brief interval.
+                std::thread::sleep(
+                    Duration::from_millis(20).min(timeout.saturating_sub(started.elapsed())),
+                );
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::Interrupted
+                    && started.elapsed() < timeout =>
+            {
+                continue;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+}
+
 fn activate_existing(socket_path: &std::path::Path) {
-    match UnixStream::connect(socket_path) {
+    match connect_with_retry(|| UnixStream::connect(socket_path), Duration::from_secs(1)) {
         Ok(mut stream) => {
             let toggle = std::env::args()
                 .skip(1)
@@ -298,6 +329,56 @@ fn activate() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_retries_until_the_primary_socket_is_ready() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("activate.sock");
+        let mut listener = None;
+        let mut attempts = 0;
+        let stream = connect_with_retry(
+            || {
+                attempts += 1;
+                if attempts == 2 {
+                    listener = Some(UnixListener::bind(&path).unwrap());
+                }
+                UnixStream::connect(&path)
+            },
+            Duration::from_secs(1),
+        )
+        .unwrap();
+        assert_eq!(attempts, 2);
+        assert!(listener.unwrap().accept().is_ok());
+        drop(stream);
+    }
+
+    #[test]
+    fn activation_does_not_retry_permission_errors_or_exceed_its_deadline() {
+        let mut attempts = 0;
+        assert!(
+            connect_with_retry(
+                || {
+                    attempts += 1;
+                    Err(std::io::Error::from(std::io::ErrorKind::PermissionDenied))
+                },
+                Duration::from_secs(1)
+            )
+            .is_err()
+        );
+        assert_eq!(attempts, 1);
+        attempts = 0;
+        assert!(
+            connect_with_retry(
+                || {
+                    attempts += 1;
+                    Err(std::io::Error::from(std::io::ErrorKind::NotFound))
+                },
+                Duration::ZERO
+            )
+            .is_err()
+        );
+        assert_eq!(attempts, 1);
+    }
 
     #[test]
     fn fallback_runtime_directory_is_private_and_rejects_symlinks() {
