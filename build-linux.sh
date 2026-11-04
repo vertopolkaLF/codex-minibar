@@ -16,6 +16,22 @@
 # is not bundled), so published ones come from the oldest CI runner.
 set -euo pipefail
 
+usage() {
+    echo "Usage: $0 [--skip-build]"
+}
+
+skip_build=false
+if [ "$#" -gt 1 ]; then
+    usage >&2
+    exit 2
+fi
+case "${1:-}" in
+    "") ;;
+    --skip-build) skip_build=true ;;
+    -h|--help) usage; exit 0 ;;
+    *) echo "Unknown argument: $1" >&2; usage >&2; exit 2 ;;
+esac
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$root"
 
@@ -26,7 +42,7 @@ case "$(uname -m)" in
     *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
-if [ "${1:-}" != "--skip-build" ]; then
+if [ "$skip_build" = false ]; then
     cargo build --release --locked
 fi
 
