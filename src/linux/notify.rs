@@ -85,17 +85,12 @@ pub fn post(notification: Notification, silent: bool) {
 fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
     let bus =
         super::desktop::session_bus().ok_or_else(|| anyhow::anyhow!("no D-Bus session bus"))?;
-    listen_for_actions();
     // Capabilities belong to the current server, which can change when the
     // desktop restarts or the user switches notification daemons.
     let (server, markup) = server_capabilities(bus);
-    if let Ok(mut state) = state().lock() {
-        state.use_server(server.as_deref());
+    if let Err(error) = listen_for_actions(bus) {
+        crate::logger::info(format!("notification actions unavailable: {error:#}"));
     }
-    let replaces = notification
-        .key
-        .and_then(|key| state().lock().ok()?.keyed.get(key).copied())
-        .unwrap_or(0);
     let mut actions = Vec::new();
     actions.push(DEFAULT_ACTION.to_owned());
     actions.push(String::new());
@@ -126,6 +121,17 @@ fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
     } else {
         -1
     };
+    // A daemon may emit a close/action signal immediately after replying.
+    // Keep registration and signal handling serialized until the ID and its
+    // actions are stored, so an early signal cannot outrun registration.
+    let mut state = state()
+        .lock()
+        .map_err(|_| anyhow::anyhow!("notification state unavailable"))?;
+    state.use_server(server.as_deref());
+    let replaces = notification
+        .key
+        .and_then(|key| state.keyed.get(key).copied())
+        .unwrap_or(0);
     let reply = bus.call_method(
         // Pin the request to the owner whose capabilities and IDs we read.
         // If it exits, fail rather than replace an unrelated new server's ID.
@@ -145,21 +151,19 @@ fn send(notification: &Notification, silent: bool) -> anyhow::Result<()> {
         ),
     )?;
     let id: u32 = reply.body().deserialize()?;
-    if let Ok(mut state) = state().lock() {
-        let header = reply.header();
-        state.use_server(header.sender().map(|sender| sender.as_str()));
-        if let Some(key) = notification.key {
-            state.keyed.insert(key, id);
-        }
-        state.actions.insert(
-            id,
-            notification
-                .actions
-                .iter()
-                .map(|(_, action)| action.clone())
-                .collect(),
-        );
+    let header = reply.header();
+    state.use_server(header.sender().map(|sender| sender.as_str()));
+    if let Some(key) = notification.key {
+        state.keyed.insert(key, id);
     }
+    state.actions.insert(
+        id,
+        notification
+            .actions
+            .iter()
+            .map(|(_, action)| action.clone())
+            .collect(),
+    );
     Ok(())
 }
 
@@ -207,31 +211,37 @@ fn escape_markup(text: &str) -> String {
         .replace('>', "&gt;")
 }
 
-/// Starts one thread that runs the actions of clicked bubbles.
-fn listen_for_actions() {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    STARTED.get_or_init(|| {
-        let spawned = std::thread::Builder::new()
+/// Establishes the subscription before Notify and retries failed initialization
+/// on the next notification. A finished listener can also be restarted.
+fn listen_for_actions(bus: &zbus::blocking::Connection) -> anyhow::Result<()> {
+    static LISTENER: Mutex<Option<std::thread::JoinHandle<()>>> = Mutex::new(None);
+    let mut listener = LISTENER
+        .lock()
+        .map_err(|_| anyhow::anyhow!("notification listener unavailable"))?;
+    if listener
+        .as_ref()
+        .is_some_and(|thread| !thread.is_finished())
+    {
+        return Ok(());
+    }
+    if let Some(thread) = listener.take() {
+        let _ = thread.join();
+    }
+    let proxy = zbus::blocking::Proxy::new(bus, NAME, PATH, NAME)?;
+    let signals = proxy.receive_all_signals()?;
+    *listener = Some(
+        std::thread::Builder::new()
             .name("notification-actions".into())
-            .spawn(|| {
-                if let Err(error) = run_action_listener() {
-                    crate::logger::info(format!("notification actions unavailable: {error:#}"));
-                }
-            });
-        if let Err(error) = spawned {
-            crate::logger::info(format!("notification actions unavailable: {error}"));
-        }
-    });
+            .spawn(move || run_action_listener(signals))?,
+    );
+    Ok(())
 }
 
-fn run_action_listener() -> anyhow::Result<()> {
-    let bus =
-        super::desktop::session_bus().ok_or_else(|| anyhow::anyhow!("no D-Bus session bus"))?;
-    let proxy = zbus::blocking::Proxy::new(bus, NAME, PATH, NAME)?;
+fn run_action_listener(signals: zbus::blocking::proxy::SignalIterator<'static>) {
     // A server commonly emits ActionInvoked immediately before
     // NotificationClosed. One ordered stream must clone the action before
     // processing the close; separate threads can discard it first.
-    for message in proxy.receive_all_signals()? {
+    for message in signals {
         let header = message.header();
         // Signals queued by the previous daemon must not remove or invoke
         // records whose numeric IDs have already been reused by a new one.
@@ -277,7 +287,6 @@ fn run_action_listener() -> anyhow::Result<()> {
             action.run();
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]
