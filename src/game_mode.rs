@@ -270,6 +270,10 @@ fn is_game(key: &str, lists: &Lists, exclusive: bool, known: impl Fn(&str) -> bo
 }
 
 fn in_library(key: &str) -> bool {
+    // Library recognition is a name heuristic; explicit executable identities
+    // below must still preserve the Unix filesystem's case and separators.
+    #[cfg(not(windows))]
+    let key = key.replace('/', "\\").to_lowercase();
     LIBRARY_FOLDERS.iter().any(|folder| key.contains(folder))
         && !LIBRARY_EXCLUSIONS
             .iter()
@@ -295,9 +299,14 @@ fn catalog_contains(key: &str) -> bool {
         .is_some_and(|(_, games)| games.contains(key))
 }
 
-/// Paths compare case-insensitively, the way Windows resolves them.
+/// Windows path comparisons ignore case and slash direction. Unix paths keep
+/// their case, backslashes and whitespace, which can identify different files.
 pub fn path_key(path: &str) -> String {
-    path.trim().replace('/', "\\").to_lowercase()
+    if cfg!(windows) {
+        path.trim().replace('/', "\\").to_lowercase()
+    } else {
+        path.to_owned()
+    }
 }
 
 /// The window title when it reads like a name, otherwise the file name.
@@ -729,6 +738,30 @@ mod tests {
             ignored: Vec::new(),
         };
         assert!(is_game(&browser, &added, false, unknown));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_game_overrides_only_match_the_selected_executable() {
+        let selected = path_key("/games/Custom/Game");
+        let ignored = Lists {
+            games: Vec::new(),
+            ignored: vec![selected.clone()],
+        };
+        assert!(!is_game(&selected, &ignored, true, |_| true));
+        for distinct in [
+            "/games/Custom/game",
+            "/games/Custom/Game ",
+            r"/games/Custom\Game",
+        ] {
+            let key = path_key(distinct);
+            assert_ne!(key, selected);
+            assert!(is_game(&key, &ignored, true, |_| false));
+        }
+        assert!(in_library(&path_key(
+            "/home/me/.steam/steamapps/common/Game/game"
+        )));
+        assert!(in_library(&path_key("/home/me/Games/Heroic/Game/game")));
     }
 
     #[test]
