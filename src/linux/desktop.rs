@@ -1,8 +1,8 @@
 //! Session bus access and desktop preferences read through the XDG portal.
 //!
 //! `org.freedesktop.portal.Settings` exposes the color scheme on every
-//! portal backend and, on GNOME (and desktops reusing its schemas), the
-//! `org.gnome.desktop.interface` keys such as `enable-animations`. Values are
+//! portal backend, the standard reduced-motion preference and, on older
+//! GNOME backends, `org.gnome.desktop.interface`'s `enable-animations`. Values are
 //! initialized synchronously, then refreshed off-thread because the popup
 //! asks for them on every frame.
 
@@ -153,13 +153,22 @@ pub fn animations_enabled() -> Option<bool> {
         read_at: None,
         refreshing: false,
     });
-    cached(&CACHE, || {
-        bool::try_from(read_setting(
-            "org.gnome.desktop.interface",
-            "enable-animations",
-        )?)
-        .ok()
-    })
+    cached(&CACHE, || read_animations_enabled(read_setting))
+}
+
+fn read_animations_enabled(mut read: impl FnMut(&str, &str) -> Option<OwnedValue>) -> Option<bool> {
+    let standard = read("org.freedesktop.appearance", "reduced-motion")
+        .and_then(|value| u32::try_from(value).ok())
+        // The portal specifies that unknown values mean no preference.
+        .map(|value| value != 1);
+    if standard == Some(false) {
+        return Some(false);
+    }
+    // A legacy explicit opt-out still applies when the standard setting
+    // reports no preference, or when an older portal does not offer it.
+    read("org.gnome.desktop.interface", "enable-animations")
+        .and_then(|value| bool::try_from(value).ok())
+        .or(standard)
 }
 
 /// The desktop accent color, when the portal publishes one.
@@ -256,6 +265,43 @@ pub fn open(target: &std::ffi::OsStr) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn standard_reduced_motion_disables_animations_without_gnome_settings() {
+        assert_eq!(
+            read_animations_enabled(|namespace, key| {
+                assert_eq!(
+                    (namespace, key),
+                    ("org.freedesktop.appearance", "reduced-motion")
+                );
+                Some(OwnedValue::from(1u32))
+            }),
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn motion_preferences_keep_legacy_opt_out_and_handle_unknown_portal_values() {
+        for (standard, legacy, expected) in [
+            (Some(0u32), None, Some(true)),
+            (Some(99), None, Some(true)),
+            (Some(0), Some(false), Some(false)),
+            (None, Some(false), Some(false)),
+            (None, Some(true), Some(true)),
+            (None, None, None),
+        ] {
+            assert_eq!(
+                read_animations_enabled(|namespace, key| match (namespace, key) {
+                    ("org.freedesktop.appearance", "reduced-motion") =>
+                        standard.map(OwnedValue::from),
+                    ("org.gnome.desktop.interface", "enable-animations") =>
+                        legacy.map(OwnedValue::from),
+                    _ => panic!("unexpected portal setting"),
+                }),
+                expected
+            );
+        }
+    }
 
     #[test]
     fn initial_setting_is_ready_before_returning() {
