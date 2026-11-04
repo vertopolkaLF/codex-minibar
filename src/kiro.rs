@@ -242,51 +242,53 @@ fn cli_identity_account_name(executable: &Path) -> Option<String> {
 }
 
 fn cli_auth_cache_is_fresh() -> bool {
-    #[cfg(windows)]
-    {
-        let Some(path) = directories::BaseDirs::new()
-            .map(|base| base.data_local_dir().join("Kiro-Cli/data.sqlite3"))
-            .filter(|path| path.is_file())
-        else {
-            return false;
-        };
-        let Ok(connection) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
-            return false;
-        };
-        if connection.busy_timeout(Duration::from_millis(250)).is_err() {
-            return false;
-        }
-        let Ok(mut statement) =
-            connection.prepare("SELECT value FROM auth_kv WHERE key LIKE 'kirocli:%:token'")
-        else {
-            return false;
-        };
-        let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
-            return false;
-        };
-        return rows.flatten().any(|raw| {
-            serde_json::from_str::<Value>(&raw)
-                .ok()
-                .is_some_and(|token| {
-                    let has_access_token = token
-                        .get("access_token")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.trim().is_empty());
-                    let not_expired = token
-                        .get("expires_at")
-                        .and_then(timestamp_value)
-                        .is_some_and(|expires_at| {
-                            expires_at > Utc::now() + chrono::Duration::seconds(30)
-                        });
-                    has_access_token && not_expired
-                })
-        });
+    let Some(base) = directories::BaseDirs::new() else {
+        return false;
+    };
+    let folder = if cfg!(windows) {
+        "Kiro-Cli"
+    } else {
+        "kiro-cli"
+    };
+    cli_auth_cache_is_fresh_at(
+        &base.data_local_dir().join(folder).join("data.sqlite3"),
+        Utc::now(),
+    )
+}
+
+fn cli_auth_cache_is_fresh_at(path: &Path, now: DateTime<Utc>) -> bool {
+    if !path.is_file() {
+        return false;
     }
-    #[cfg(not(windows))]
-    {
-        false
+    let Ok(connection) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return false;
+    };
+    if connection.busy_timeout(Duration::from_millis(250)).is_err() {
+        return false;
     }
+    let Ok(mut statement) =
+        connection.prepare("SELECT value FROM auth_kv WHERE key LIKE 'kirocli:%:token'")
+    else {
+        return false;
+    };
+    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
+        return false;
+    };
+    rows.flatten().any(|raw| {
+        serde_json::from_str::<Value>(&raw)
+            .ok()
+            .is_some_and(|token| {
+                let has_access_token = token
+                    .get("access_token")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty());
+                let not_expired = token
+                    .get("expires_at")
+                    .and_then(timestamp_value)
+                    .is_some_and(|expires_at| expires_at > now + chrono::Duration::seconds(30));
+                has_access_token && not_expired
+            })
+    })
 }
 
 impl LimitProvider for KiroClient {
@@ -1204,4 +1206,48 @@ fn numeric_value(value: &Value) -> Option<f64> {
 fn month_duration_minutes(resets_at: DateTime<Utc>) -> Option<u32> {
     let start = resets_at.checked_sub_months(Months::new(1))?;
     u32::try_from((resets_at - start).num_minutes()).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cli_auth_cache_requires_a_fresh_token_and_never_updates_the_database() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("data.sqlite3");
+        let now: DateTime<Utc> = "2026-11-04T00:00:00Z".parse().unwrap();
+        assert!(!cli_auth_cache_is_fresh_at(&path, now));
+        assert!(!path.exists());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+        for raw in [
+            r#"{"access_token":"fixture","expires_at":"2026-11-03T23:59:00Z"}"#,
+            r#"{"access_token":"","expires_at":"2026-11-05T00:00:00Z"}"#,
+            "malformed JSON",
+        ] {
+            connection
+                .execute(
+                    "INSERT OR REPLACE INTO auth_kv VALUES ('kirocli:oidc:token', ?1)",
+                    [raw],
+                )
+                .unwrap();
+            assert!(!cli_auth_cache_is_fresh_at(&path, now));
+        }
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO auth_kv VALUES ('kirocli:oidc:token', ?1)",
+                [r#"{"access_token":"fixture","expires_at":"2026-11-04T01:00:00Z"}"#],
+            )
+            .unwrap();
+        drop(connection);
+        let before = std::fs::read(&path).unwrap();
+        assert!(cli_auth_cache_is_fresh_at(&path, now));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
 }
