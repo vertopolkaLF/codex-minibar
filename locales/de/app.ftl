@@ -3072,3 +3072,6 @@ linux-popup-shortcut-save-failed = Der Desktop hat das Tastenkürzel nicht über
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = Liest das Abonnementkontingent aus Ihrer bestehenden offiziellen agy-Anmeldung.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Ordner mit der ausführbaren agy-Datei. Lassen Sie das Feld leer, damit sie automatisch gefunden wird.
+
+linux-folder-with-grok-cli = Ordner mit der ausführbaren Datei grok. Leer lassen, um sie automatisch zu finden.
+linux-folder-with-command-code-cli = Ordner mit command-code oder cmd. Leer lassen, um sie automatisch zu finden.

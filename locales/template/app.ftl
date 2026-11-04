@@ -4497,3 +4497,6 @@ linux-reads-subscription-quota-from-your-existing-official-agy-windows = { "" }
 # English source:
 # linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Folder with the agy executable. Leave empty to find it automatically.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = { "" }
+
+linux-folder-with-grok-cli = Folder with the grok executable. Leave empty to find it automatically.
+linux-folder-with-command-code-cli = Folder with command-code or cmd. Leave empty to find it automatically.

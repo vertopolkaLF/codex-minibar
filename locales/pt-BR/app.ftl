@@ -2170,3 +2170,6 @@ linux-popup-shortcut-save-failed = O ambiente de trabalho não aceitou o atalho.
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = Lê a cota da assinatura a partir do seu login oficial existente do agy.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Pasta com o executável agy. Deixe em branco para encontrar automaticamente.
+
+linux-folder-with-grok-cli = Pasta com o executável grok. Deixe em branco para encontrá-lo automaticamente.
+linux-folder-with-command-code-cli = Pasta com command-code ou cmd. Deixe em branco para encontrá-lo automaticamente.

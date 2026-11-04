@@ -3071,3 +3071,6 @@ linux-add-a-game-description = Games launched by Steam and games in Steam or Her
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = Reads subscription quota from your existing official agy sign-in.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Folder with the agy executable. Leave empty to find it automatically.
+
+linux-folder-with-grok-cli = Folder with the grok executable. Leave empty to find it automatically.
+linux-folder-with-command-code-cli = Folder with command-code or cmd. Leave empty to find it automatically.

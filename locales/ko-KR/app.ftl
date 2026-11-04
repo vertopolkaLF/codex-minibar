@@ -3050,3 +3050,6 @@ linux-popup-shortcut-save-failed = 데스크톱에서 단축키를 받아들이�
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = 기존 공식 agy 로그인에서 구독 할당량을 읽습니다.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy 실행 파일이 포함된 폴더입니다. 자동으로 찾으려면 비워두세요.
+
+linux-folder-with-grok-cli = grok 실행 파일이 있는 폴더입니다. 비워 두면 자동으로 찾습니다.
+linux-folder-with-command-code-cli = command-code 또는 cmd가 있는 폴더입니다. 비워 두면 자동으로 찾습니다.

@@ -2170,3 +2170,6 @@ linux-popup-shortcut-save-failed = El escritorio no aceptó el atajo. Reinténta
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = Lee la cuota de suscripción desde tu inicio de sesión oficial actual de agy.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Carpeta con el ejecutable agy. Déjalo vacío para encontrarlo automáticamente.
+
+linux-folder-with-grok-cli = Carpeta con el ejecutable grok. Déjala vacía para buscarlo automáticamente.
+linux-folder-with-command-code-cli = Carpeta con command-code o cmd. Déjala vacía para buscarlo automáticamente.

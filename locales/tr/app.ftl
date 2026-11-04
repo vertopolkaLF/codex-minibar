@@ -3050,3 +3050,6 @@ linux-popup-shortcut-save-failed = Masaüstü kısayolu kabul etmedi. Yeniden de
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = Mevcut resmî agy oturumunuzdan abonelik kotasını okur.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy çalıştırılabilir dosyasını içeren klasör. Otomatik bulmak için boş bırakın.
+
+linux-folder-with-grok-cli = grok yürütülebilir dosyasının bulunduğu klasör. Otomatik bulmak için boş bırakın.
+linux-folder-with-command-code-cli = command-code veya cmd içeren klasör. Otomatik bulmak için boş bırakın.

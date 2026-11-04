@@ -3079,3 +3079,6 @@ linux-popup-shortcut-save-failed = Le bureau n’a pas accepté le raccourci. R�
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = Lit le quota d'abonnement à partir de votre connexion officielle agy existante.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Dossier contenant l'exécutable agy. Laissez vide pour le retrouver automatiquement.
+
+linux-folder-with-grok-cli = Dossier contenant l’exécutable grok. Laissez vide pour le trouver automatiquement.
+linux-folder-with-command-code-cli = Dossier contenant command-code ou cmd. Laissez vide pour le trouver automatiquement.

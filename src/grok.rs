@@ -23,7 +23,10 @@ const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=cre
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 const OIDC_SCOPE_PREFIX: &str = "https://auth.x.ai::";
 const LEGACY_SCOPE: &str = "https://accounts.x.ai/sign-in";
+#[cfg(windows)]
 const CLI_NAMES: &[&str] = &["grok.exe", "grok.cmd", "grok.ps1", "grok.bat"];
+#[cfg(not(windows))]
+const CLI_NAMES: &[&str] = &["grok"];
 
 pub struct GrokClient {
     agent: ureq::Agent,
@@ -154,10 +157,13 @@ fn signed_in() -> bool {
 }
 
 fn grok_home_cli() -> Option<PathBuf> {
+    if let Some(bin) = env::var_os("GROK_BIN_DIR").filter(|path| !path.is_empty()) {
+        return Some(PathBuf::from(bin).join(CLI_NAMES[0]));
+    }
     if let Some(root) = env::var_os("GROK_HOME") {
-        Some(PathBuf::from(root).join("bin/grok.exe"))
+        Some(PathBuf::from(root).join("bin").join(CLI_NAMES[0]))
     } else {
-        BaseDirs::new().map(|dirs| dirs.home_dir().join(".grok/bin/grok.exe"))
+        BaseDirs::new().map(|dirs| dirs.home_dir().join(".grok/bin").join(CLI_NAMES[0]))
     }
 }
 
@@ -444,7 +450,7 @@ mod tests {
     #[test]
     fn prefers_an_explicit_cli_folder() {
         let directory = tempfile::tempdir().unwrap();
-        let executable = directory.path().join("grok.exe");
+        let executable = directory.path().join(CLI_NAMES[0]);
         fs::write(&executable, b"fixture").unwrap();
         #[cfg(not(windows))]
         {

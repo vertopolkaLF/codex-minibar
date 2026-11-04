@@ -2149,3 +2149,6 @@ linux-popup-shortcut-save-failed = 桌面未接受該快捷鍵。請重試，或
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = 透過現有的官方 agy 登入讀取訂閱額度。
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = 包含 agy 可執行檔的資料夾。留空以自動查詢。
+
+linux-folder-with-grok-cli = 包含 grok 執行檔的資料夾。留空以自動尋找。
+linux-folder-with-command-code-cli = 包含 command-code 或 cmd 的資料夾。留空以自動尋找。

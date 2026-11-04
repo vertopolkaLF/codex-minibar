@@ -3051,3 +3051,6 @@ linux-popup-shortcut-save-failed = デスクトップがショートカットを
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = 既存の公式 agy サインインからサブスクリプション クォータを読み取ります。
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy 実行ファイルのフォルダー。自動的に検索されるようにするには、空のままにします。
+
+linux-folder-with-grok-cli = grok 実行ファイルがあるフォルダー。空欄にすると自動検索します。
+linux-folder-with-command-code-cli = command-code または cmd があるフォルダー。空欄にすると自動検索します。

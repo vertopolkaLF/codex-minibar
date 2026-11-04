@@ -3078,3 +3078,6 @@ linux-add-a-game-description = Игры, запущенные через Steam, 
 # src/settings_window/providers.rs
 linux-reads-subscription-quota-from-your-existing-official-agy-windows = Читает лимиты подписки из существующей официальной авторизации agy.
 linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Папка с исполняемым файлом agy. Оставьте пустым для автоматического поиска.
+
+linux-folder-with-grok-cli = Папка с исполняемым файлом grok. Оставьте пустым для автоматического поиска.
+linux-folder-with-command-code-cli = Папка с command-code или cmd. Оставьте пустым для автоматического поиска.
