@@ -43,6 +43,7 @@ fn native_login_executable(explicit: Option<&Path>) -> Option<PathBuf> {
         .find_map(|candidate| native_for_candidate(&candidate.path))
 }
 
+#[cfg(windows)]
 fn native_for_candidate(candidate: &Path) -> Option<PathBuf> {
     if candidate
         .extension()
@@ -85,6 +86,13 @@ fn native_for_candidate(candidate: &Path) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(not(windows))]
+fn native_for_candidate(candidate: &Path) -> Option<PathBuf> {
+    // Unix launchers (including npm shebang scripts) run directly. There is
+    // no Windows optional-package layout or .exe suffix on this platform.
+    crate::linux::apps::is_executable(candidate).then(|| candidate.to_owned())
 }
 
 /// A ChatGPT login with a refresh token; API-key-only logins report no
@@ -156,10 +164,14 @@ fn cleanup_root(root: &Path) -> Result<()> {
 /// Runs `codex login` with `folder` as `CODEX_HOME`.
 pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginControl) -> Result<()> {
     ensure!(!control.cancelled(), "Codex sign-in cancelled.");
-    let executable = native_login_executable(explicit)
-        .context("Install native Windows Codex CLI or Codex desktop to sign in from Minibar.")?;
+    #[cfg(windows)]
+    let missing_cli = "Install native Windows Codex CLI or Codex desktop to sign in from Minibar.";
+    #[cfg(not(windows))]
+    let missing_cli = "Install the Codex CLI or select its executable to sign in from Minibar.";
+    let executable = native_login_executable(explicit).context(missing_cli)?;
     let prepared = crate::discovery::prepare(&executable)?;
     let executable = &prepared.path;
+    #[cfg(windows)]
     ensure!(
         executable
             .extension()
@@ -214,6 +226,22 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
 mod tests {
     use super::*;
 
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_login_runs_a_unix_launcher_in_the_isolated_account_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let cli = root.path().join("codex");
+        std::fs::write(&cli, r#"#!/bin/sh
+printf '%s' '{"tokens":{"access_token":"fixture-access","refresh_token":"fixture-refresh"}}' > "$CODEX_HOME/auth.json"
+"#).unwrap();
+        std::fs::set_permissions(&cli, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let folder = root.path().join("account");
+        login(Some(&cli), &folder, &LoginControl::default()).unwrap();
+        assert!(read_login(&folder).is_ok());
+        assert!(!root.path().join("auth.json").exists());
+    }
+
     #[test]
     fn login_targets_the_instance_folder_and_removes_auth_overrides() {
         let command = login_command(Path::new("codex.exe"), Path::new("instance"));
@@ -235,6 +263,7 @@ mod tests {
         }
     }
 
+    #[cfg(windows)]
     #[test]
     fn resolves_native_npm_binaries_in_current_legacy_and_nested_layouts() {
         let root = tempfile::tempdir().unwrap();
@@ -251,6 +280,21 @@ mod tests {
             std::fs::remove_file(path).unwrap();
         }
         assert_eq!(native_for_candidate(&candidate), None);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_login_accepts_executable_binaries_and_launchers_without_exe_suffix() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let binary = root.path().join("codex");
+        std::fs::write(&binary, b"#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(native_for_candidate(&binary), Some(binary.clone()));
+        assert_eq!(native_login_executable(Some(&binary)), Some(binary.clone()));
+        std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(native_for_candidate(&binary), None);
+        assert_eq!(native_for_candidate(root.path()), None);
     }
 
     #[test]
