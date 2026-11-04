@@ -88,12 +88,18 @@ const LEGACY_WINUI_LOCALE_FILES: &[&str] = &[
 fn http_agent() -> Agent {
     static AGENT: OnceLock<Agent> = OnceLock::new();
     AGENT
-        .get_or_init(|| {
-            // ureq's `native-tls` feature is not auto-selected for `ureq::get`;
-            // build an agent that uses the OS TLS stack (schannel on Windows).
-            crate::http::public_agent_builder().build()
-        })
+        .get_or_init(|| build_http_agent(Duration::from_secs(30)))
         .clone()
+}
+
+fn build_http_agent(read_timeout: Duration) -> Agent {
+    // Bound network stalls, not total download time: large packages may take
+    // minutes on a slow connection as long as bytes keep arriving.
+    crate::http::public_agent_builder()
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(read_timeout)
+        .timeout_write(Duration::from_secs(30))
+        .build()
 }
 
 struct UpdateRuntime {
@@ -1147,6 +1153,34 @@ fn shell_execute(target: &std::ffi::OsStr, description: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn updater_requests_time_out_when_the_server_never_sends_headers() {
+        use std::sync::mpsc;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request);
+            let _ = release_rx.recv();
+        });
+        let (result_tx, result_rx) = mpsc::channel();
+        let client = thread::spawn(move || {
+            let result = build_http_agent(Duration::from_millis(100))
+                .get(&format!("http://{address}/stalled"))
+                .call();
+            result_tx.send(result.is_err()).unwrap();
+        });
+        let result = result_rx.recv_timeout(Duration::from_secs(3));
+        // Release the fixture even when the timeout regresses, so no test
+        // process or thread remains stuck after the assertion fails.
+        let _ = release_tx.send(());
+        server.join().unwrap();
+        client.join().unwrap();
+        assert!(result.unwrap());
+    }
 
     #[cfg(not(windows))]
     fn asset(name: &str, digest: Option<&str>) -> GhAsset {
