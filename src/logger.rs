@@ -135,14 +135,14 @@ pub fn tail_lines(max_lines: usize) -> Result<String> {
 
 pub fn open() -> Result<()> {
     let path = path().context("log path is not initialized")?;
-    crate::updater::open_url(&path.to_string_lossy())
+    crate::updater::open_path(path)
 }
 
 /// Opens the directory that contains the current and archived application logs.
 pub fn open_folder() -> Result<()> {
     let path = path().context("log path is not initialized")?;
     let directory = path.parent().context("log path has no parent")?;
-    crate::updater::open_url(&directory.to_string_lossy())
+    crate::updater::open_path(directory)
 }
 
 #[cfg(test)]
