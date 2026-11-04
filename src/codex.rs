@@ -213,7 +213,7 @@ impl CodexClient {
         if let Some(agent) = self.oauth_agent.get() {
             return Ok(agent.clone());
         }
-        let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
+        let tls = ureq::native_tls::TlsConnector::new().context("create native TLS connector")?;
         let agent = ureq::AgentBuilder::new()
             .timeout(self.timeout)
             .tls_connector(Arc::new(tls))

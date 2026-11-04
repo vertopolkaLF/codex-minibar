@@ -646,8 +646,8 @@ impl ClaudeClient {
         }
         // `ureq` is built without its default Rustls backend. Configure the
         // native TLS adapter explicitly so Claude's HTTPS endpoint uses the
-        // Windows certificate store (Schannel), as the updater already does.
-        let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
+        // platform certificate configuration, as the updater already does.
+        let tls = ureq::native_tls::TlsConnector::new().context("create native TLS connector")?;
         let agent = ureq::AgentBuilder::new()
             .timeout(self.timeout)
             .tls_connector(Arc::new(tls))
