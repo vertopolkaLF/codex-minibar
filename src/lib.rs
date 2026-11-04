@@ -12,6 +12,7 @@ pub mod fake;
 pub mod game_mode;
 pub mod grok;
 pub mod hotkey;
+mod http;
 pub mod i18n;
 pub mod instances;
 pub mod kiro;

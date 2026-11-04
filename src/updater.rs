@@ -91,10 +91,7 @@ fn http_agent() -> Agent {
         .get_or_init(|| {
             // ureq's `native-tls` feature is not auto-selected for `ureq::get`;
             // build an agent that uses the OS TLS stack (schannel on Windows).
-            let tls = ureq::native_tls::TlsConnector::new().expect("create native-tls connector");
-            ureq::AgentBuilder::new()
-                .tls_connector(Arc::new(tls))
-                .build()
+            crate::http::public_agent_builder().build()
         })
         .clone()
 }

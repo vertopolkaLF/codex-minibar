@@ -10,7 +10,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::mpsc,
     thread,
     time::{Duration, Instant},
 };
@@ -679,13 +679,11 @@ fn finish(mut incidents: Vec<StatusIncident>) -> Vec<StatusIncident> {
 }
 
 fn http_agent() -> Agent {
-    let tls = ureq::native_tls::TlsConnector::new().expect("create native-tls connector");
-    ureq::AgentBuilder::new()
+    crate::http::public_agent_builder()
         .timeout_connect(Duration::from_secs(10))
         // OpenAI's page answers slowly under load.
         .timeout_read(Duration::from_secs(30))
         .timeout_write(Duration::from_secs(15))
-        .tls_connector(Arc::new(tls))
         .build()
 }
 

@@ -13,7 +13,7 @@ use std::{
     collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::mpsc,
     thread::{self, JoinHandle},
     time::{Duration, Instant},
 };
@@ -507,12 +507,10 @@ fn fetch(agent: &Agent) -> Result<Vec<AnnouncedReset>> {
 }
 
 fn http_agent() -> Agent {
-    let tls = ureq::native_tls::TlsConnector::new().expect("create native-tls connector");
-    ureq::AgentBuilder::new()
+    crate::http::public_agent_builder()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(15))
         .timeout_write(Duration::from_secs(15))
-        .tls_connector(Arc::new(tls))
         .build()
 }
 

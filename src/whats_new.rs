@@ -430,12 +430,10 @@ pub fn release_url(version: &str) -> String {
 }
 
 fn http_agent() -> Agent {
-    let tls = ureq::native_tls::TlsConnector::new().expect("create native-tls connector");
-    ureq::AgentBuilder::new()
+    crate::http::public_agent_builder()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(20))
         .timeout_write(Duration::from_secs(20))
-        .tls_connector(Arc::new(tls))
         .build()
 }
 
