@@ -97,10 +97,17 @@ class MinibarIndicator extends PanelMenu.Button {
                 if (error || cancellable.is_cancelled())
                     return;
                 this._proxy = proxy;
+                let receivedChange = false;
                 this._changedId = proxy.connectSignal('Changed',
-                    (_proxy, _sender, [status]) => this._render(status));
+                    (_proxy, _sender, [status]) => {
+                        if (this._proxy !== proxy)
+                            return;
+                        receivedChange = true;
+                        this._render(status);
+                    });
                 proxy.StatusRemote(([status], statusError) => {
-                    if (!statusError && this._proxy === proxy)
+                    // A Changed signal may already contain a newer snapshot.
+                    if (!statusError && this._proxy === proxy && !receivedChange)
                         this._render(status);
                 });
             },
