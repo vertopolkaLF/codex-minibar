@@ -52,6 +52,7 @@ fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -
         && let Ok(previous) = std::fs::read_to_string(&path)
         && previous.lines().any(|line| line == MANAGED)
     {
+        ensure_portable_icon(data_home);
         if previous != entry {
             let mut staged = tempfile::NamedTempFile::new_in(path.parent().unwrap())
                 .context("stage managed desktop entry")?;
@@ -74,6 +75,7 @@ fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -
     {
         return Ok(());
     }
+    ensure_portable_icon(data_home);
     let directory = data_home.join("applications");
     std::fs::create_dir_all(&directory).context("create desktop entry directory")?;
     let path = directory.join(DESKTOP_FILE);
@@ -90,6 +92,38 @@ fn ensure_entry_in(data_home: &Path, data_dirs: &[PathBuf], executable: &Path) -
         Ok(_) => Ok(()),
         Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
         Err(error) => Err(error.error).context("create desktop entry for portal identity"),
+    }
+}
+
+fn ensure_portable_icon(data_home: &Path) {
+    if let Err(error) = publish_portable_icon(data_home) {
+        // An optional icon must not prevent registering the portal identity.
+        crate::logger::info(format!("Portable desktop icon unavailable: {error:#}"));
+    }
+}
+
+fn publish_portable_icon(data_home: &Path) -> Result<()> {
+    let directory = data_home.join("icons/hicolor/256x256/apps");
+    let path = directory.join("codex-minibar.png");
+    if path.exists() {
+        return Ok(());
+    }
+    std::fs::create_dir_all(&directory).context("create portable icon directory")?;
+    let mut staged = tempfile::NamedTempFile::new_in(&directory).context("stage portable icon")?;
+    staged
+        .write_all(include_bytes!("../../assets/icons/app-icon-256.png"))
+        .context("write portable icon")?;
+    match staged.persist_noclobber(&path) {
+        Ok(_) => {
+            // Icon-theme caches watch top-level directory mtimes.
+            for relative in ["icons", "icons/hicolor"] {
+                std::fs::File::open(data_home.join(relative))?
+                    .set_modified(std::time::SystemTime::now())?;
+            }
+            Ok(())
+        }
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(error.error).context("publish portable icon"),
     }
 }
 
@@ -132,6 +166,14 @@ mod tests {
             std::fs::read_to_string(directory.path().join("applications").join(DESKTOP_FILE))
                 .unwrap();
         assert!(entry.contains("Name=Codex Minibar\n"));
+        let icon = directory
+            .path()
+            .join("icons/hicolor/256x256/apps/codex-minibar.png");
+        assert_eq!(
+            std::fs::read(&icon).unwrap(),
+            include_bytes!("../../assets/icons/app-icon-256.png")
+        );
+        std::fs::write(&icon, b"user icon").unwrap();
         assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\"\n"));
         assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\" --toggle\n"));
         ensure_entry_in(directory.path(), &[], Path::new("/different/binary")).unwrap();
@@ -141,6 +183,7 @@ mod tests {
         assert!(updated.contains("Exec=\"/different/binary\"\n"));
         assert!(updated.contains("Exec=\"/different/binary\" --toggle\n"));
         assert!(updated.contains(MANAGED));
+        assert_eq!(std::fs::read(icon).unwrap(), b"user icon");
     }
 
     #[test]
