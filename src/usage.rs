@@ -583,6 +583,7 @@ fn collect_session_files_in(
         } else if path
             .extension()
             .is_some_and(|extension| extension == "jsonl")
+            && path.is_file()
         {
             files.push(path);
         }
@@ -1355,6 +1356,30 @@ fn collect_claude_session_files(roots: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn session_scan_only_collects_regular_logs_including_linked_files() {
+        use std::os::unix::{ffi::OsStrExt, fs::symlink, net::UnixListener};
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("regular.jsonl");
+        fs::write(&file, "fixture").unwrap();
+        let linked = root.path().join("linked.jsonl");
+        symlink(&file, &linked).unwrap();
+        symlink(
+            root.path().join("missing"),
+            root.path().join("broken.jsonl"),
+        )
+        .unwrap();
+        let fifo = root.path().join("pipe.jsonl");
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: fifo_name is a valid NUL-terminated path in our test folder.
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        let _socket = UnixListener::bind(root.path().join("socket.jsonl")).unwrap();
+        let mut files = Vec::new();
+        collect_session_files(root.path(), &mut files).unwrap();
+        assert_eq!(files, vec![linked, file]);
+    }
 
     #[cfg(not(windows))]
     #[test]
