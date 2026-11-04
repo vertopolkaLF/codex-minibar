@@ -164,19 +164,29 @@ fn read_key_file(path: &std::path::Path) -> Result<Option<Zeroizing<[u8; KEY_LEN
 }
 
 fn write_key_file(key: &[u8; KEY_LEN]) -> Result<()> {
-    use std::{io::Write, os::unix::fs::OpenOptionsExt};
-    let path = key_file()?;
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .mode(0o600)
-        .open(&path)
-        .with_context(|| format!("create {}", path.display()))?;
-    file.write_all(key)
-        .with_context(|| format!("write {}", path.display()))
+    write_key_file_at(&key_file()?, key)
+}
+
+fn write_key_file_at(path: &std::path::Path, key: &[u8; KEY_LEN]) -> Result<()> {
+    use std::io::Write;
+    let parent = path.parent().context("resolve secrets key directory")?;
+    std::fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    // NamedTempFile creates a private (0600) file. Publish only a complete,
+    // synced key; a failed write cannot leave a truncated authoritative key.
+    let mut file = tempfile::NamedTempFile::new_in(parent).context("stage provider secrets key")?;
+    file.write_all(key).context("write provider secrets key")?;
+    file.as_file()
+        .sync_all()
+        .context("sync provider secrets key")?;
+    file.persist_noclobber(path)
+        .map_err(|error| error.error)
+        .with_context(|| {
+            format!(
+                "create {} without replacing an existing key",
+                path.display()
+            )
+        })?;
+    Ok(())
 }
 
 /// Seals `data` with the master key.
@@ -230,6 +240,28 @@ fn open(key: &[u8; KEY_LEN], data: &[u8]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fallback_key_is_published_privately_without_replacing_existing_keys() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("config/key");
+        let original = [11u8; KEY_LEN];
+        write_key_file_at(&path, &original).unwrap();
+        assert_eq!(
+            std::fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(write_key_file_at(&path, &[22u8; KEY_LEN]).is_err());
+        let loaded = read_key_file(&path).unwrap().unwrap();
+        assert_eq!(*loaded, original);
+        assert_eq!(
+            std::fs::read_dir(path.parent().unwrap()).unwrap().count(),
+            1
+        );
+        let ciphertext = seal(&original, b"persisted credential").unwrap();
+        assert_eq!(open(&loaded, &ciphertext).unwrap(), b"persisted credential");
+    }
 
     #[test]
     fn new_keys_are_only_allowed_for_writes_without_existing_credentials() {
