@@ -13,13 +13,17 @@ pub(crate) fn account_key(driver: &str, folder: &std::path::Path, account: &str)
     let folder = folder
         .canonicalize()
         .unwrap_or_else(|_| folder.to_path_buf());
-    let folder = folder.to_string_lossy();
-    let folder = if cfg!(windows) {
-        folder.to_lowercase()
-    } else {
-        folder.into_owned()
+    #[cfg(windows)]
+    let folder = folder.to_string_lossy().to_lowercase();
+    #[cfg(not(windows))]
+    let folder = {
+        use base64::Engine;
+        base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(folder.as_os_str().as_encoded_bytes())
     };
-    format!("{driver}:{folder}:{account}")
+    // Structured components cannot collide when a folder or account ID
+    // contains a colon. This key is only used by the in-memory retry map.
+    serde_json::json!([driver, folder, account]).to_string()
 }
 
 pub(crate) fn consume(
@@ -197,6 +201,39 @@ pub(crate) fn settled(key: &'static str) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_account_keys_preserve_raw_folder_bytes() {
+        use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join(OsString::from_vec(vec![b'a', 0x80]));
+        let second = root.path().join(OsString::from_vec(vec![b'a', 0x81]));
+        std::fs::create_dir(&first).unwrap();
+        std::fs::create_dir(&second).unwrap();
+        assert_eq!(first.to_string_lossy(), second.to_string_lossy());
+        assert_ne!(
+            account_key("claude", &first, "team"),
+            account_key("claude", &second, "team")
+        );
+    }
+
+    #[test]
+    fn account_key_components_cannot_merge_at_separator_boundaries() {
+        let root = tempfile::tempdir().unwrap();
+        let first = root.path().join("account");
+        let second = root.path().join("account:team");
+        // Colons are not valid Windows filename characters; the key must
+        // still distinguish configured paths even before they exist.
+        assert_ne!(
+            account_key("claude", &first, "team:member"),
+            account_key("claude", &second, "member")
+        );
+        assert_ne!(
+            account_key("claude", &first, "team"),
+            account_key("codex", &first, "team")
+        );
+    }
+
     #[test]
     fn reset_account_key_canonicalizes_folder_without_merging_team_logins() {
         let first = tempfile::tempdir().unwrap();
