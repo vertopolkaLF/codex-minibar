@@ -187,12 +187,35 @@ fn system_language() -> Language {
     }
     #[cfg(not(windows))]
     {
-        ["LC_ALL", "LC_MESSAGES", "LANG"]
-            .into_iter()
-            .find_map(|name| std::env::var(name).ok().filter(|s| !s.is_empty()))
-            .map(|tag| language_from_tag(&tag))
-            .unwrap_or(Language::English)
+        unix_system_language(|name| std::env::var(name).ok())
     }
+}
+
+#[cfg(any(not(windows), test))]
+fn unix_system_language(mut read: impl FnMut(&str) -> Option<String>) -> Language {
+    let locale = ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .into_iter()
+        .find_map(|name| read(name).filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| "C".into());
+    if matches!(locale.as_str(), "C" | "POSIX") {
+        return Language::English;
+    }
+    if let Some(preferences) = read("LANGUAGE") {
+        for tag in preferences.split(':').filter(|tag| !tag.is_empty()) {
+            if matches!(tag, "C" | "POSIX") {
+                return Language::English;
+            }
+            let language = language_from_tag(tag);
+            let is_english = tag
+                .split(['-', '_', '.', '@'])
+                .next()
+                .is_some_and(|base| base.eq_ignore_ascii_case("en"));
+            if language != Language::English || is_english {
+                return language;
+            }
+        }
+    }
+    language_from_tag(&locale)
 }
 
 /// Layout QA only: `CODEX_MINIBAR_PSEUDO_LOCALE=1` accents English copy and
@@ -742,6 +765,42 @@ mod tests {
             assert_eq!(
                 catalogs.resolve(language, "bad", Some(&args)).as_deref(),
                 Some("Hello Ada")
+            );
+        }
+    }
+
+    #[test]
+    fn unix_ui_language_honors_priority_lists_and_message_locale_precedence() {
+        for (all, messages, lang, preferences, expected) in [
+            (None, None, "en_US.UTF-8", "sv:de", Language::German),
+            (None, None, "ru_RU.UTF-8", "en:ru", Language::English),
+            (
+                None,
+                None,
+                "en_US.UTF-8",
+                "xx:zh_TW:de",
+                Language::TraditionalChinese,
+            ),
+            (Some("C"), Some("ru_RU"), "de_DE", "ru", Language::English),
+            (None, Some("POSIX"), "de_DE", "ru", Language::English),
+            (None, Some("fr_FR.UTF-8"), "de_DE", "xx", Language::French),
+            (
+                Some("ru_RU.UTF-8"),
+                Some("fr_FR"),
+                "de_DE",
+                "",
+                Language::Russian,
+            ),
+        ] {
+            assert_eq!(
+                unix_system_language(|name| match name {
+                    "LC_ALL" => all.map(str::to_owned),
+                    "LC_MESSAGES" => messages.map(str::to_owned),
+                    "LANG" => Some(lang.into()),
+                    "LANGUAGE" => Some(preferences.into()),
+                    _ => None,
+                }),
+                expected
             );
         }
     }
