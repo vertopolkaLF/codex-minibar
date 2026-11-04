@@ -140,6 +140,9 @@ fn run() -> Result<()> {
     codex_minibar::whats_new::start(&state.settings, just_updated);
     if onboarding_needed {
         codex_minibar::settings_window::open_onboarding();
+    } else {
+        #[cfg(not(windows))]
+        codex_minibar::linux::instance::show_initial_toggle();
     }
     // The GPUI thread owns every window and the bridge thread owns the tray;
     // both exit the process directly, so the main thread only stays alive.

@@ -186,15 +186,28 @@ fn connect_with_retry(
 fn activate_existing(socket_path: &std::path::Path) {
     match connect_with_retry(|| UnixStream::connect(socket_path), Duration::from_secs(1)) {
         Ok(mut stream) => {
-            let toggle = std::env::args()
-                .skip(1)
-                .any(|argument| argument == TOGGLE_FLAG);
+            let toggle = toggle_requested(std::env::args_os().skip(1));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
             let verb = if toggle { TOGGLE } else { ACTIVATE };
             let request = activation_request(verb, activation_token_from_env().as_deref());
             let _ = stream.write_all(&request);
         }
         Err(error) => eprintln!("could not reach the running Codex Minibar: {error}"),
+    }
+}
+
+fn toggle_requested(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
+    arguments
+        .into_iter()
+        .any(|argument| argument == TOGGLE_FLAG)
+}
+
+/// A desktop shortcut can start the first process as well as toggle a running
+/// one. Call after the popup renderer is initialized; ordinary autostart stays
+/// in the tray. Onboarding takes priority at the call site.
+pub fn show_initial_toggle() {
+    if toggle_requested(std::env::args_os().skip(1)) {
+        show_with_token(activation_token_from_env());
     }
 }
 
@@ -354,6 +367,15 @@ fn activate() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn toggle_request_detection_accepts_non_utf8_unrelated_arguments() {
+        use std::os::unix::ffi::OsStringExt;
+        let unrelated = std::ffi::OsString::from_vec(b"non-utf8-\xff".to_vec());
+        assert!(!toggle_requested([unrelated.clone()]));
+        assert!(toggle_requested([unrelated, TOGGLE_FLAG.into()]));
+        assert!(!toggle_requested(["--toggle-other".into()]));
+    }
 
     #[test]
     fn activation_retries_until_the_primary_socket_is_ready() {
