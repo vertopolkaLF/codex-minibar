@@ -181,14 +181,14 @@ fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
         .map(|tool| crate::discovery::prepare(&tool.executable))
         .transpose()?;
     let script = linux_script()?;
-    let mut program = vec!["bash".to_owned(), script.to_string_lossy().into_owned()];
+    let mut program = vec![std::ffi::OsString::from("bash"), script.into_os_string()];
     if let Some(tool) = selected {
-        program.push(tool.tool.id().to_owned());
+        program.push(tool.tool.id().into());
         let executable = prepared
             .as_ref()
             .map(|cli| cli.path.as_path())
             .unwrap_or(&tool.executable);
-        program.push(executable.to_string_lossy().into_owned());
+        program.push(executable.as_os_str().to_owned());
     }
     let mut child = linux_terminal(&program)?
         .spawn()
@@ -217,7 +217,7 @@ fn linux_script() -> Result<PathBuf> {
 /// `x-terminal-emulator` alternative, then common emulators. Each family
 /// takes the command differently.
 #[cfg(not(windows))]
-fn linux_terminal(program: &[String]) -> Result<Command> {
+fn linux_terminal(program: &[std::ffi::OsString]) -> Result<Command> {
     let mut candidates: Vec<PathBuf> = env::var_os("TERMINAL")
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
@@ -244,7 +244,7 @@ fn linux_terminal(program: &[String]) -> Result<Command> {
 
 #[cfg(not(windows))]
 fn linux_terminal_from(
-    program: &[String],
+    program: &[std::ffi::OsString],
     candidates: impl IntoIterator<Item = PathBuf>,
 ) -> Result<Command> {
     let terminal = candidates
@@ -303,6 +303,71 @@ mod tests {
     use super::*;
 
     #[test]
+    fn explicit_diagnostic_cli_wins_over_path_and_preserves_unix_path_bytes() {
+        use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
+        let root = tempfile::tempdir().unwrap();
+        let path_cli = root.path().join("codex");
+        let selected_cli = root
+            .path()
+            .join(std::ffi::OsString::from_vec(b"selected-\xff".to_vec()));
+        let marker = root.path().join("selected.txt");
+        for (path, label) in [(&path_cli, "PATH"), (&selected_cli, "selected")] {
+            fs::write(
+                path,
+                format!("#!/bin/sh\nprintf {label} > \"$MINIBAR_TEST_MARKER\"\n"),
+            )
+            .unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let script = root.path().join("troubleshoot.sh");
+        fs::write(&script, include_str!("../assets/troubleshoot.sh")).unwrap();
+        let run = || {
+            Command::new("/bin/bash")
+                .arg(&script)
+                .arg("codex")
+                .arg(&selected_cli)
+                .env("PATH", root.path())
+                .env("MINIBAR_TEST_MARKER", &marker)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap()
+        };
+        assert!(run().status.success());
+        assert_eq!(fs::read_to_string(&marker).unwrap(), "selected");
+        fs::remove_file(&marker).unwrap();
+        fs::remove_file(&selected_cli).unwrap();
+        assert!(!run().status.success());
+        assert!(
+            !marker.exists(),
+            "missing explicit CLI must not run PATH CLI"
+        );
+
+        // Closing stdin in the standalone picker must exit, rather than
+        // repeatedly printing the prompt after read reports EOF.
+        let mut picker = Command::new("/bin/bash")
+            .arg(&script)
+            .env("PATH", root.path())
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            if let Some(status) = picker.try_wait().unwrap() {
+                assert!(!status.success());
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                picker.kill().unwrap();
+                picker.wait().unwrap();
+                panic!("diagnostic picker did not exit at EOF");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+
+    #[test]
     fn terminal_selection_skips_unusable_files_and_preserves_command_arguments() {
         use std::os::unix::fs::PermissionsExt;
         let root = tempfile::tempdir().unwrap();
@@ -311,10 +376,7 @@ mod tests {
         fs::write(&bad, b"not executable").unwrap();
         fs::write(&good, b"fixture, never launched").unwrap();
         fs::set_permissions(&good, fs::Permissions::from_mode(0o755)).unwrap();
-        let program = [
-            "bash".to_owned(),
-            "/tmp/path with spaces/script.sh".to_owned(),
-        ];
+        let program = ["bash".into(), "/tmp/path with spaces/script.sh".into()];
         let command = linux_terminal_from(&program, [bad.clone(), good.clone()]).unwrap();
         assert_eq!(command.get_program(), good.as_os_str());
         assert_eq!(
@@ -322,6 +384,27 @@ mod tests {
             ["-e", "bash", "/tmp/path with spaces/script.sh"]
         );
         assert!(linux_terminal_from(&program, [bad]).is_err());
+    }
+
+    #[test]
+    fn terminal_arguments_preserve_non_utf8_paths() {
+        use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
+        let root = tempfile::tempdir().unwrap();
+        let terminal = root.path().join("foot");
+        fs::write(&terminal, b"fixture, never launched").unwrap();
+        fs::set_permissions(&terminal, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = [
+            "bash".into(),
+            std::ffi::OsString::from_vec(b"/tmp/script-\xff".to_vec()),
+        ];
+        let command = linux_terminal_from(&program, [terminal]).unwrap();
+        assert_eq!(
+            command.get_args().collect::<Vec<_>>(),
+            program
+                .iter()
+                .map(|arg| arg.as_os_str())
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -333,7 +416,7 @@ mod tests {
         fs::set_permissions(&terminal, fs::Permissions::from_mode(0o755)).unwrap();
         let alias = root.path().join("x-terminal-emulator");
         symlink(&terminal, &alias).unwrap();
-        let command = linux_terminal_from(&["bash".to_owned()], [alias]).unwrap();
+        let command = linux_terminal_from(&["bash".into()], [alias]).unwrap();
         assert_eq!(command.get_args().collect::<Vec<_>>(), ["bash"]);
     }
 

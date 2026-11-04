@@ -59,15 +59,17 @@ done
 selected_label=""
 selected_path=""
 if [ -n "$tool" ]; then
-    for index in "${!ids[@]}"; do
-        if [ "${ids[$index]}" = "$tool" ]; then
-            selected_label="${labels[$index]}"
-            selected_path="${paths[$index]}"
-        fi
-    done
-    if [ -z "$selected_path" ] && [ -n "$executable" ]; then
-        selected_label="${tool^}"
+    selected_label="${tool^}"
+    # Settings already selected an installation. PATH is only a fallback for
+    # the standalone picker, never a replacement for that explicit choice.
+    if [ -n "$executable" ]; then
         selected_path="$executable"
+    else
+        for index in "${!ids[@]}"; do
+            if [ "${ids[$index]}" = "$tool" ]; then
+                selected_path="${paths[$index]}"
+            fi
+        done
     fi
 else
     if [ "${#ids[@]}" -eq 0 ]; then
@@ -81,7 +83,9 @@ else
         printf '[%d] %s (%s)\n' "$((index + 1))" "${labels[$index]}" "${paths[$index]}"
     done
     while true; do
-        read -r -p "Enter a number: " answer
+        if ! read -r -p "Enter a number: " answer; then
+            exit 1
+        fi
         if [[ "$answer" =~ ^[0-9]+$ ]] && [ "$answer" -ge 1 ] && [ "$answer" -le "${#ids[@]}" ]; then
             break
         fi
