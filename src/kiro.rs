@@ -569,16 +569,23 @@ fn registered_crew_install_locations() -> Vec<PathBuf> {
 }
 
 pub fn cli_path(explicit: Option<&Path>) -> Option<PathBuf> {
+    #[cfg(windows)]
+    const NAMES: &[&str] = &["kiro-cli.exe", "kiro-cli"];
+    #[cfg(not(windows))]
+    const NAMES: &[&str] = &["kiro-cli"];
     let mut known = Vec::new();
     #[cfg(windows)]
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         known.push(PathBuf::from(local_app_data).join("kiro-cli/kiro-cli.exe"));
     }
     if let Some(base) = directories::BaseDirs::new() {
-        known.push(base.home_dir().join(".local/bin/kiro-cli.exe"));
-        known.push(base.home_dir().join(".local/bin/kiro-cli"));
+        known.extend(
+            NAMES
+                .iter()
+                .map(|name| base.home_dir().join(".local/bin").join(name)),
+        );
     }
-    crate::provider_cli::candidates_from(explicit, known, &["kiro-cli.exe", "kiro-cli"])
+    crate::provider_cli::candidates_from(explicit, known, NAMES)
         .into_iter()
         .next()
 }
@@ -1220,6 +1227,19 @@ fn month_duration_minutes(resets_at: DateTime<Utc>) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_cli_discovery_does_not_prefer_a_windows_binary_in_the_same_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let unix = root.path().join("kiro-cli");
+        for path in [&unix, &root.path().join("kiro-cli.exe")] {
+            fs::write(path, b"fixture, never launched").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(cli_path(Some(root.path())), Some(unix));
+    }
 
     #[cfg(not(windows))]
     #[test]
