@@ -236,12 +236,9 @@ fn run_server(
         executable,
     };
 
-    if let Some(parent) = endpoint_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let endpoint_json = serde_json::to_vec_pretty(&endpoint)
         .map_err(|error| io::Error::other(format!("serialize endpoint: {error}")))?;
-    fs::write(&endpoint_path, endpoint_json)?;
+    write_endpoint(&endpoint_path, &endpoint_json)?;
 
     let active = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
@@ -264,6 +261,21 @@ fn run_server(
             Err(error) => eprintln!("Stream Deck bridge connection failed: {error}"),
         }
     }
+    Ok(())
+}
+
+/// The endpoint contains the loopback authorization token. Publish complete
+/// JSON in one rename, with private Unix permissions even when replacing an
+/// older endpoint created with the user's default umask.
+fn write_endpoint(path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("endpoint path has no parent directory"))?;
+    fs::create_dir_all(parent)?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged.write_all(contents)?;
+    staged.as_file().sync_all()?;
+    staged.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
 
@@ -516,4 +528,50 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
         .map_err(|error| io::Error::other(format!("serialize response: {error}")))?;
     stream.write_all(b"\n")?;
     stream.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_publication_replaces_the_file_instead_of_truncating_a_readers_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join(ENDPOINT_FILE_NAME);
+        fs::write(&path, br#"{"token":"old-fixture"}"#).unwrap();
+        let mut reader = fs::File::open(&path).unwrap();
+        let new = br#"{"token":"new-fixture"}"#;
+        write_endpoint(&path, new).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), new);
+        let mut previous = String::new();
+        reader.read_to_string(&mut previous).unwrap();
+        assert_eq!(previous, r#"{"token":"old-fixture"}"#);
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn endpoint_publication_replaces_a_symlink_without_writing_its_target() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("unrelated.json");
+        let endpoint = directory.path().join(ENDPOINT_FILE_NAME);
+        fs::write(&outside, b"unchanged").unwrap();
+        symlink(&outside, &endpoint).unwrap();
+        write_endpoint(&endpoint, br#"{"token":"fixture"}"#).unwrap();
+        assert_eq!(fs::read(&outside).unwrap(), b"unchanged");
+        assert!(
+            !fs::symlink_metadata(&endpoint)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
 }
