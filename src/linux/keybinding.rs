@@ -7,7 +7,11 @@
 //! store shortcuts in a place we can write; elsewhere Settings shows the
 //! command to add manually.
 
-use std::process::Command;
+use std::{
+    io::{Read, Seek},
+    process::{Command, Stdio},
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result, bail};
 
@@ -282,18 +286,55 @@ fn write_paths(paths: &[String]) -> Result<()> {
 }
 
 fn gsettings(args: &[&str]) -> Result<String> {
-    let output = Command::new("gsettings")
-        .args(args)
-        .output()
-        .context("run gsettings")?;
-    if !output.status.success() {
+    let mut command = Command::new("gsettings");
+    command.args(args);
+    let (status, stdout, stderr) = settings_output(command, Duration::from_secs(2))?;
+    if !status.success() {
         bail!(
             "gsettings {} failed: {}",
             args.first().copied().unwrap_or_default(),
-            String::from_utf8_lossy(&output.stderr).trim()
+            stderr.trim()
         );
     }
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    Ok(stdout.trim().to_owned())
+}
+
+/// Capture without pipes: a large shortcut list must not fill a pipe and
+/// deadlock the child before it exits. A stalled dconf/session bus is bounded,
+/// including helpers that inherit the command's file descriptors.
+fn settings_output(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<(std::process::ExitStatus, String, String)> {
+    let mut stdout = tempfile::tempfile().context("capture gsettings output")?;
+    let mut stderr = tempfile::tempfile().context("capture gsettings errors")?;
+    command
+        .stdin(Stdio::null())
+        .stdout(stdout.try_clone()?)
+        .stderr(stderr.try_clone()?);
+    let mut child = super::login_child::LoginChild::spawn(command).context("run gsettings")?;
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait().context("wait for gsettings")? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            // Dropping the child kills and reaps its private process group.
+            bail!("gsettings timed out");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let read = |file: &mut std::fs::File| -> Result<String> {
+        file.rewind()?;
+        let mut bytes = Vec::new();
+        // Fail rather than parse a truncated shortcut list and overwrite it.
+        file.take(1024 * 1024 + 1).read_to_end(&mut bytes)?;
+        if bytes.len() > 1024 * 1024 {
+            bail!("gsettings output exceeds 1 MiB");
+        }
+        String::from_utf8(bytes).context("gsettings output is not UTF-8")
+    };
+    Ok((status, read(&mut stdout)?, read(&mut stderr)?))
 }
 
 /// A GVariant text string literal.
@@ -385,6 +426,26 @@ fn unquote(text: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_command_timeout_is_bounded() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "sleep 30 & wait"]);
+        let started = Instant::now();
+        let error = settings_output(command, Duration::from_millis(100)).unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn settings_command_captures_output_larger_than_a_pipe_buffer() {
+        let mut command = Command::new("/bin/sh");
+        command.args(["-c", "head -c 131072 /dev/zero; printf diagnostic >&2"]);
+        let (status, stdout, stderr) = settings_output(command, Duration::from_secs(3)).unwrap();
+        assert!(status.success());
+        assert_eq!(stdout.len(), 131072);
+        assert_eq!(stderr, "diagnostic");
+    }
 
     fn press(key: &str, ctrl: bool, alt: bool, shift: bool, logo: bool) -> Option<Accelerator> {
         Accelerator::from_press(key, ctrl, alt, shift, logo)
