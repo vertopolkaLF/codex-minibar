@@ -25,9 +25,17 @@ pub fn on_path(name: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::metadata(path)
-        .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    use std::os::unix::ffi::OsStrExt;
+    if !std::fs::metadata(path).is_ok_and(|meta| meta.is_file()) {
+        return false;
+    }
+    let Ok(path) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // Check the credentials used by exec, including owner/group selection,
+    // ACLs and noexec mounts. Any set mode bit alone is insufficient.
+    // SAFETY: path is a valid NUL-terminated string, and no pointer is retained.
+    unsafe { libc::faccessat(libc::AT_FDCWD, path.as_ptr(), libc::X_OK, libc::AT_EACCESS) == 0 }
 }
 
 fn appimage(prefix: &str) -> Option<PathBuf> {
@@ -77,6 +85,21 @@ mod tests {
     fn executable(path: &Path) {
         std::fs::write(path, b"test executable").unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn executable_detection_checks_the_current_users_permission_class() {
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("group-only-executable");
+        std::fs::write(&file, b"fixture, never launched").unwrap();
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o010)).unwrap();
+        // For the owner, group execute does not substitute for owner execute.
+        // Root has special execution semantics when any execute bit is set.
+        // SAFETY: geteuid has no preconditions.
+        assert_eq!(is_executable(&file), unsafe { libc::geteuid() } == 0);
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o100)).unwrap();
+        assert!(is_executable(&file));
+        assert!(!is_executable(root.path()));
     }
 
     #[test]
