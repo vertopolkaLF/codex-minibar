@@ -12,6 +12,25 @@ use std::{
 
 use anyhow::{Result, bail};
 
+#[cfg(not(windows))]
+pub(crate) use crate::linux::login_child::LoginChild as ManagedChild;
+#[cfg(windows)]
+pub(crate) use std::process::Child as ManagedChild;
+
+/// Unix CLI shims can spawn a native binary rather than exec it. Keep both
+/// processes in one owned group so cancellation also closes inherited pipes.
+pub(crate) fn spawn_command(command: Command) -> std::io::Result<ManagedChild> {
+    #[cfg(windows)]
+    {
+        let mut command = command;
+        command.spawn()
+    }
+    #[cfg(not(windows))]
+    {
+        ManagedChild::spawn(command)
+    }
+}
+
 pub(crate) fn candidates_from(
     explicit: Option<&Path>,
     known: impl IntoIterator<Item = PathBuf>,
@@ -97,10 +116,7 @@ pub(crate) fn refresh_session(
             command.creation_flags(0x0800_0000);
         }
 
-        #[cfg(windows)]
-        let spawned = command.spawn();
-        #[cfg(not(windows))]
-        let spawned = crate::linux::login_child::LoginChild::spawn(command);
+        let spawned = spawn_command(command);
         let mut child = match spawned {
             Ok(child) => child,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,

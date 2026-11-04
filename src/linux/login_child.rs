@@ -1,20 +1,26 @@
-//! Own an authentication CLI and its process group until it exits or is cancelled.
+//! Own a provider CLI and its process group until it exits or is cancelled.
 
 use std::{
     io,
     os::unix::process::CommandExt,
-    process::{Child, Command, ExitStatus},
+    process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus},
 };
 
 pub(crate) struct LoginChild {
     child: Child,
     running: bool,
+    pub(crate) stdin: Option<ChildStdin>,
+    pub(crate) stdout: Option<ChildStdout>,
+    pub(crate) stderr: Option<ChildStderr>,
 }
 
 impl LoginChild {
     pub(crate) fn spawn(mut command: Command) -> io::Result<Self> {
-        let child = command.process_group(0).spawn()?;
+        let mut child = command.process_group(0).spawn()?;
         Ok(Self {
+            stdin: child.stdin.take(),
+            stdout: child.stdout.take(),
+            stderr: child.stderr.take(),
             child,
             running: true,
         })
@@ -77,7 +83,7 @@ mod tests {
             .stdout(Stdio::piped())
             .stderr(Stdio::null());
         let mut child = LoginChild::spawn(command).unwrap();
-        let mut reader = BufReader::new(child.child.stdout.take().unwrap());
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
         let mut ready = String::new();
         reader.read_line(&mut ready).unwrap();
         assert_eq!(ready.trim(), "ready");

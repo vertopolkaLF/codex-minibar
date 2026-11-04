@@ -2,7 +2,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{Arc, OnceLock},
     thread,
     time::{Duration, Instant},
@@ -194,11 +194,11 @@ impl ClaudeActivator {
         };
         let mut command = activation_command_for(program);
         scope_command(&mut command, folder);
-        let mut child = command
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+            .stderr(Stdio::null());
+        let mut child = crate::provider_cli::spawn_command(command)
             .context("launch Claude activation through `claude`")?;
         let deadline = Instant::now() + self.timeout;
         loop {
@@ -245,7 +245,7 @@ fn activation_command_for(program: PathBuf) -> Command {
     command
 }
 
-fn terminate(child: &mut Child) {
+fn terminate(child: &mut crate::provider_cli::ManagedChild) {
     let _ = child.kill();
     let _ = child.wait();
 }

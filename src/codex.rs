@@ -3,12 +3,13 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{Arc, OnceLock, mpsc},
     thread,
     time::{Duration as StdDuration, Instant},
 };
 
+use crate::provider_cli::{ManagedChild as Child, spawn_command};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeZone, Utc};
@@ -124,11 +125,12 @@ impl CodexActivator {
         ));
         let args = activation_args(&workspace, &last_message_path);
         let prepared = crate::discovery::prepare(&self.executable)?;
-        let mut child = command_for_codex(&prepared.path, &args, self.home.as_deref())
+        let mut command = command_for_codex(&prepared.path, &args, self.home.as_deref());
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        let mut child = spawn_command(command)
             .with_context(|| format!("launch activation through {}", self.executable.display()))?;
         let stderr = child.stderr.take();
         let stderr_reader = thread::spawn(move || {
@@ -958,12 +960,12 @@ fn spawn_codex(
     let prepared = crate::discovery::prepare(executable)?;
     // The lease covers the preparation-to-spawn gap. Windows protects the
     // executable mapping from deletion for the child's lifetime afterwards.
-    command_for_codex(&prepared.path, args, home)
+    let mut command = command_for_codex(&prepared.path, args, home);
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(stderr)
-        .spawn()
-        .with_context(|| format!("launch {}", executable.display()))
+        .stderr(stderr);
+    spawn_command(command).with_context(|| format!("launch {}", executable.display()))
 }
 
 fn command_for_codex(
@@ -1032,6 +1034,28 @@ pub fn is_installed(explicit: Option<&Path>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn app_server_timeout_stops_the_native_child_of_a_unix_shim() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let shim = root.path().join("codex");
+        fs::write(
+            &shim,
+            "#!/bin/sh\n(sleep 1; echo survived > \"$0.survived\") &\nwait\n",
+        )
+        .unwrap();
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+        let client = CodexClient::new(&shim).with_timeout(StdDuration::from_millis(100));
+        let started = Instant::now();
+        assert!(client.read_rate_limits_via_app_server().is_err());
+        assert!(started.elapsed() < StdDuration::from_secs(2));
+        // The helper would write after the request timed out if only the shim
+        // were killed. Its inherited stderr also must close immediately.
+        thread::sleep(StdDuration::from_millis(1100));
+        assert!(!shim.with_extension("survived").exists());
+    }
 
     #[test]
     fn cmd_shims_are_spawned_directly_without_a_shell_string() {
