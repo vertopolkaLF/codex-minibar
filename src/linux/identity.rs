@@ -103,28 +103,40 @@ fn ensure_portable_icon(data_home: &Path) {
 }
 
 fn publish_portable_icon(data_home: &Path) -> Result<()> {
-    let directory = data_home.join("icons/hicolor/256x256/apps");
-    let path = directory.join("codex-minibar.png");
-    if path.exists() {
-        return Ok(());
-    }
-    std::fs::create_dir_all(&directory).context("create portable icon directory")?;
-    let mut staged = tempfile::NamedTempFile::new_in(&directory).context("stage portable icon")?;
-    staged
-        .write_all(include_bytes!("../../assets/icons/app-icon-256.png"))
-        .context("write portable icon")?;
-    match staged.persist_noclobber(&path) {
-        Ok(_) => {
-            // Icon-theme caches watch top-level directory mtimes.
-            for relative in ["icons", "icons/hicolor"] {
-                std::fs::File::open(data_home.join(relative))?
-                    .set_modified(std::time::SystemTime::now())?;
-            }
-            Ok(())
+    let mut changed = false;
+    for (size, contents) in [
+        (
+            "48x48",
+            include_bytes!("../../assets/icons/app-icon-48.png").as_slice(),
+        ),
+        (
+            "256x256",
+            include_bytes!("../../assets/icons/app-icon-256.png").as_slice(),
+        ),
+    ] {
+        let directory = data_home.join("icons/hicolor").join(size).join("apps");
+        let path = directory.join("codex-minibar.png");
+        if path.exists() {
+            continue;
         }
-        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
-        Err(error) => Err(error.error).context("publish portable icon"),
+        std::fs::create_dir_all(&directory).context("create portable icon directory")?;
+        let mut staged =
+            tempfile::NamedTempFile::new_in(&directory).context("stage portable icon")?;
+        staged.write_all(contents).context("write portable icon")?;
+        match staged.persist_noclobber(&path) {
+            Ok(_) => changed = true,
+            Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.error).context("publish portable icon"),
+        }
     }
+    if changed {
+        // Icon-theme caches watch top-level directory mtimes.
+        for relative in ["icons", "icons/hicolor"] {
+            std::fs::File::open(data_home.join(relative))?
+                .set_modified(std::time::SystemTime::now())?;
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn desktop_entry(template: &str, executable: &Path) -> String {
@@ -173,6 +185,15 @@ mod tests {
             std::fs::read(&icon).unwrap(),
             include_bytes!("../../assets/icons/app-icon-256.png")
         );
+        let small_icon = directory
+            .path()
+            .join("icons/hicolor/48x48/apps/codex-minibar.png");
+        assert_eq!(
+            std::fs::read(&small_icon).unwrap(),
+            include_bytes!("../../assets/icons/app-icon-48.png")
+        );
+        // Backfill an absent small icon even when the large one is customized.
+        std::fs::remove_file(&small_icon).unwrap();
         std::fs::write(&icon, b"user icon").unwrap();
         assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\"\n"));
         assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\" --toggle\n"));
@@ -184,6 +205,10 @@ mod tests {
         assert!(updated.contains("Exec=\"/different/binary\" --toggle\n"));
         assert!(updated.contains(MANAGED));
         assert_eq!(std::fs::read(icon).unwrap(), b"user icon");
+        assert_eq!(
+            std::fs::read(small_icon).unwrap(),
+            include_bytes!("../../assets/icons/app-icon-48.png")
+        );
     }
 
     #[test]
