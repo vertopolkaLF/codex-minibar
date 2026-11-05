@@ -28,6 +28,10 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
    instance should toggle rather than start another process. On a fresh profile,
    onboarding takes priority. Launch a fresh profile from the desktop launcher
    too: onboarding must receive the launcher's focus grant under Wayland.
+   With onboarding completed, verify the ordinary launcher opens the popup on
+   a cold start and brings the app forward when it is already running. Launching
+   it while the popup is visible must not close the popup. Autostart without
+   `--show` or `--toggle` must remain in the background.
 2. Close every window, then reopen from the tray or shortcut. Settings and the
    popup must remain usable after several cycles. Test Escape, outside clicks,
    Keep open and opening Settings while the popup is visible.

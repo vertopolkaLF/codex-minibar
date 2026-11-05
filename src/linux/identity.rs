@@ -150,6 +150,7 @@ pub(super) fn desktop_entry(template: &str, executable: &Path) -> String {
         .lines()
         .map(|line| match line {
             "Exec=codex-minibar" => format!("Exec={quoted}"),
+            "Exec=codex-minibar --show" => format!("Exec={quoted} --show"),
             "Exec=codex-minibar --toggle" => format!("Exec={quoted} --toggle"),
             _ => line.to_owned(),
         })
@@ -200,13 +201,13 @@ mod tests {
         // Backfill an absent small icon even when the large one is customized.
         std::fs::remove_file(&small_icon).unwrap();
         std::fs::write(&icon, b"user icon").unwrap();
-        assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\"\n"));
+        assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\" --show\n"));
         assert!(entry.contains("Exec=\"/opt/My \\\\$Apps/100%%/minibar\" --toggle\n"));
         ensure_entry_in(directory.path(), &[], Path::new("/different/binary")).unwrap();
         let updated =
             std::fs::read_to_string(directory.path().join("applications").join(DESKTOP_FILE))
                 .unwrap();
-        assert!(updated.contains("Exec=\"/different/binary\"\n"));
+        assert!(updated.contains("Exec=\"/different/binary\" --show\n"));
         assert!(updated.contains("Exec=\"/different/binary\" --toggle\n"));
         assert!(updated.contains(MANAGED));
         assert_eq!(std::fs::read(icon).unwrap(), b"user icon");

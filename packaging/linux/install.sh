@@ -36,6 +36,7 @@ BEGIN {
     quoted = quoted "\""
 }
 $0 == "Exec=codex-minibar" { print "Exec=" quoted; next }
+$0 == "Exec=codex-minibar --show" { print "Exec=" quoted " --show"; next }
 $0 == "Exec=codex-minibar --toggle" { print "Exec=" quoted " --toggle"; next }
 { print }
 ' "$desktop" > "$launcher_tmp"

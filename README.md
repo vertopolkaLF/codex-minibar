@@ -275,8 +275,9 @@ and files in the default browser or file manager, and the distribution’s
 
 The tray icon uses the StatusNotifierItem protocol. KDE Plasma, Xfce, Cinnamon, Budgie and
 most panels show it out of the box. On GNOME, enable the **AppIndicator and KStatusNotifierItem
-Support** extension (Ubuntu ships it enabled). Without a tray, launch `codex-minibar` again
-to open the popup.
+Support** extension (Ubuntu ships it enabled). The application launcher opens the popup
+even without a tray and on the first launch. From a terminal, use `codex-minibar --show`;
+launching `codex-minibar` again also brings an already running instance forward.
 
 Click the tray icon to toggle the popup. On panels that open a menu instead (such as
 GNOME AppIndicator), choose **Show** to open the popup or **Settings** to open Settings.

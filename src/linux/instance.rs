@@ -41,6 +41,9 @@ static ACTIVATION_TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
 static STARTUP_ACTIVATION_TOKEN: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 /// The command-line flag that toggles the running popup.
 pub const TOGGLE_FLAG: &str = "--toggle";
+/// Desktop launchers show the app on the first launch too. Autostart entries
+/// omit this flag so an ordinary login can stay in the background.
+const SHOW_FLAG: &str = "--show";
 
 /// Saves the launcher's one-use focus grant without passing it on to child
 /// processes. Call at the very beginning of `main`, before desktop services,
@@ -224,6 +227,12 @@ fn toggle_requested(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> 
         .any(|argument| argument == TOGGLE_FLAG)
 }
 
+fn popup_requested(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> bool {
+    arguments
+        .into_iter()
+        .any(|argument| argument == SHOW_FLAG || argument == TOGGLE_FLAG)
+}
+
 /// Give the launcher's focus grant to the first visible surface. Onboarding
 /// takes priority over `--toggle`; ordinary autostart stays in the tray.
 /// Call after the popup renderer is initialized.
@@ -231,7 +240,7 @@ pub fn show_initial_window(onboarding_needed: bool) {
     if onboarding_needed {
         set_activation_token(take_startup_activation_token());
         crate::settings_window::open_onboarding();
-    } else if toggle_requested(std::env::args_os().skip(1)) {
+    } else if popup_requested(std::env::args_os().skip(1)) {
         show_with_token(take_startup_activation_token());
     } else {
         // An ordinary tray startup has no window to activate. Do not retain
@@ -395,8 +404,12 @@ mod tests {
         use std::os::unix::ffi::OsStringExt;
         let unrelated = std::ffi::OsString::from_vec(b"non-utf8-\xff".to_vec());
         assert!(!toggle_requested([unrelated.clone()]));
-        assert!(toggle_requested([unrelated, TOGGLE_FLAG.into()]));
+        assert!(toggle_requested([unrelated.clone(), TOGGLE_FLAG.into()]));
+        assert!(popup_requested([unrelated, SHOW_FLAG.into()]));
+        // Showing an existing window must not be interpreted as a toggle.
+        assert!(!toggle_requested([SHOW_FLAG.into()]));
         assert!(!toggle_requested(["--toggle-other".into()]));
+        assert!(!popup_requested(["--show-other".into()]));
     }
 
     #[test]
