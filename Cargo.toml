@@ -80,6 +80,7 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphic
 [target.'cfg(not(windows))'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["async-std"] }
 flate2 = "1"
+font-kit = { package = "zed-font-kit", version = "0.14.1-zed", features = ["source-fontconfig-dlopen"] }
 # The workspace-wide entry disables GPUI's defaults (Windows needs none of
 # them); Linux needs its Wayland and X11 backends, or GPUI runs headless.
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit", "wayland", "x11", "keep-alive"] }

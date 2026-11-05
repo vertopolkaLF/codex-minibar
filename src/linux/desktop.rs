@@ -197,7 +197,10 @@ pub fn accent_color() -> Option<(u8, u8, u8)> {
 pub fn ui_font_family() -> Option<String> {
     static FAMILY: OnceLock<Option<String>> = OnceLock::new();
     FAMILY
-        .get_or_init(|| gnome_font("font-name").or_else(|| fontconfig_family("sans-serif")))
+        .get_or_init(|| {
+            gnome_font("font-name")
+                .or_else(|| fontconfig_family(font_kit::family_name::FamilyName::SansSerif))
+        })
         .clone()
 }
 
@@ -206,7 +209,8 @@ pub fn monospace_font_family() -> Option<String> {
     static FAMILY: OnceLock<Option<String>> = OnceLock::new();
     FAMILY
         .get_or_init(|| {
-            gnome_font("monospace-font-name").or_else(|| fontconfig_family("monospace"))
+            gnome_font("monospace-font-name")
+                .or_else(|| fontconfig_family(font_kit::family_name::FamilyName::Monospace))
         })
         .clone()
 }
@@ -226,12 +230,16 @@ fn family_from_font_name(value: &str) -> Option<String> {
     (!family.is_empty()).then(|| family.to_owned())
 }
 
-fn fontconfig_family(pattern: &str) -> Option<String> {
-    let mut command = std::process::Command::new("fc-match");
-    command.args(["--format=%{family[0]}", pattern]);
-    let (status, stdout, _) = super::command::output(command, Duration::from_secs(2)).ok()?;
-    let family = stdout.trim().to_owned();
-    (status.success() && !family.is_empty()).then_some(family)
+fn fontconfig_family(family: font_kit::family_name::FamilyName) -> Option<String> {
+    // Share GPUI's native fontconfig stack. Minimal desktops can have the
+    // library and installed fonts without the separate `fc-match` utility.
+    let font = font_kit::source::SystemSource::new()
+        .select_best_match(&[family], &font_kit::properties::Properties::new())
+        .ok()?
+        .load()
+        .ok()?;
+    let family = font.family_name();
+    (!family.is_empty()).then_some(family)
 }
 
 /// GNOME Shell (and the Ubuntu, Pantheon and Budgie shells derived from its

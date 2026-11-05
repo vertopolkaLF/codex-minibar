@@ -1042,6 +1042,7 @@ dependencies = [
  "windows-sys 0.59.0",
  "winresource",
  "zbus",
+ "zed-font-kit",
  "zeroize",
  "zip",
 ]
