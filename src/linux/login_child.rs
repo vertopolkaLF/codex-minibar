@@ -16,6 +16,7 @@ pub(crate) struct LoginChild {
 
 impl LoginChild {
     pub(crate) fn spawn(mut command: Command) -> io::Result<Self> {
+        super::provider_env::prepare(&mut command);
         let mut child = command.process_group(0).spawn()?;
         Ok(Self {
             stdin: child.stdin.take(),

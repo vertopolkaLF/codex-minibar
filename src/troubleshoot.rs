@@ -182,15 +182,23 @@ fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
         .transpose()?;
     let script = linux_script()?;
     let mut program = vec![std::ffi::OsString::from("bash"), script.into_os_string()];
-    if let Some(tool) = selected {
-        program.push(tool.tool.id().into());
-        let executable = prepared
+    let executable = selected.map(|tool| {
+        prepared
             .as_ref()
             .map(|cli| cli.path.as_path())
-            .unwrap_or(&tool.executable);
+            .unwrap_or(&tool.executable)
+    });
+    if let Some(tool) = selected {
+        program.push(tool.tool.id().into());
+    }
+    if let Some(executable) = executable {
         program.push(executable.as_os_str().to_owned());
     }
-    let mut child = linux_terminal(&program)?
+    let mut terminal = linux_terminal(&program)?;
+    if let Some(executable) = executable {
+        crate::linux::provider_env::prepare_for_program(&mut terminal, executable);
+    }
+    let mut child = terminal
         .spawn()
         .context("open a terminal for troubleshooting")?;
     // Hold any prepared CLI lease until the terminal closes.

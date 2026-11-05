@@ -69,6 +69,10 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   Previously saved secrets must not be silently replaced when their key is unavailable.
 - Test a CLI login cancellation and timeout with a fixture CLI. Its descendants
   must exit. Use fixtures rather than launching real browser login flows repeatedly.
+- With a fixture npm layout under a Node installation and a test desktop `PATH`
+  containing no Node runtime, select its CLI explicitly. Test background requests,
+  sign-in and the troubleshooting terminal through both the npm launcher symlink
+  and its canonical package path. They must use that installation's Node runtime.
 - Built-in shortcut installation is gated on a GNOME session identifier and a
   working GNOME media-keys schema. Other sessions must show the manual command;
   merely having GNOME packages installed does not imply shortcut integration.
