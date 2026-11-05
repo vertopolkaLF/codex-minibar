@@ -199,7 +199,7 @@ pub fn ui_font_family() -> Option<String> {
     FAMILY
         .get_or_init(|| {
             gnome_font("font-name")
-                .or_else(|| fontconfig_family(font_kit::family_name::FamilyName::SansSerif))
+                .or_else(|| fontconfig_family(&[font_kit::family_name::FamilyName::SansSerif]))
         })
         .clone()
 }
@@ -210,31 +210,125 @@ pub fn monospace_font_family() -> Option<String> {
     FAMILY
         .get_or_init(|| {
             gnome_font("monospace-font-name")
-                .or_else(|| fontconfig_family(font_kit::family_name::FamilyName::Monospace))
+                .or_else(|| fontconfig_family(&[font_kit::family_name::FamilyName::Monospace]))
         })
         .clone()
 }
 
-/// A GNOME font setting such as `"Ubuntu Sans 11"`, without its size.
+/// Resolve a GNOME Pango description to a family GPUI can actually load.
 fn gnome_font(key: &str) -> Option<String> {
+    use font_kit::family_name::FamilyName;
     let value = String::try_from(read_setting("org.gnome.desktop.interface", key)?).ok()?;
-    family_from_font_name(&value)
+    let family = family_from_font_name(&value)?;
+    let families = family
+        .split(',')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(|name| match name.to_ascii_lowercase().as_str() {
+            "sans" | "sans-serif" | "system-ui" => FamilyName::SansSerif,
+            "serif" => FamilyName::Serif,
+            "monospace" => FamilyName::Monospace,
+            _ => FamilyName::Title(name.to_owned()),
+        })
+        .collect::<Vec<_>>();
+    fontconfig_family(&families)
 }
 
 fn family_from_font_name(value: &str) -> Option<String> {
-    let value = value.trim();
-    let family = match value.rsplit_once(' ') {
-        Some((family, size)) if size.parse::<f32>().is_ok() => family.trim(),
-        _ => value,
-    };
+    // Pango: [families] [style options] [size[px]] [@variations] [#features].
+    // https://docs.gtk.org/Pango/type_func.FontDescription.from_string.html
+    let mut family = value.trim();
+    for marker in ['#', '@'] {
+        let (rest, option) = family
+            .rsplit_once(char::is_whitespace)
+            .unwrap_or(("", family));
+        if option.starts_with(marker) {
+            family = rest.trim_end();
+        }
+    }
+    let (rest, size) = family
+        .rsplit_once(char::is_whitespace)
+        .unwrap_or(("", family));
+    if size
+        .strip_suffix("px")
+        .unwrap_or(size)
+        .parse::<f32>()
+        .is_ok()
+    {
+        family = rest.trim_end();
+    }
+    loop {
+        let (rest, option) = family
+            .rsplit_once(char::is_whitespace)
+            .unwrap_or(("", family));
+        // A trailing comma disambiguates families ending in a style word,
+        // e.g. "DejaVu Sans Ultra-Light, 11".
+        if !is_font_style(option) {
+            break;
+        }
+        family = rest.trim_end();
+    }
+    let family = family.trim_end_matches(',').trim_end();
     (!family.is_empty()).then(|| family.to_owned())
 }
 
-fn fontconfig_family(family: font_kit::family_name::FamilyName) -> Option<String> {
+fn is_font_style(value: &str) -> bool {
+    matches!(
+        value.replace('-', "").to_ascii_lowercase().as_str(),
+        "normal"
+            | "roman"
+            | "oblique"
+            | "italic"
+            | "smallcaps"
+            | "allsmallcaps"
+            | "petitecaps"
+            | "allpetitecaps"
+            | "unicase"
+            | "titlecaps"
+            | "thin"
+            | "ultralight"
+            | "extralight"
+            | "light"
+            | "semilight"
+            | "demilight"
+            | "book"
+            | "regular"
+            | "medium"
+            | "semibold"
+            | "demibold"
+            | "bold"
+            | "ultrabold"
+            | "extrabold"
+            | "heavy"
+            | "black"
+            | "ultrablack"
+            | "extrablack"
+            | "ultracondensed"
+            | "extracondensed"
+            | "condensed"
+            | "semicondensed"
+            | "semiexpanded"
+            | "expanded"
+            | "extraexpanded"
+            | "ultraexpanded"
+            | "notrotated"
+            | "south"
+            | "upsidedown"
+            | "north"
+            | "rotatedleft"
+            | "east"
+            | "rotatedright"
+            | "west"
+            | "withcolor"
+            | "withoutcolor"
+    )
+}
+
+fn fontconfig_family(families: &[font_kit::family_name::FamilyName]) -> Option<String> {
     // Share GPUI's native fontconfig stack. Minimal desktops can have the
     // library and installed fonts without the separate `fc-match` utility.
     let font = font_kit::source::SystemSource::new()
-        .select_best_match(&[family], &font_kit::properties::Properties::new())
+        .select_best_match(families, &font_kit::properties::Properties::new())
         .ok()?
         .load()
         .ok()?;
@@ -375,5 +469,36 @@ mod tests {
         );
         assert_eq!(family_from_font_name("Inter").as_deref(), Some("Inter"));
         assert_eq!(family_from_font_name("  "), None);
+    }
+
+    #[test]
+    fn pango_styles_and_options_are_not_part_of_the_font_family() {
+        for (description, expected) in [
+            ("Noto Sans Semi-Bold Italic 11", Some("Noto Sans")),
+            (
+                "Cantarell Italic Light 15 @wght=200 #tnum=1",
+                Some("Cantarell"),
+            ),
+            ("Fira Code\tMedium 13px", Some("Fira Code")),
+            (
+                "DejaVu Sans Ultra-Light, 11",
+                Some("DejaVu Sans Ultra-Light"),
+            ),
+            ("Times New Roman, Bold 11", Some("Times New Roman")),
+            (
+                "Noto Sans, DejaVu Sans Bold 12",
+                Some("Noto Sans, DejaVu Sans"),
+            ),
+            ("Bold 11", None),
+            ("11", None),
+            ("11px", None),
+            ("#tnum=1", None),
+        ] {
+            assert_eq!(
+                family_from_font_name(description).as_deref(),
+                expected,
+                "{description}"
+            );
+        }
     }
 }
