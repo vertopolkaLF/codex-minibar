@@ -115,6 +115,8 @@ fn common_launcher_dirs() -> Vec<PathBuf> {
         #[cfg(not(windows))]
         dirs.push(base.home_dir().join(".npm-global/bin"));
     }
+    #[cfg(not(windows))]
+    dirs.extend(crate::linux::node_discovery::bin_dirs());
     #[cfg(windows)]
     {
         if let Some(roaming) = std::env::var_os("APPDATA") {

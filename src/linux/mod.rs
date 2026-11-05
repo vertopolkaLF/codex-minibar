@@ -14,6 +14,7 @@ pub mod instance;
 pub mod keybinding;
 pub mod keyring;
 pub(crate) mod login_child;
+pub(crate) mod node_discovery;
 pub mod notify;
 pub(crate) mod provider_env;
 pub(crate) mod resume;

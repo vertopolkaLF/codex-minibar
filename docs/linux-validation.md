@@ -73,6 +73,9 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   containing no Node runtime, select its CLI explicitly. Test background requests,
   sign-in and the troubleshooting terminal through both the npm launcher symlink
   and its canonical package path. They must use that installation's Node runtime.
+  Clear the explicit selection and check automatic NVM discovery too. An explicit
+  selection or CLI on `PATH` must take priority; NVM fallback should prefer its
+  active installation, then its installed default version before other versions.
 - Built-in shortcut installation is gated on a GNOME session identifier and a
   working GNOME media-keys schema. Other sessions must show the manual command;
   merely having GNOME packages installed does not imply shortcut integration.

@@ -283,6 +283,10 @@ Click the tray icon to toggle the popup. On panels that open a menu instead (suc
 GNOME AppIndicator), choose **Show** to open the popup or **Settings** to open Settings.
 Closing the popup or Settings leaves the app running in the tray.
 
+Provider discovery also checks installed NVM versions when the desktop session's
+`PATH` omits them. Explicit CLI selections and executables already on `PATH` keep
+priority over these fallback locations.
+
 Differences from Windows:
 
 - **Popup placement.** The popup is a floating panel by default. On X11, **Settings → Customize →

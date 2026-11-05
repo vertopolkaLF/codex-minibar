@@ -346,6 +346,12 @@ fn common_locations() -> Vec<PathBuf> {
             home.join(".npm-global/bin/codex"),
         ]);
     }
+    #[cfg(not(windows))]
+    paths.extend(
+        crate::linux::node_discovery::bin_dirs()
+            .into_iter()
+            .map(|dir| dir.join("codex")),
+    );
     paths
 }
 

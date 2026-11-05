@@ -58,6 +58,12 @@ pub(crate) fn executable_candidates(known: &[PathBuf], names: &[&str]) -> Vec<Pa
         .into_iter()
         .flat_map(|path| env::split_paths(&path).collect::<Vec<_>>())
         .flat_map(|directory| names.iter().map(move |name| directory.join(name)));
+    #[cfg(not(windows))]
+    let discovered = discovered.chain(
+        crate::linux::node_discovery::bin_dirs()
+            .into_iter()
+            .flat_map(|directory| names.iter().map(move |name| directory.join(name))),
+    );
 
     for candidate in known.iter().cloned().chain(discovered) {
         let Ok(candidate) = fs::canonicalize(candidate) else {
