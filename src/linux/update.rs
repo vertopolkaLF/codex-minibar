@@ -293,7 +293,17 @@ fn write_success_marker(version: &str) -> Result<()> {
 /// Starts a detached shell that opens `program` once `pid` has exited. Spawning
 /// it now, rather than at exit, keeps a failure reportable while the app runs.
 fn spawn_relaunch(program: &Path, pid: u32) -> Result<Child> {
-    relaunch_command(program, pid, super::autostart::requires_extraction())
+    let extract = super::autostart::requires_extraction();
+    let launcher = if extract {
+        super::appimage_launch::for_image(program)?
+    } else {
+        program.to_owned()
+    };
+    let mut command = relaunch_command(&launcher, pid, extract);
+    if let Some(directory) = program.parent() {
+        command.current_dir(directory);
+    }
+    command
         .spawn()
         .with_context(|| format!("start {}", program.display()))
 }

@@ -263,6 +263,8 @@ Codex Minibar also runs on Linux desktops under Wayland and X11. Download from t
 - **Any distribution, no install:** make `codex-minibar-<version>-linux-x64.AppImage` executable
   and run it. If FUSE mounting is unavailable, add `--appimage-extract-and-run`;
   generated launchers and autostart entries preserve that mode, as does updating.
+  Managed launches use separate temporary extraction directories, so opening the
+  app again cannot remove files used by the running instance.
 - **Fedora/openSUSE:** `sudo dnf install ./codex-minibar-<version>-1.x86_64.rpm`
   (or `sudo zypper install ...`).
 - **Arch Linux:** build the `PKGBUILD` attached to each release with `makepkg -si`

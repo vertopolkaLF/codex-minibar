@@ -66,6 +66,10 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   login, popup shortcuts and an update/relaunch. Each must preserve extraction
   without recording the temporary APPDIR as the executable. Existing original
   GNOME shortcut commands may be upgraded; custom commands and bindings must stay.
+  While one extracted instance runs, activate it again through its managed
+  launcher/shortcut. Closing the short second invocation must not remove the
+  first instance's extracted files; each managed invocation owns its temporary
+  directory and cleans it after exit unless `NO_CLEANUP` was explicitly set.
 - On a non-GNOME/non-Plasma Debian-based desktop, inspect the package's
   dependency plan with the package manager's simulation mode. Installing
   Minibar must not recommend adding GNOME Shell or Plasma merely for a tray

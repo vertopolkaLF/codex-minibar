@@ -242,17 +242,23 @@ pub fn refresh_extracted_appimage_command() -> Result<()> {
     let entry = entry_schema();
     let current = unquote(&gsettings(&["get", &entry, "command"])?)
         .context("read installed popup shortcut command")?;
-    let program = super::autostart::executable()?;
-    if let Some(command) = extracted_command_update(&current, &program) {
+    let program = super::autostart::raw_executable()?;
+    let launcher = super::autostart::executable()?;
+    if let Some(command) = extracted_command_update(&current, &program, &launcher) {
         gsettings(&["set", &entry, "command", &variant_string(&command)])?;
     }
     Ok(())
 }
 
-fn extracted_command_update(current: &str, program: &std::path::Path) -> Option<String> {
+fn extracted_command_update(
+    current: &str,
+    program: &std::path::Path,
+    launcher: &std::path::Path,
+) -> Option<String> {
     let program = program.display().to_string();
-    (current == super::instance::toggle_command_for(&program, false))
-        .then(|| super::instance::toggle_command_for(&program, true))
+    (current == super::instance::toggle_command_for(&program, false)
+        || current == super::instance::toggle_command_for(&program, true))
+    .then(|| super::instance::toggle_command_for(&launcher.display().to_string(), true))
 }
 
 fn write(accelerator: Option<&Accelerator>) -> Result<()> {
@@ -527,19 +533,25 @@ mod tests {
         assert_eq!(unquote("'<Control>m'").as_deref(), Some("<Control>m"));
         assert_eq!(unquote("''").as_deref(), Some(""));
     }
-}
-#[test]
-fn extraction_command_refresh_preserves_custom_shortcuts() {
-    let program = std::path::Path::new("/opt/My AppImage");
-    assert_eq!(
-        extracted_command_update("'/opt/My AppImage' --toggle", program),
-        Some("'/opt/My AppImage' --appimage-extract-and-run --toggle".into())
-    );
-    for current in [
-        "custom-wrapper --toggle",
-        "'/opt/My AppImage' --show",
-        "'/opt/My AppImage' --appimage-extract-and-run --toggle",
-    ] {
-        assert_eq!(extracted_command_update(current, program), None);
+    #[test]
+    fn extraction_command_refresh_preserves_custom_shortcuts() {
+        let program = std::path::Path::new("/opt/My AppImage");
+        let launcher = std::path::Path::new("/home/me/isolated-launch.sh");
+        for current in [
+            "'/opt/My AppImage' --toggle",
+            "'/opt/My AppImage' --appimage-extract-and-run --toggle",
+        ] {
+            assert_eq!(
+                extracted_command_update(current, program, launcher),
+                Some("'/home/me/isolated-launch.sh' --appimage-extract-and-run --toggle".into())
+            );
+        }
+        for current in [
+            "custom-wrapper --toggle",
+            "'/opt/My AppImage' --show",
+            "'/home/me/isolated-launch.sh' --appimage-extract-and-run --toggle",
+        ] {
+            assert_eq!(extracted_command_update(current, program, launcher), None);
+        }
     }
 }

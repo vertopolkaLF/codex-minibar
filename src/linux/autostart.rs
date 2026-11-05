@@ -16,9 +16,18 @@ fn entry_path() -> Result<PathBuf> {
     Ok(base.config_dir().join("autostart").join(FILE_NAME))
 }
 
-/// The program to start: the AppImage when running from one (its mount
-/// point changes on every launch), otherwise this executable.
+/// The persistent program to start: a private extraction wrapper, the AppImage
+/// file for FUSE launches, or this executable for an ordinary native install.
 pub(super) fn executable() -> Result<PathBuf> {
+    let program = raw_executable()?;
+    if requires_extraction() {
+        super::appimage_launch::for_image(&program)
+    } else {
+        Ok(program)
+    }
+}
+
+pub(super) fn raw_executable() -> Result<PathBuf> {
     let executable = std::env::current_exe().context("resolve current executable for startup")?;
     Ok(launch_executable(
         &executable,

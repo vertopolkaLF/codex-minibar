@@ -4,6 +4,7 @@
 //! or to XDG base directories, so it works on GNOME, KDE and other
 //! freedesktop-compliant desktops under both X11 and Wayland.
 
+mod appimage_launch;
 pub mod apps;
 pub mod autostart;
 pub(crate) mod command;
