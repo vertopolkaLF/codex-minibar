@@ -57,20 +57,31 @@ pub fn session_bus() -> Option<&'static Connection> {
 /// which wraps the value in an extra variant.
 fn read_setting(namespace: &str, key: &str) -> Option<OwnedValue> {
     let bus = settings_bus()?;
-    let call = |method: &str| {
+    read_setting_with(|method| {
         bus.call_method(
             Some(PORTAL_NAME),
             PORTAL_PATH,
             Some(SETTINGS_INTERFACE),
             method,
             &(namespace, key),
-        )
-        .ok()?
+        )?
         .body()
         .deserialize::<OwnedValue>()
-        .ok()
+    })
+}
+
+fn read_setting_with(mut call: impl FnMut(&str) -> zbus::Result<OwnedValue>) -> Option<OwnedValue> {
+    let value = match call("ReadOne") {
+        Ok(value) => value,
+        // Only an older endpoint needs Read. Retrying a timeout, unavailable
+        // service or missing setting just doubles the optional call's delay.
+        Err(zbus::Error::MethodError(name, _, _))
+            if name.as_str() == "org.freedesktop.DBus.Error.UnknownMethod" =>
+        {
+            call("Read").ok()?
+        }
+        Err(_) => return None,
     };
-    let value = call("ReadOne").or_else(|| call("Read"))?;
     // `Read` nests the value in a variant; unwrap one level when present.
     match &*value {
         zbus::zvariant::Value::Value(inner) => OwnedValue::try_from(inner.as_ref().clone()).ok(),
@@ -366,6 +377,67 @@ pub fn open(target: &std::ffi::OsStr) -> anyhow::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn method_error(name: &str) -> zbus::Error {
+        zbus::Error::MethodError(
+            name.to_owned().try_into().unwrap(),
+            None,
+            zbus::Message::method_call(PORTAL_PATH, "ReadOne")
+                .unwrap()
+                .build(&())
+                .unwrap(),
+        )
+    }
+
+    #[test]
+    fn old_portals_use_legacy_read_and_unwrap_its_extra_variant() {
+        let mut calls = Vec::new();
+        let value = read_setting_with(|method| {
+            calls.push(method.to_owned());
+            match method {
+                "ReadOne" => Err(method_error("org.freedesktop.DBus.Error.UnknownMethod")),
+                "Read" => Ok(OwnedValue::try_from(zbus::zvariant::Value::Value(Box::new(
+                    zbus::zvariant::Value::from(1u32),
+                )))
+                .unwrap()),
+                _ => panic!("unexpected method"),
+            }
+        })
+        .unwrap();
+        assert_eq!(u32::try_from(value).unwrap(), 1);
+        assert_eq!(calls, ["ReadOne", "Read"]);
+    }
+
+    #[test]
+    fn modern_portal_failures_do_not_repeat_the_read_through_the_legacy_api() {
+        for error in [
+            method_error("org.freedesktop.portal.Error.NotFound"),
+            method_error("org.freedesktop.DBus.Error.NoReply"),
+            method_error("org.freedesktop.DBus.Error.ServiceUnknown"),
+            zbus::Error::InputOutput(std::sync::Arc::new(std::io::Error::from(
+                std::io::ErrorKind::TimedOut,
+            ))),
+            zbus::Error::InvalidReply,
+        ] {
+            let mut calls = Vec::new();
+            assert!(
+                read_setting_with(|method| {
+                    calls.push(method.to_owned());
+                    Err(error.clone())
+                })
+                .is_none()
+            );
+            assert_eq!(calls, ["ReadOne"]);
+        }
+        let mut calls = Vec::new();
+        let value = read_setting_with(|method| {
+            calls.push(method.to_owned());
+            Ok(OwnedValue::from(2u32))
+        })
+        .unwrap();
+        assert_eq!(u32::try_from(value).unwrap(), 2);
+        assert_eq!(calls, ["ReadOne"]);
+    }
 
     #[test]
     fn standard_reduced_motion_disables_animations_without_gnome_settings() {
