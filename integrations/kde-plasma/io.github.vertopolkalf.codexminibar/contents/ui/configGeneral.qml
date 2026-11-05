@@ -11,7 +11,7 @@ KCM.SimpleKCM {
     Kirigami.FormLayout {
         QQC2.TextField {
             id: executableField
-            Kirigami.FormData.label: "Codex Minibar command:"
+            Kirigami.FormData.label: "Fallback Minibar executable:"
             placeholderText: "codex-minibar"
         }
 

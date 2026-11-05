@@ -342,8 +342,10 @@ provider in their menus to open the popup on its tab.
 - **KDE Plasma 6:** right-click the panel, choose **Add or Manage Widgets** and add
   **Codex Minibar**. From a source checkout, run
   `kpackagetool6 --type Plasma/Applet --install integrations/kde-plasma/io.github.vertopolkalf.codexminibar`.
-  The widget runs `codex-minibar status --json` every 30 seconds; for an AppImage, set its
-  path under **Configure Codex Minibar**. Middle-click the widget to toggle the popup.
+  The widget reads the running app's status over D-Bus every 30 seconds, including
+  when using an AppImage without FUSE. If D-Bus status is unavailable, it falls back
+  to `codex-minibar status --json`; configure an explicit fallback executable path
+  under **Configure Codex Minibar** if needed. Middle-click the widget to toggle the popup.
 
 Other clients can use the app's session D-Bus service `io.github.vertopolkalf.CodexMinibar`
 (object `/io/github/vertopolkalf/CodexMinibar`, interface

@@ -94,6 +94,10 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   `xdg-terminal-exec` uses the configured terminal when `$TERMINAL` is unset.
   An absent, failing or stalled selector must fall back to the existing emulator
   search. Include a relative terminal path and paths containing non-UTF-8 bytes.
+- For the Plasma widget, verify D-Bus status with an unavailable fallback CLI
+  and with an AppImage running without FUSE. Change its fallback executable and
+  poll interval during an in-flight request: new settings must trigger a query
+  immediately, and the old response must not overwrite the current result.
 
 ## Automated checks
 

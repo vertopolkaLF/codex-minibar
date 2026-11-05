@@ -1,6 +1,6 @@
 // Codex Minibar panel widget for Plasma 6.
 //
-// Runs `codex-minibar status --json` (the configured command) on a timer and
+// Reads the app's D-Bus status (with a configured CLI fallback) on a timer and
 // shows each enabled provider's default quotas as the app writes them, in the
 // app's language and remaining/used preference. Clicking a provider opens the
 // app's popup on its tab through the app's D-Bus service.
@@ -21,7 +21,20 @@ PlasmoidItem {
     readonly property string objectPath: "/io/github/vertopolkalf/CodexMinibar"
     readonly property string interfaceName: "io.github.vertopolkalf.CodexMinibar1"
     readonly property string executable: Plasmoid.configuration.executable || "codex-minibar"
-    readonly property string statusCommand: shellQuote(executable) + " status --json"
+    readonly property string statusCommand: statusCommandFor(executable)
+    readonly property int pollSeconds: Math.max(5, Plasmoid.configuration.intervalSeconds)
+    property bool ready: false
+
+    onStatusCommandChanged: {
+        if (ready) refreshNow();
+    }
+    onPollSecondsChanged: {
+        if (ready) refreshNow();
+    }
+    Component.onCompleted: {
+        ready = true;
+        refreshNow();
+    }
 
     property var providers: []
     property bool running: false
@@ -61,6 +74,14 @@ PlasmoidItem {
         return "'" + String(text).replace(/'/g, "'\\''") + "'";
     }
 
+    function statusCommandFor(command) {
+        // Read the running app without mounting/extracting an AppImage per poll.
+        // Literal mode prints the single JSON string without D-Bus formatting.
+        return "dbus-send --session --print-reply=literal --reply-timeout=1500 --dest="
+            + root.busName + " " + root.objectPath + " " + root.interfaceName + ".Status"
+            + " || " + shellQuote(command) + " status --json";
+    }
+
     function callService(method, args) {
         let command = "dbus-send --session --type=method_call --dest=" + busName + " "
             + objectPath + " " + interfaceName + "." + method;
@@ -71,28 +92,35 @@ PlasmoidItem {
     }
 
     function refreshNow() {
-        statusSource.connectSource(statusCommand);
+        statusSource.connectSource(root.statusCommand);
+    }
+
+    function receiveStatus(sourceName, data) {
+        statusSource.disconnectSource(sourceName);
+        // An older executable's response can finish after settings changed.
+        if (sourceName !== root.statusCommand) return;
+        const stdout = data["stdout"] || "";
+        try {
+            const report = JSON.parse(stdout);
+            // D-Bus returns Report directly; the CLI adds its `ok` wrapper.
+            const valid = report && (report.ok === undefined || report.ok === true)
+                && Array.isArray(report.providers);
+            root.running = !!valid;
+            root.providers = valid ? report.providers : [];
+            root.error = valid ? "" : ((report && report.error) || "Invalid status report");
+        } catch (exception) {
+            root.running = false;
+            root.providers = [];
+            root.error = (data["stderr"] || "").trim()
+                || ("Could not run " + root.executable);
+        }
     }
 
     P5Support.DataSource {
         id: statusSource
         engine: "executable"
         connectedSources: []
-        onNewData: (sourceName, data) => {
-            disconnectSource(sourceName);
-            const stdout = data["stdout"] || "";
-            try {
-                const report = JSON.parse(stdout);
-                root.running = report.ok === true;
-                root.providers = report.ok === true && Array.isArray(report.providers) ? report.providers : [];
-                root.error = report.ok === true ? "" : (report.error || "");
-            } catch (exception) {
-                root.running = false;
-                root.providers = [];
-                root.error = (data["stderr"] || "").trim()
-                    || ("Could not run " + root.executable);
-            }
-        }
+        onNewData: (sourceName, data) => root.receiveStatus(sourceName, data)
     }
 
     // Fire-and-forget actions.
@@ -104,10 +132,9 @@ PlasmoidItem {
     }
 
     Timer {
-        interval: Math.max(5, Plasmoid.configuration.intervalSeconds) * 1000
+        interval: root.pollSeconds * 1000
         running: true
         repeat: true
-        triggeredOnStart: true
         onTriggered: root.refreshNow()
     }
 
