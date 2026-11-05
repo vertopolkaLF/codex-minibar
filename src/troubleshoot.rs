@@ -245,10 +245,15 @@ fn linux_terminal(program: &[std::ffi::OsString]) -> Result<Command> {
             "kgx",
             "konsole",
             "xfce4-terminal",
+            "mate-terminal",
+            "qterminal",
+            "lxterminal",
+            "tilix",
             "alacritty",
             "kitty",
             "foot",
             "wezterm",
+            "ghostty",
             "xterm",
         ]
         .map(PathBuf::from),
@@ -293,7 +298,7 @@ fn terminal_prefix(name: &str) -> &'static [&'static str] {
         | "kgx"
         | "tilix" => &["--"],
         "wezterm" | "wezterm-gui" => &["start", "--"],
-        "xfce4-terminal" => &["-x"],
+        "xfce4-terminal" | "mate-terminal" => &["-x"],
         "kitty" | "foot" => &[],
         _ => &["-e"],
     }
@@ -458,11 +463,42 @@ mod tests {
     }
 
     #[test]
+    fn mate_terminal_handoff_preserves_script_and_provider_arguments() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let terminal = root.path().join("mate-terminal");
+        // MATE's -e parses one argument; -x passes the remaining argv intact.
+        // This fixture rejects -e and executes the diagnostic fixture only.
+        fs::write(
+            &terminal,
+            "#!/bin/sh\n[ \"$1\" = -x ] || exit 64\nshift\nexec \"$@\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&terminal, fs::Permissions::from_mode(0o755)).unwrap();
+        let script = root.path().join("script with spaces.sh");
+        fs::write(&script, "printf '%s\\0' \"$@\"\n").unwrap();
+        let provider = "/opt/CLI $apps/it's `codex`/Юникод";
+        let program = [
+            "/bin/sh".into(),
+            script.into_os_string(),
+            "codex".into(),
+            provider.into(),
+        ];
+        let output = linux_terminal_from(&program, [terminal])
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, format!("codex\0{provider}\0").into_bytes());
+    }
+
+    #[test]
     fn terminals_receive_the_command_in_their_own_syntax() {
         assert_eq!(terminal_prefix("ptyxis"), ["--"]);
         assert_eq!(terminal_prefix("gnome-terminal.wrapper"), ["--"]);
         assert_eq!(terminal_prefix("wezterm"), ["start", "--"]);
         assert_eq!(terminal_prefix("kitty"), [] as [&str; 0]);
+        assert_eq!(terminal_prefix("mate-terminal"), ["-x"]);
         assert_eq!(terminal_prefix("konsole"), ["-e"]);
         assert_eq!(terminal_prefix("xterm"), ["-e"]);
     }
