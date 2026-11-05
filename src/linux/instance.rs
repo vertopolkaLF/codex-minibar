@@ -291,7 +291,7 @@ fn activation_request(verb: &str, token: Option<&str>) -> Vec<u8> {
     }
 }
 
-fn is_token(token: &str) -> bool {
+pub(super) fn is_token(token: &str) -> bool {
     // Wayland activation tokens are opaque UTF-8 strings, not identifiers.
     !token.is_empty() && token.len() <= MAX_TOKEN_BYTES && !token.contains('\0')
 }

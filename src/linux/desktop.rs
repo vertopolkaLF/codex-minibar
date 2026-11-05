@@ -362,21 +362,73 @@ pub fn panel_always_dark() -> bool {
 
 /// Opens a URL or path with the user's default handler.
 pub fn open(target: &std::ffi::OsStr) -> anyhow::Result<()> {
+    open_with_activation_token(target, None)
+}
+
+pub(crate) fn open_with_activation_token(
+    target: &std::ffi::OsStr,
+    token: Option<&str>,
+) -> anyhow::Result<()> {
     use anyhow::Context;
-    let status = std::process::Command::new("xdg-open")
-        .arg(target)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+    let status = open_command(target, token)
         .status()
         .context("run xdg-open")?;
     anyhow::ensure!(status.success(), "xdg-open exited with {status}");
     Ok(())
 }
 
+fn open_command(target: &std::ffi::OsStr, token: Option<&str>) -> std::process::Command {
+    let mut command = std::process::Command::new("xdg-open");
+    command
+        .arg(target)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .env_remove("XDG_ACTIVATION_TOKEN");
+    if let Some(token) = token.filter(|token| super::instance::is_token(token)) {
+        command.env("XDG_ACTIVATION_TOKEN", token);
+    }
+    command
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn desktop_open_forwards_only_the_current_valid_focus_grant() {
+        use std::ffi::OsStr;
+        let target = OsStr::new("https://example.com/release?x=1&y=2");
+        let grant = "{opaque}/focus+grant=Юникод\nvalue";
+        let command = open_command(target, Some(grant));
+        assert_eq!(command.get_args().collect::<Vec<_>>(), [target]);
+        assert_eq!(
+            command
+                .get_envs()
+                .find(|(key, _)| *key == "XDG_ACTIVATION_TOKEN")
+                .unwrap()
+                .1,
+            Some(OsStr::new(grant))
+        );
+        let oversized = "x".repeat(4097);
+        for token in [
+            None,
+            Some(""),
+            Some("invalid\0grant"),
+            Some(oversized.as_str()),
+        ] {
+            let command = open_command(target, token);
+            // Explicit removal also prevents inheriting an unrelated grant.
+            assert_eq!(
+                command
+                    .get_envs()
+                    .find(|(key, _)| *key == "XDG_ACTIVATION_TOKEN")
+                    .unwrap()
+                    .1,
+                None
+            );
+        }
+    }
 
     fn method_error(name: &str) -> zbus::Error {
         zbus::Error::MethodError(

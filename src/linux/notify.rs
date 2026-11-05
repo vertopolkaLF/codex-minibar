@@ -26,7 +26,7 @@ const DEFAULT_ACTION: &str = "default";
 #[derive(Debug, PartialEq, Eq)]
 enum Invocation {
     Show(Option<String>),
-    Run(NotificationAction),
+    Run(NotificationAction, Option<String>),
 }
 
 #[derive(Default)]
@@ -74,8 +74,8 @@ impl State {
         }
         let action = actions.get(index)?.clone();
         // Invalid IDs or keys must not consume a valid later focus grant.
-        self.activation_tokens.remove(&id);
-        Some(Invocation::Run(action))
+        let token = self.activation_tokens.remove(&id);
+        Some(Invocation::Run(action, token))
     }
 }
 
@@ -298,9 +298,28 @@ fn run_action_listener(signals: zbus::blocking::proxy::SignalIterator<'static>) 
         drop(state);
         match invocation {
             Some(Invocation::Show(token)) => super::instance::show_with_token(token),
-            Some(Invocation::Run(action)) => action.run(),
+            Some(Invocation::Run(NotificationAction::OpenUrl(url), token)) => open_url(url, token),
+            Some(Invocation::Run(action, _)) => action.run(),
             None => {}
         }
+    }
+}
+
+fn open_url(url: String, token: Option<String>) {
+    // Desktop launch helpers can stay alive with the browser. Keep the ordered
+    // notification signal listener free to process subsequent actions/closes.
+    let spawned = std::thread::Builder::new()
+        .name("notification-open".into())
+        .spawn(move || {
+            if let Err(error) = super::desktop::open_with_activation_token(
+                std::ffi::OsStr::new(&url),
+                token.as_deref(),
+            ) {
+                crate::logger::info(format!("notification URL could not open: {error:#}"));
+            }
+        });
+    if let Err(error) = spawned {
+        crate::logger::info(format!("notification URL worker could not start: {error}"));
     }
 }
 
@@ -344,7 +363,10 @@ mod tests {
             );
         }
         assert_eq!(state.invocation(20, "a0"), None);
-        assert_eq!(state.invocation(10, "a0"), Some(Invocation::Run(action)));
+        assert_eq!(
+            state.invocation(10, "a0"),
+            Some(Invocation::Run(action, Some("focus-grant".into())))
+        );
         assert!(!state.activation_tokens.contains_key(&10));
     }
 

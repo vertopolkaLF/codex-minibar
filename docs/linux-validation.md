@@ -45,6 +45,8 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
 5. Trigger a notification and its actions. Check plain-text/markup rendering,
    silent notifications, replacement of progress notifications and desktop Do
    Not Disturb. Restart the notification daemon and verify subsequent delivery.
+   Under Wayland, check both the default popup action and a release-link button:
+   the available activation grant should reach the popup or browser respectively.
 6. Enable and disable Start at login, then test a new login session. For an
    AppImage, the entry must reference the AppImage rather than its temporary mount.
 7. Suspend and resume. With logind/elogind, quotas should refresh after resume.
