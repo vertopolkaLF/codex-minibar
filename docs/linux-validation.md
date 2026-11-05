@@ -59,6 +59,10 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   `desktop-file-validate`.
 - Test AppImage updates and distribution-managed installs separately. Package
   manager installations must not be replaced by the in-place updater.
+- On a non-GNOME/non-Plasma Debian-based desktop, inspect the package's
+  dependency plan with the package manager's simulation mode. Installing
+  Minibar must not recommend adding GNOME Shell or Plasma merely for a tray
+  host. AppIndicator support should remain optional for GNOME users.
 - For a direct portable-binary launch without an installed desktop entry,
   test moving the binary and launching it again. Newly generated entries marked
   `X-CodexMinibar-Managed=true` should update both commands. Unmarked entries

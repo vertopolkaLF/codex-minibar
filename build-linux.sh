@@ -102,7 +102,9 @@ build_deb() {
     mkdir -p "$deb_root/DEBIAN"
     installed_size="$(du -sk "$deb_root/usr" | cut -f1)"
     # GPUI loads xkbcommon, Wayland, X11 and Vulkan at runtime, so they are not
-    # visible to ldd and must be listed explicitly.
+    # visible to ldd and must be listed explicitly. Desktop-specific tray
+    # hosts stay optional: Recommends could pull GNOME or Plasma into Xfce,
+    # Cinnamon and minimal Wayland sessions that already have another panel.
     cat > "$deb_root/DEBIAN/control" <<CONTROL
 Package: codex-minibar
 Version: $version
@@ -112,7 +114,8 @@ Architecture: $debarch
 Maintainer: vertopolkaLF <noreply@github.com>
 Installed-Size: $installed_size
 Depends: xdg-utils, ca-certificates, libc6, libssl3t64 | libssl3, libbz2-1.0, zlib1g, libzstd1, liblzma5, libxkbcommon0, libxkbcommon-x11-0, libwayland-client0, libx11-xcb1, libxcb1, libvulkan1, mesa-vulkan-drivers | vulkan-icd, libfontconfig1, libfreetype6
-Recommends: xdg-desktop-portal, gnome-shell-extension-appindicator | plasma-workspace
+Recommends: xdg-desktop-portal
+Suggests: gnome-shell-extension-appindicator
 Homepage: https://github.com/vertopolkaLF/codex-minibar
 Description: Tray companion for monitoring AI tools usage
  Codex Minibar shows usage limits, resets and spend of AI coding tools
