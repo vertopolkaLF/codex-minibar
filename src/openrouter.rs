@@ -40,6 +40,8 @@ pub struct OpenRouterClient {
     credentials_revision: u64,
     agent: ureq::Agent,
     accounts: Vec<AccountCredentials>,
+    /// Set while the first credential load is still waiting to succeed.
+    pending_credentials: Option<ProviderInstance>,
     /// Stable key metadata (name/limit/reset). Usage is never stored here.
     key_cache: HashMap<String, CachedOpenRouterKey>,
 }
@@ -72,12 +74,24 @@ impl OpenRouterClient {
     /// One instance is one OpenRouter account with its own keys.
     pub fn new(instance: &ProviderInstance) -> Result<Self> {
         let provider = instance.provider_id();
+        // The login keyring may still be waiting for its unlock. A worker that
+        // fails to start would never retry, so report this from the poll loop.
+        let (accounts, pending_credentials) = match load_credentials(instance) {
+            Ok(accounts) => (accounts, None),
+            Err(error) => {
+                crate::logger::info(format!(
+                    "OpenRouter credentials are not available yet: {error:#}"
+                ));
+                (Vec::new(), Some(instance.clone()))
+            }
+        };
         Ok(Self {
             cancelled: Arc::new(AtomicBool::new(false)),
             provider,
             credentials_revision: instance.credentials_revision,
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
-            accounts: load_credentials(instance)?,
+            accounts,
+            pending_credentials,
             key_cache: load_key_cache_from_store(provider),
         })
     }
@@ -415,6 +429,10 @@ fn fetch_openrouter_account(
 
 impl LimitProvider for OpenRouterClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
+        if let Some(instance) = &self.pending_credentials {
+            self.accounts = load_credentials(instance)?;
+            self.pending_credentials = None;
+        }
         let sampled_at = Utc::now();
         // Fan out accounts in parallel. Each account itself fans out
         // directory ∥ /key ∥ credits. Cache merges stay on this thread.
@@ -708,6 +726,7 @@ fn read_secret_hint(
 }
 
 fn save_secret_and_hint(name: &str, value: Option<&str>) -> Result<()> {
+    secrets::prepare_save(&[(name.to_owned(), value.map(str::to_owned))])?;
     // Serialize reads with saves: an in-flight read must not repopulate the
     // old hint after invalidation, and a failed save keeps the existing hint.
     let mut cache = SECRET_HINTS

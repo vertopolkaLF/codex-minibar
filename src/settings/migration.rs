@@ -412,6 +412,10 @@ fn codex_secret(id: &str) -> String {
 /// CLI keeps and refreshes them from now on. Pasted Claude credentials stay in
 /// protected storage as manual credentials. Returns whether settings changed.
 pub(super) fn finish_instance_migration(settings: &mut Settings) -> bool {
+    // This runs once, on the UI thread, before any window exists. Waiting here
+    // cannot freeze a window; skipping a slow keyring would lose the move.
+    #[cfg(not(windows))]
+    crate::linux::keyring::settle_before_migration();
     finish_with(
         settings,
         |name| crate::secrets::load(name).ok().flatten(),

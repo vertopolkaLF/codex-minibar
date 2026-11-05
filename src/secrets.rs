@@ -63,18 +63,48 @@ struct SecretFile {
 }
 
 pub fn load(name: &str) -> Result<Option<String>> {
-    let _guard = operation_guard()?;
-    let path = path()?;
-    load_from(&path, name)
+    // Decrypt outside the lock: getting the key may wait for the login keyring
+    // to unlock, and the UI thread must never queue behind that wait.
+    let encoded = {
+        let _guard = operation_guard()?;
+        read_encoded(&path()?, name)?
+    };
+    encoded
+        .as_deref()
+        .map(decode)
+        .transpose()
+        .map(Option::flatten)
 }
 
+/// Prepares for writing `changes` before `OPERATIONS` is taken. See [`load`].
+pub(crate) fn prepare_save(changes: &[(String, Option<String>)]) -> Result<()> {
+    #[cfg(not(windows))]
+    if changes.iter().any(|(_, value)| {
+        value
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    }) {
+        crate::linux::keyring::prepare_write()?;
+    }
+    #[cfg(windows)]
+    let _ = changes;
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
 fn load_from(path: &Path, name: &str) -> Result<Option<String>> {
-    let Some(file) = read_secret_file(path)? else {
-        return Ok(None);
-    };
-    let Some(encoded) = file.values.get(name) else {
-        return Ok(None);
-    };
+    read_encoded(path, name)?
+        .as_deref()
+        .map(decode)
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn read_encoded(path: &Path, name: &str) -> Result<Option<String>> {
+    Ok(read_secret_file(path)?.and_then(|mut file| file.values.remove(name)))
+}
+
+fn decode(encoded: &str) -> Result<Option<String>> {
     let protected = STANDARD
         .decode(encoded)
         .context("decode protected provider secret")?;
@@ -105,6 +135,7 @@ impl EncodedRollback {
 /// Capture the prior ciphertext and publish the batch under one lock. Later
 /// rollback compares exact ciphertext so a newer write to a slot always wins.
 pub(crate) fn apply_with_rollback(changes: &[(String, Option<String>)]) -> Result<EncodedRollback> {
+    prepare_save(changes)?;
     let _guard = operation_guard()?;
     apply_with_rollback_to(&path()?, changes)
 }
@@ -144,6 +175,7 @@ pub fn save(name: &str, value: Option<&str>) -> Result<()> {
 /// Validation and DPAPI encryption happen before the existing file changes,
 /// so account-level edits cannot leave only part of their keys updated.
 pub fn save_many(changes: &[(String, Option<String>)]) -> Result<()> {
+    prepare_save(changes)?;
     let _guard = operation_guard()?;
     let path = path()?;
     save_many_to(&path, changes)
