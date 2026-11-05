@@ -70,6 +70,9 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   launcher/shortcut. Closing the short second invocation must not remove the
   first instance's extracted files; each managed invocation owns its temporary
   directory and cleans it after exit unless `NO_CLEANUP` was explicitly set.
+  Confirm an updater relaunch still works after the previous invocation has
+  cleaned its private TMPDIR; descendant launches must reuse the original
+  temporary-directory base instead of nesting inside the deleted directory.
 - On a non-GNOME/non-Plasma Debian-based desktop, inspect the package's
   dependency plan with the package manager's simulation mode. Installing
   Minibar must not recommend adding GNOME Shell or Plasma merely for a tray

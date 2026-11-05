@@ -91,6 +91,7 @@ mod tests {
             .arg("hold")
             .arg(&release)
             .env("TMPDIR", root.path())
+            .env_remove("CODEX_MINIBAR_APPIMAGE_TMPDIR")
             .env_remove("NO_CLEANUP")
             .stdout(Stdio::null())
             .stderr(Stdio::null());
@@ -108,6 +109,7 @@ mod tests {
                 .arg("quick")
                 .arg(&release)
                 .env("TMPDIR", root.path())
+                .env_remove("CODEX_MINIBAR_APPIMAGE_TMPDIR")
                 .env_remove("NO_CLEANUP")
                 .status()
                 .unwrap()
@@ -123,6 +125,44 @@ mod tests {
         fs::write(release, "done").unwrap();
         assert!(first.wait().unwrap().success());
         assert!(!first_root.exists());
+    }
+
+    #[test]
+    fn delayed_descendant_launch_survives_parent_temporary_directory_cleanup() {
+        let root = tempfile::tempdir().unwrap();
+        let image = root.path().join("fixture.AppImage");
+        fs::write(
+            &image,
+            "#!/bin/sh\nprintf '%s\\n%s\\n' \"$TMPDIR\" \"$CODEX_MINIBAR_APPIMAGE_TMPDIR\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&image, fs::Permissions::from_mode(0o755)).unwrap();
+        let launcher = launcher_in(&root.path().join("launchers"), &image).unwrap();
+        let first = Command::new(&launcher)
+            .env("TMPDIR", root.path())
+            .env_remove("CODEX_MINIBAR_APPIMAGE_TMPDIR")
+            .env_remove("NO_CLEANUP")
+            .output()
+            .unwrap();
+        assert!(first.status.success());
+        let output = String::from_utf8(first.stdout).unwrap();
+        let mut lines = output.lines();
+        let private = Path::new(lines.next().unwrap());
+        let base = Path::new(lines.next().unwrap());
+        assert!(!private.exists());
+        assert_eq!(base, root.path());
+        let second = Command::new(&launcher)
+            .env("TMPDIR", private)
+            .env("CODEX_MINIBAR_APPIMAGE_TMPDIR", base)
+            .env_remove("NO_CLEANUP")
+            .output()
+            .unwrap();
+        assert!(second.status.success(), "{:?}", second.stderr);
+        let output = String::from_utf8(second.stdout).unwrap();
+        let next = Path::new(output.lines().next().unwrap());
+        assert_eq!(next.parent(), Some(root.path()));
+        assert_ne!(next, private);
+        assert!(!next.exists());
     }
 
     #[test]
