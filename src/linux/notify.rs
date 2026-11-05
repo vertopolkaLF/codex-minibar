@@ -23,6 +23,12 @@ const NAME: &str = "org.freedesktop.Notifications";
 const PATH: &str = "/org/freedesktop/Notifications";
 const DEFAULT_ACTION: &str = "default";
 
+#[derive(Debug, PartialEq, Eq)]
+enum Invocation {
+    Show(Option<String>),
+    Run(NotificationAction),
+}
+
 #[derive(Default)]
 struct State {
     server: Option<String>,
@@ -54,6 +60,22 @@ impl State {
         self.actions.remove(&id);
         self.activation_tokens.remove(&id);
         self.keyed.retain(|_, keyed| *keyed != id);
+    }
+
+    fn invocation(&mut self, id: u32, key: &str) -> Option<Invocation> {
+        let actions = self.actions.get(&id)?;
+        if key == DEFAULT_ACTION {
+            return Some(Invocation::Show(self.activation_tokens.remove(&id)));
+        }
+        let index = key.strip_prefix('a')?.parse::<usize>().ok()?;
+        // Action keys are opaque: only the exact keys sent in Notify count.
+        if key != format!("a{index}") {
+            return None;
+        }
+        let action = actions.get(index)?.clone();
+        // Invalid IDs or keys must not consume a valid later focus grant.
+        self.activation_tokens.remove(&id);
+        Some(Invocation::Run(action))
     }
 }
 
@@ -272,19 +294,12 @@ fn run_action_listener(signals: zbus::blocking::proxy::SignalIterator<'static>) 
         let Ok((id, key)) = message.body().deserialize::<(u32, String)>() else {
             continue;
         };
-        let token = state.activation_tokens.remove(&id);
-        if key == DEFAULT_ACTION {
-            drop(state);
-            super::instance::show_with_token(token);
-            continue;
-        }
-        let action = key
-            .strip_prefix('a')
-            .and_then(|index| index.parse::<usize>().ok())
-            .and_then(|index| state.actions.get(&id)?.get(index).cloned());
+        let invocation = state.invocation(id, &key);
         drop(state);
-        if let Some(action) = action {
-            action.run();
+        match invocation {
+            Some(Invocation::Show(token)) => super::instance::show_with_token(token),
+            Some(Invocation::Run(action)) => action.run(),
+            None => {}
         }
     }
 }
@@ -292,6 +307,46 @@ fn run_action_listener(signals: zbus::blocking::proxy::SignalIterator<'static>) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_actions_only_open_live_registered_notifications() {
+        let mut state = State::default();
+        state.actions.insert(10, Vec::new());
+        state.remember_activation_token(10, "focus-grant".into());
+        assert_eq!(state.invocation(20, DEFAULT_ACTION), None);
+        assert_eq!(
+            state.activation_tokens.get(&10).map(String::as_str),
+            Some("focus-grant")
+        );
+        assert_eq!(
+            state.invocation(10, DEFAULT_ACTION),
+            Some(Invocation::Show(Some("focus-grant".into())))
+        );
+        assert_eq!(
+            state.invocation(10, DEFAULT_ACTION),
+            Some(Invocation::Show(None))
+        );
+        state.close(10);
+        assert_eq!(state.invocation(10, DEFAULT_ACTION), None);
+    }
+
+    #[test]
+    fn action_keys_must_match_registered_keys_without_consuming_other_focus_grants() {
+        let mut state = State::default();
+        let action = NotificationAction::OpenUrl("https://example.com/release".into());
+        state.actions.insert(10, vec![action.clone()]);
+        state.remember_activation_token(10, "focus-grant".into());
+        for key in ["", "unknown", "a+0", "a00", "a1", "a-1"] {
+            assert_eq!(state.invocation(10, key), None, "{key}");
+            assert_eq!(
+                state.activation_tokens.get(&10).map(String::as_str),
+                Some("focus-grant")
+            );
+        }
+        assert_eq!(state.invocation(20, "a0"), None);
+        assert_eq!(state.invocation(10, "a0"), Some(Invocation::Run(action)));
+        assert!(!state.activation_tokens.contains_key(&10));
+    }
 
     #[test]
     fn daemon_changes_invalidate_ids_actions_and_focus_grants() {
