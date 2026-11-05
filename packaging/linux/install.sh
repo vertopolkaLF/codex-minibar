@@ -8,7 +8,9 @@ prefix="$(cd "$prefix" && pwd)"
 cp -R "$here/share" "$prefix/"
 # Existing theme directories keep their mtime when cp replaces icons below
 # them. Invalidate desktop icon caches after both first installs and upgrades.
-touch "$prefix/share/icons" "$prefix/share/icons/hicolor"
+if [ -d "$prefix/share/icons/hicolor" ]; then
+    touch "$prefix/share/icons" "$prefix/share/icons/hicolor"
+fi
 # install replaces the inode, so reinstalling a running binary also works.
 install -m755 "$here/bin/codex-minibar" "$prefix/bin/codex-minibar"
 

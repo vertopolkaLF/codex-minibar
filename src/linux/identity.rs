@@ -130,11 +130,16 @@ fn publish_portable_icon(data_home: &Path) -> Result<()> {
         }
     }
     if changed {
-        // Icon-theme caches watch top-level directory mtimes.
-        for relative in ["icons", "icons/hicolor"] {
-            std::fs::File::open(data_home.join(relative))?
-                .set_modified(std::time::SystemTime::now())?;
-        }
+        invalidate_icon_cache(data_home)?;
+    }
+    Ok(())
+}
+
+/// Icon-theme caches watch top-level directory mtimes, including when only
+/// an existing icon deep inside the theme has been replaced.
+pub(super) fn invalidate_icon_cache(data_home: &Path) -> Result<()> {
+    for relative in ["icons", "icons/hicolor"] {
+        std::fs::File::open(data_home.join(relative))?.set_modified(std::time::SystemTime::now())?;
     }
     Ok(())
 }

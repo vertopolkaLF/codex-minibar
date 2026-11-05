@@ -242,6 +242,11 @@ fn apply_tarball(root: &Path, prefix: &Path, binary: &Path) -> Result<()> {
             .context("set updated desktop entry executable")?;
     }
     copy_tree(&root.join("share"), &prefix.join("share"))?;
+    if root.join("share/icons/hicolor").is_dir()
+        && let Err(error) = super::identity::invalidate_icon_cache(&prefix.join("share"))
+    {
+        crate::logger::info(format!("updated desktop icon cache: {error:#}"));
+    }
     swap_in(&root.join("bin").join(BINARY), binary)
 }
 
@@ -521,6 +526,14 @@ mod tests {
         let install = dir.path().join("prefix");
         fs::create_dir(&install).unwrap();
         let (prefix, binary) = tarball_prefix(&install);
+        let icon = "share/icons/hicolor/48x48/apps/codex-minibar.png";
+        touch(&prefix.join(icon), "old icon");
+        for relative in ["share/icons", "share/icons/hicolor"] {
+            fs::File::open(prefix.join(relative))
+                .unwrap()
+                .set_modified(std::time::UNIX_EPOCH)
+                .unwrap();
+        }
         let archive = dir.path().join("package.tar.gz");
         write_tarball(&archive, |builder| {
             append(
@@ -539,6 +552,7 @@ mod tests {
                 "[Desktop Entry]\nExec=codex-minibar\n[Desktop Action Toggle]\nExec=codex-minibar --toggle\n",
             );
             append(builder, "codex-minibar-2.0.0/install.sh", "#!/bin/sh");
+            append(builder, &format!("codex-minibar-2.0.0/{icon}"), "new icon");
         });
 
         let root = unpack_tarball(&archive, &dir.path().join("extracted")).unwrap();
@@ -560,6 +574,16 @@ mod tests {
             )
         );
         assert!(!prefix.join("install.sh").exists());
+        assert_eq!(fs::read_to_string(prefix.join(icon)).unwrap(), "new icon");
+        for relative in ["share/icons", "share/icons/hicolor"] {
+            assert!(
+                fs::metadata(prefix.join(relative))
+                    .unwrap()
+                    .modified()
+                    .unwrap()
+                    > std::time::UNIX_EPOCH
+            );
+        }
         assert_eq!(
             fs::metadata(&binary).unwrap().permissions().mode() & 0o777,
             0o755
