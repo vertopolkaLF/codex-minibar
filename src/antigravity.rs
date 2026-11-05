@@ -330,8 +330,8 @@ fn credential_blob() -> Result<Vec<u8>> {
 #[cfg(not(windows))]
 async fn keyring_blob() -> Option<Vec<u8>> {
     let keyring = oo7::Keyring::new().await.ok()?;
-    // A locked keyring prompts once, as it would for `agy` itself.
-    keyring.unlock().await.ok()?;
+    // Searching needs no unlock, so people without an Antigravity session are
+    // never asked to unlock their keyring for it.
     let items = keyring
         .search_items(&vec![
             ("service", CREDENTIAL_SERVICE),
@@ -340,6 +340,9 @@ async fn keyring_blob() -> Option<Vec<u8>> {
         .await
         .ok()?;
     for item in items {
+        if item.is_locked().await.ok()? && !may_prompt_once() {
+            continue;
+        }
         if item.unlock().await.is_err() {
             continue;
         }
@@ -350,6 +353,14 @@ async fn keyring_blob() -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+/// A locked keyring prompts once, as it would for `agy` itself. This runs on
+/// every refresh, so a dismissed prompt must not come back on the next one.
+#[cfg(not(windows))]
+fn may_prompt_once() -> bool {
+    static PROMPTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    !PROMPTED.swap(true, std::sync::atomic::Ordering::Relaxed)
 }
 
 #[cfg(not(windows))]
