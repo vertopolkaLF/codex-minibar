@@ -10,6 +10,39 @@ use std::{
 use anyhow::{Context, Result};
 use sha2::{Digest, Sha256};
 
+const BASE_VARIABLE: &str = "CODEX_MINIBAR_APPIMAGE_TMPDIR";
+
+/// Undo the launcher's private `TMPDIR`, which only the AppImage runtime needs.
+/// The app outlives nothing in it, but browsers and terminals it starts can
+/// outlive the launcher, and locks must not depend on which launch came first.
+///
+/// # Safety
+/// Must run before any other thread can read or write the environment.
+pub unsafe fn restore_user_tmpdir() {
+    let base = std::env::var_os(BASE_VARIABLE);
+    let Some(restored) = user_tmpdir(
+        std::env::var_os("TMPDIR").as_deref().map(Path::new),
+        base.as_deref().map(Path::new),
+    ) else {
+        return;
+    };
+    // SAFETY: the caller guarantees the process is still single-threaded.
+    unsafe {
+        std::env::set_var("TMPDIR", restored);
+        std::env::remove_var(BASE_VARIABLE);
+    }
+}
+
+fn user_tmpdir<'a>(current: Option<&Path>, base: Option<&'a Path>) -> Option<&'a Path> {
+    let (current, base) = (current?, base?);
+    let private = current.parent() == Some(base)
+        && current
+            .file_name()?
+            .as_bytes()
+            .starts_with(b"codex-minibar-appimage.");
+    private.then_some(base)
+}
+
 pub(super) fn for_image(image: &Path) -> Result<PathBuf> {
     let base = directories::BaseDirs::new().context("resolve AppImage launcher directory")?;
     launcher_in(&base.data_dir().join("codex-minibar/launchers"), image)
@@ -71,6 +104,30 @@ mod tests {
         process::{Command, Stdio},
         time::{Duration, Instant},
     };
+
+    #[test]
+    fn only_the_launchers_own_private_directory_is_undone() {
+        let base = Path::new("/run/user/1000/tmp");
+        assert_eq!(
+            user_tmpdir(
+                Some(&base.join("codex-minibar-appimage.a1B2c3")),
+                Some(base)
+            ),
+            Some(base)
+        );
+        // Launched directly, or the user pointed TMPDIR somewhere themselves.
+        assert_eq!(user_tmpdir(None, Some(base)), None);
+        assert_eq!(user_tmpdir(Some(base), None), None);
+        assert_eq!(user_tmpdir(Some(base), Some(base)), None);
+        assert_eq!(user_tmpdir(Some(&base.join("mine")), Some(base)), None);
+        assert_eq!(
+            user_tmpdir(
+                Some(Path::new("/elsewhere/codex-minibar-appimage.a1B2c3")),
+                Some(base)
+            ),
+            None
+        );
+    }
 
     #[test]
     fn overlapping_launches_cannot_remove_another_instances_extracted_files() {

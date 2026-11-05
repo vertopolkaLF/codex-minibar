@@ -186,6 +186,11 @@ fn show_error(message: &str) {
 }
 
 fn main() {
+    #[cfg(not(windows))]
+    // SAFETY: this is the first statement of main, before any thread exists.
+    unsafe {
+        codex_minibar::linux::appimage_launch::restore_user_tmpdir();
+    }
     if codex_minibar::status::is_cli_request() {
         std::process::exit(codex_minibar::status::run_cli());
     }
