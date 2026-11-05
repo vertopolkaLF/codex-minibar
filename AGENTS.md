@@ -4,7 +4,7 @@ Always run `cargo check` after changes related to the app to ensure the code is 
 
 Always run `cargo fmt` after changing Rust code, including tests, and before every commit. CI rejects unformatted code (`cargo fmt --package codex-minibar --check`).
 
-Never launch the app itself.
+Never launch the app on LF-PC (check `hostname`). Linux has no restrictions: it's a dev box, so launching and driving the app there is fine.
 
 ## Worktree builds
 
@@ -38,7 +38,7 @@ as routine cleanup, and never delete it when removing a worktree.
 The shared EXE belongs to the last build, not necessarily the main checkout's
 branch. Do not infer its source worktree from its path. If a branch-specific
 artifact or truly parallel build is required, explicitly use a separate
-`CARGO_TARGET_DIR`. Never launch the app for verification. The wrapper does not
+`CARGO_TARGET_DIR`. Never launch the app for verification on LF-PC. The wrapper does not
 support `run` or `clean`. Release packaging continues to use `build.ps1`.
 
 All settings must take effect immediately in the running application. The user must never need to relaunch the app for a setting change to be applied. Keep every open UI surface and affected background component synchronized with the updated settings.
@@ -47,7 +47,7 @@ All settings must take effect immediately in the running application. The user m
 
 Theme and accent settings must be applied during application startup, before any window is shown. Every GPUI window (popup, Settings, onboarding) resolves its palette from the current settings and `window.appearance()` on every frame; never cache a palette across appearance changes, and observe `observe_window_appearance` so Auto follows the system theme. `crate::theme::apply_appearance` only records the accent for the tray glyphs.
 
-Before finishing appearance work, review both cold-start paths (popup first and Settings first) for Auto, Light, and Dark themes. Opening or closing another window must never be required to correct colors. Always run `cargo check`; never launch the app for this verification.
+Before finishing appearance work, review both cold-start paths (popup first and Settings first) for Auto, Light, and Dark themes. Opening or closing another window must never be required to correct colors. Always run `cargo check`; never launch the app for this verification on LF-PC.
 
 ## Settings window
 
@@ -57,7 +57,7 @@ The Settings and onboarding windows are GPUI windows in the same application as 
 
 When adding or changing a provider, update every provider enumeration, settings migration, worker lifecycle, popup state, tray source and provider-tab path as one atomic change. Native popup provider tabs use swap-chain icon hosts: key the complete tab selector by the enabled-provider set so reconciliation cannot reuse an old provider's text or icon in another provider's slot. Do not treat `Element::Empty` as sufficient remounting.
 
-Before finishing provider UI work, verify all enabled-provider combinations (each provider alone, every pair, all providers, and none) in code review. Confirm that every visible tab has the right label/icon and points to the matching provider snapshot. Always run `cargo check` after the change; never launch the app to perform that verification.
+Before finishing provider UI work, verify all enabled-provider combinations (each provider alone, every pair, all providers, and none) in code review. Confirm that every visible tab has the right label/icon and points to the matching provider snapshot. Always run `cargo check` after the change; never launch the app to perform that verification on LF-PC.
 
 ## Swap-chain icon / popup chrome identity
 
