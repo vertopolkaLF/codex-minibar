@@ -230,6 +230,31 @@ pub fn save(accelerator: Option<&Accelerator>) -> Result<()> {
     Ok(())
 }
 
+/// Upgrade only our original command when the AppImage now needs extraction.
+/// Preserve desktop-owned bindings, labels and commands the user customized.
+pub fn refresh_extracted_appimage_command() -> Result<()> {
+    if !super::autostart::requires_extraction()
+        || !supported()
+        || !paths()?.iter().any(|path| path == ENTRY_PATH)
+    {
+        return Ok(());
+    }
+    let entry = entry_schema();
+    let current = unquote(&gsettings(&["get", &entry, "command"])?)
+        .context("read installed popup shortcut command")?;
+    let program = super::autostart::executable()?;
+    if let Some(command) = extracted_command_update(&current, &program) {
+        gsettings(&["set", &entry, "command", &variant_string(&command)])?;
+    }
+    Ok(())
+}
+
+fn extracted_command_update(current: &str, program: &std::path::Path) -> Option<String> {
+    let program = program.display().to_string();
+    (current == super::instance::toggle_command_for(&program, false))
+        .then(|| super::instance::toggle_command_for(&program, true))
+}
+
 fn write(accelerator: Option<&Accelerator>) -> Result<()> {
     let mut list = paths()?;
     match accelerator {
@@ -501,5 +526,20 @@ mod tests {
         assert!(quoted_strings("@as []").unwrap().is_empty());
         assert_eq!(unquote("'<Control>m'").as_deref(), Some("<Control>m"));
         assert_eq!(unquote("''").as_deref(), Some(""));
+    }
+}
+#[test]
+fn extraction_command_refresh_preserves_custom_shortcuts() {
+    let program = std::path::Path::new("/opt/My AppImage");
+    assert_eq!(
+        extracted_command_update("'/opt/My AppImage' --toggle", program),
+        Some("'/opt/My AppImage' --appimage-extract-and-run --toggle".into())
+    );
+    for current in [
+        "custom-wrapper --toggle",
+        "'/opt/My AppImage' --show",
+        "'/opt/My AppImage' --appimage-extract-and-run --toggle",
+    ] {
+        assert_eq!(extracted_command_update(current, program), None);
     }
 }

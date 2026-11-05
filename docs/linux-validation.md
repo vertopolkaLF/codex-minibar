@@ -61,6 +61,11 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   `desktop-file-validate`.
 - Test AppImage updates and distribution-managed installs separately. Package
   manager installations must not be replaced by the in-place updater.
+- Run an AppImage with `--appimage-extract-and-run` in a disposable session
+  where FUSE mounting is unavailable. Check generated launcher actions, Start at
+  login, popup shortcuts and an update/relaunch. Each must preserve extraction
+  without recording the temporary APPDIR as the executable. Existing original
+  GNOME shortcut commands may be upgraded; custom commands and bindings must stay.
 - On a non-GNOME/non-Plasma Debian-based desktop, inspect the package's
   dependency plan with the package manager's simulation mode. Installing
   Minibar must not recommend adding GNOME Shell or Plasma merely for a tray

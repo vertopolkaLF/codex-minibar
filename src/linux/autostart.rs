@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 const FILE_NAME: &str = "codex-minibar.desktop";
+pub(super) const EXTRACT_AND_RUN_FLAG: &str = "--appimage-extract-and-run";
 
 fn entry_path() -> Result<PathBuf> {
     let base = directories::BaseDirs::new().context("resolve the XDG config directory")?;
@@ -38,6 +39,53 @@ fn launch_executable(executable: &Path, appdir: Option<&Path>, appimage: Option<
     executable.to_path_buf()
 }
 
+/// The pinned AppImage runtime removes its extraction flag from argv. Its
+/// extracted APPDIR remains identifiable, and is not a reusable mount path.
+pub(super) fn requires_extraction() -> bool {
+    static REQUIRED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *REQUIRED.get_or_init(|| {
+        let Ok(executable) = std::env::current_exe() else {
+            return false;
+        };
+        let appdir = std::env::var_os("APPDIR").map(PathBuf::from);
+        let appimage = std::env::var_os("APPIMAGE").map(PathBuf::from);
+        extraction_required_for(&executable, appdir.as_deref(), appimage.as_deref())
+    })
+}
+
+fn extraction_required_for(
+    executable: &Path,
+    appdir: Option<&Path>,
+    appimage: Option<&Path>,
+) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    if launch_executable(executable, appdir, appimage) == executable {
+        return false;
+    }
+    // AppImage/type2-runtime 20251108 extracts to this content-addressed
+    // directory, including when TMPDIR itself happens to be a FUSE filesystem.
+    appdir
+        .and_then(|path| path.canonicalize().ok())
+        .and_then(|path| {
+            path.file_name()
+                .map(|name| name.as_bytes().starts_with(b"appimage_extracted_"))
+        })
+        .unwrap_or(false)
+}
+
+pub(super) fn desktop_command(executable: &Path) -> String {
+    desktop_command_with_extraction(executable, requires_extraction())
+}
+
+fn desktop_command_with_extraction(executable: &Path, extract: bool) -> String {
+    let quoted = quote_exec(executable);
+    if extract {
+        format!("{quoted} {EXTRACT_AND_RUN_FLAG}")
+    } else {
+        quoted
+    }
+}
+
 /// Quotes an argument for a desktop entry `Exec` key.
 pub(super) fn quote_exec(path: &Path) -> String {
     let mut quoted = String::from('"');
@@ -58,6 +106,10 @@ pub(super) fn quote_exec(path: &Path) -> String {
 }
 
 fn entry(executable: &Path) -> String {
+    entry_for_command(&desktop_command(executable))
+}
+
+fn entry_for_command(command: &str) -> String {
     format!(
         "[Desktop Entry]\n\
          Type=Application\n\
@@ -68,7 +120,7 @@ fn entry(executable: &Path) -> String {
          Terminal=false\n\
          NoDisplay=true\n\
          X-GNOME-Autostart-enabled=true\n",
-        quote_exec(executable)
+        command
     )
 }
 
@@ -246,5 +298,40 @@ mod tests {
         let text = entry(Path::new("/usr/bin/codex-minibar"));
         assert!(text.starts_with("[Desktop Entry]\n"));
         assert!(text.contains("Exec=\"/usr/bin/codex-minibar\"\n"));
+    }
+
+    #[test]
+    fn extraction_mode_requires_this_programs_actual_appimage_context() {
+        let root = tempfile::tempdir().unwrap();
+        let image = root.path().join("Minibar.AppImage");
+        std::fs::write(&image, "fixture, never launched").unwrap();
+        for (name, expected) in [
+            ("appimage_extracted_fixture", true),
+            (".mount_Minibar", false),
+        ] {
+            let directory = root.path().join(name);
+            let program = directory.join("usr/bin/codex-minibar");
+            std::fs::create_dir_all(program.parent().unwrap()).unwrap();
+            std::fs::write(&program, "fixture, never launched").unwrap();
+            assert_eq!(
+                extraction_required_for(&program, Some(&directory), Some(&image)),
+                expected
+            );
+            assert!(!extraction_required_for(
+                Path::new("/usr/bin/codex-minibar"),
+                Some(&directory),
+                Some(&image)
+            ));
+            assert!(!extraction_required_for(&program, Some(&directory), None));
+        }
+    }
+
+    #[test]
+    fn extracted_appimages_keep_the_runtime_flag_in_autostart() {
+        let command = desktop_command_with_extraction(Path::new("/opt/My AppImage"), true);
+        assert_eq!(command, "\"/opt/My AppImage\" --appimage-extract-and-run");
+        let entry = entry_for_command(&command);
+        assert!(entry.contains("Exec=\"/opt/My AppImage\" --appimage-extract-and-run\n"));
+        assert!(!entry.contains("--show"));
     }
 }

@@ -58,6 +58,10 @@ fn run() -> Result<()> {
                 "Codex CLI startup cache cleanup deferred: {error:#}"
             ));
         }
+        #[cfg(not(windows))]
+        if let Err(error) = codex_minibar::linux::keybinding::refresh_extracted_appimage_command() {
+            codex_minibar::logger::info(format!("popup shortcut command refresh: {error:#}"));
+        }
     });
     let activation_path = path.with_file_name("activation.toml");
     let last_activation_at: Option<DateTime<Utc>> =

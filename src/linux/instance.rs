@@ -336,8 +336,19 @@ pub fn toggle_command() -> String {
         .ok()
         .map(|path| path.display().to_string())
         .unwrap_or_else(|| "codex-minibar".into());
-    let program = quote_command_argument(&program);
-    format!("{program} {TOGGLE_FLAG}")
+    toggle_command_for(&program, super::autostart::requires_extraction())
+}
+
+pub(super) fn toggle_command_for(program: &str, extract: bool) -> String {
+    let program = quote_command_argument(program);
+    if extract {
+        format!(
+            "{program} {} {TOGGLE_FLAG}",
+            super::autostart::EXTRACT_AND_RUN_FLAG
+        )
+    } else {
+        format!("{program} {TOGGLE_FLAG}")
+    }
 }
 
 // GNOME parses this with GLib shell quoting. Quote every path, including
@@ -496,6 +507,18 @@ mod tests {
         assert_eq!(
             quote_command_argument("/opt/it's/minibar"),
             "'/opt/it'\\''s/minibar'"
+        );
+    }
+
+    #[test]
+    fn extracted_appimage_shortcuts_keep_runtime_and_popup_flags_separate() {
+        assert_eq!(
+            toggle_command_for("/opt/My AppImage", true),
+            "'/opt/My AppImage' --appimage-extract-and-run --toggle"
+        );
+        assert_eq!(
+            toggle_command_for("/opt/My AppImage", false),
+            "'/opt/My AppImage' --toggle"
         );
     }
 

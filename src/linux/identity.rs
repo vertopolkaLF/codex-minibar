@@ -145,7 +145,10 @@ pub(super) fn invalidate_icon_cache(data_home: &Path) -> Result<()> {
 }
 
 pub(super) fn desktop_entry(template: &str, executable: &Path) -> String {
-    let quoted = super::autostart::quote_exec(executable);
+    desktop_entry_for_command(template, &super::autostart::desktop_command(executable))
+}
+
+fn desktop_entry_for_command(template: &str, quoted: &str) -> String {
     template
         .lines()
         .map(|line| match line {
@@ -162,6 +165,16 @@ pub(super) fn desktop_entry(template: &str, executable: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn appimage_launcher_keeps_extraction_for_both_desktop_actions() {
+        let entry = desktop_entry_for_command(
+            DESKTOP_ENTRY,
+            "\"/opt/My AppImage\" --appimage-extract-and-run",
+        );
+        assert!(entry.contains("Exec=\"/opt/My AppImage\" --appimage-extract-and-run --show\n"));
+        assert!(entry.contains("Exec=\"/opt/My AppImage\" --appimage-extract-and-run --toggle\n"));
+    }
 
     #[test]
     fn portal_id_matches_packaged_desktop_entry() {

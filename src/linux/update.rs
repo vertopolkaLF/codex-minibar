@@ -36,7 +36,8 @@ while kill -0 "$1" 2>/dev/null && [ "$i" -lt 100 ]; do
     sleep 0.2
     i=$((i + 1))
 done
-exec "$0""#;
+shift
+exec "$0" "$@""#;
 /// Set by the AppImage runtime; the relaunched program must not inherit them.
 const APPIMAGE_ENV: [&str; 4] = ["APPIMAGE", "APPDIR", "ARGV0", "OWD"];
 
@@ -292,6 +293,12 @@ fn write_success_marker(version: &str) -> Result<()> {
 /// Starts a detached shell that opens `program` once `pid` has exited. Spawning
 /// it now, rather than at exit, keeps a failure reportable while the app runs.
 fn spawn_relaunch(program: &Path, pid: u32) -> Result<Child> {
+    relaunch_command(program, pid, super::autostart::requires_extraction())
+        .spawn()
+        .with_context(|| format!("start {}", program.display()))
+}
+
+fn relaunch_command(program: &Path, pid: u32, extract: bool) -> Command {
     let mut command = Command::new("/bin/sh");
     command
         .args(["-c", RELAUNCH_SCRIPT])
@@ -308,9 +315,10 @@ fn spawn_relaunch(program: &Path, pid: u32) -> Result<Child> {
     for variable in APPIMAGE_ENV {
         command.env_remove(variable);
     }
+    if extract {
+        command.arg(super::autostart::EXTRACT_AND_RUN_FLAG);
+    }
     command
-        .spawn()
-        .with_context(|| format!("start {}", program.display()))
 }
 
 /// Removes what a killed update left beside the installed program.
@@ -660,6 +668,37 @@ mod tests {
             .wait()
             .unwrap();
         assert_eq!(status.code(), Some(1));
+    }
+
+    #[test]
+    fn relaunch_keeps_extraction_flags_without_passing_the_old_pid_to_the_app() {
+        let root = tempfile::tempdir().unwrap();
+        let program = root.path().join("My AppImage");
+        touch(
+            &program,
+            "#!/bin/sh\nprintf '%s\\n' \"$#\" > \"$0.args\"\nfor arg in \"$@\"; do printf '%s\\n' \"$arg\" >> \"$0.args\"; done\n",
+        );
+        fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).unwrap();
+        let mut finished = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
+        let pid = finished.id();
+        finished.wait().unwrap();
+        for (extract, expected) in [(false, "0\n"), (true, "1\n--appimage-extract-and-run\n")] {
+            let mut command = relaunch_command(&program, pid, extract);
+            for name in APPIMAGE_ENV {
+                assert_eq!(
+                    command.get_envs().find(|(key, _)| *key == name).unwrap().1,
+                    None
+                );
+            }
+            assert!(command.spawn().unwrap().wait().unwrap().success());
+            assert_eq!(
+                fs::read_to_string(root.path().join("My AppImage.args")).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
