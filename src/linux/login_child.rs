@@ -9,13 +9,26 @@ use std::{
 pub(crate) struct LoginChild {
     child: Child,
     running: bool,
+    /// Whether helpers that outlive a normal exit are terminated with the CLI.
+    kill_helpers_on_exit: bool,
     pub(crate) stdin: Option<ChildStdin>,
     pub(crate) stdout: Option<ChildStdout>,
     pub(crate) stderr: Option<ChildStderr>,
 }
 
 impl LoginChild {
-    pub(crate) fn spawn(mut command: Command) -> io::Result<Self> {
+    pub(crate) fn spawn(command: Command) -> io::Result<Self> {
+        Self::spawn_with(command, true)
+    }
+
+    /// For browser sign-ins: a browser the CLI cold-starts stays in this group
+    /// and must survive a finished sign-in. The login's output goes nowhere,
+    /// so no helper can hold a pipe open. Cancelling still ends the group.
+    pub(crate) fn spawn_login(command: Command) -> io::Result<Self> {
+        Self::spawn_with(command, false)
+    }
+
+    fn spawn_with(mut command: Command, kill_helpers_on_exit: bool) -> io::Result<Self> {
         super::provider_env::prepare(&mut command);
         let mut child = command.process_group(0).spawn()?;
         Ok(Self {
@@ -24,6 +37,7 @@ impl LoginChild {
             stderr: child.stderr.take(),
             child,
             running: true,
+            kill_helpers_on_exit,
         })
     }
 
@@ -32,7 +46,7 @@ impl LoginChild {
             if !self.exited(true)? {
                 return Ok(None);
             }
-            self.kill_group();
+            self.finish_group();
         }
         let status = self.child.try_wait()?;
         if status.is_some() {
@@ -65,6 +79,12 @@ impl LoginChild {
         }
     }
 
+    fn finish_group(&self) {
+        if self.kill_helpers_on_exit {
+            self.kill_group();
+        }
+    }
+
     fn kill_group(&self) -> bool {
         // SAFETY: the unreaped child reserves this private group's ID. Callers
         // never use this after std::Child reaps the leader.
@@ -88,7 +108,7 @@ impl LoginChild {
         drop(self.stdin.take());
         if self.running {
             self.exited(false)?;
-            self.kill_group();
+            self.finish_group();
         }
         let status = self.child.wait()?;
         self.running = false;
@@ -188,6 +208,65 @@ mod tests {
             assert_eq!(child.wait().unwrap(), status);
             assert_descendant_pipe_closed(reader);
         }
+    }
+
+    #[test]
+    fn a_finished_login_leaves_the_browser_it_started_running() {
+        for poll in [false, true] {
+            let root = tempfile::tempdir().unwrap();
+            let pid_file = root.path().join("browser.pid");
+            let mut command = Command::new("/bin/sh");
+            command
+                .arg("-c")
+                .arg("sleep 30 & echo $! > \"$1\"")
+                .arg("login-fixture")
+                .arg(&pid_file)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            let mut child = LoginChild::spawn_login(command).unwrap();
+            let status = if poll {
+                loop {
+                    if let Some(status) = child.try_wait().unwrap() {
+                        break status;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            } else {
+                child.wait().unwrap()
+            };
+            assert!(status.success());
+            drop(child);
+            let browser = std::fs::read_to_string(&pid_file)
+                .unwrap()
+                .trim()
+                .parse::<libc::pid_t>()
+                .unwrap();
+            std::thread::sleep(Duration::from_millis(50));
+            // SAFETY: signal 0 only checks that this fixture process exists,
+            // and the SIGKILL below targets that same just-checked fixture.
+            unsafe {
+                assert_eq!(libc::kill(browser, 0), 0, "browser was killed with login");
+                libc::kill(browser, libc::SIGKILL);
+            }
+        }
+    }
+
+    #[test]
+    fn cancelling_a_login_still_ends_its_process_group() {
+        let mut command = Command::new("/bin/sh");
+        command
+            .args(["-c", "sh -c 'echo ready; exec sleep 30' & wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null());
+        let mut child = LoginChild::spawn_login(command).unwrap();
+        let mut reader = BufReader::new(child.stdout.take().unwrap());
+        let mut ready = String::new();
+        reader.read_line(&mut ready).unwrap();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_descendant_pipe_closed(reader);
     }
 
     #[test]

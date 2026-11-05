@@ -187,7 +187,7 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
     #[cfg(windows)]
     let mut child = crate::claude::profile_oauth::login_child::LoginChild::spawn(&command)?;
     #[cfg(not(windows))]
-    let mut child = crate::linux::login_child::LoginChild::spawn(command)?;
+    let mut child = crate::linux::login_child::LoginChild::spawn_login(command)?;
     let started = Instant::now();
     loop {
         if control.cancelled() || started.elapsed() >= Duration::from_secs(300) {
