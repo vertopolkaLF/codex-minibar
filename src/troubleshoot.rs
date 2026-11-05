@@ -235,17 +235,22 @@ fn linux_script_in(directory: &Path) -> Result<PathBuf> {
     Ok(path)
 }
 
-/// A terminal emulator command running `program`: `$TERMINAL`, the Debian
-/// `x-terminal-emulator` alternative, then common emulators. Each family
-/// takes the command differently.
+/// A terminal emulator command running `program`: `$TERMINAL`, the desktop's
+/// xdg-terminal-exec selection, then distribution alternatives and emulators.
 #[cfg(not(windows))]
 fn linux_terminal(program: &[std::ffi::OsString]) -> Result<Command> {
-    let mut candidates: Vec<PathBuf> = env::var_os("TERMINAL")
-        .filter(|value| !value.is_empty())
-        .map(PathBuf::from)
-        .into_iter()
-        .collect();
-    candidates.extend(
+    if let Some(terminal) = env::var_os("TERMINAL").filter(|value| !value.is_empty())
+        && let Ok(command) = linux_terminal_from(program, [PathBuf::from(terminal)])
+    {
+        return Ok(command);
+    }
+    if let Some(launcher) = crate::linux::apps::on_path("xdg-terminal-exec")
+        && let Ok(command) = xdg_terminal_command(&launcher, program)
+    {
+        return Ok(command);
+    }
+    linux_terminal_from(
+        program,
         [
             "x-terminal-emulator",
             "ptyxis",
@@ -265,8 +270,53 @@ fn linux_terminal(program: &[std::ffi::OsString]) -> Result<Command> {
             "xterm",
         ]
         .map(PathBuf::from),
+    )
+}
+
+#[cfg(not(windows))]
+fn xdg_terminal_command(launcher: &Path, program: &[std::ffi::OsString]) -> Result<Command> {
+    use std::{
+        ffi::OsString,
+        os::unix::ffi::OsStringExt,
+        time::{Duration, Instant},
+    };
+    let started = Instant::now();
+    let budget = Duration::from_secs(2);
+    // Older selectors can silently ignore unknown options and open a window.
+    // Confirm print mode before sending it a command to resolve.
+    let mut help = Command::new(launcher);
+    help.arg("--help");
+    let (status, stdout, _) = crate::linux::command::output_bytes(help, budget)?;
+    anyhow::ensure!(
+        status.success()
+            && stdout
+                .windows(b"--print-cmd".len())
+                .any(|part| part == b"--print-cmd"),
+        "desktop terminal selector has no print mode"
     );
-    linux_terminal_from(program, candidates)
+    // Print mode resolves the configured terminal and its execution syntax
+    // without opening a window. Never interpret the result as shell code.
+    let mut probe = Command::new(launcher);
+    // Keep the plain print flag too: a selector that understands print mode
+    // but not custom delimiters must still never interpret this as execution.
+    probe
+        .args(["--print-cmd", "--print-cmd=\\0", "--"])
+        .args(program);
+    let (status, stdout, _) =
+        crate::linux::command::output_bytes(probe, budget.saturating_sub(started.elapsed()))?;
+    anyhow::ensure!(status.success(), "desktop terminal selection failed");
+    let mut arguments = stdout
+        .split(|byte| *byte == 0)
+        .map(|bytes| OsString::from_vec(bytes.to_vec()));
+    let executable = arguments
+        .next()
+        .filter(|name| !name.is_empty())
+        .context("desktop terminal selection returned no command")?;
+    let executable = crate::linux::apps::on_path_os(&executable)
+        .context("selected desktop terminal is not executable")?;
+    let mut command = Command::new(executable);
+    command.args(arguments);
+    Ok(command)
 }
 
 #[cfg(not(windows))]
@@ -276,13 +326,7 @@ fn linux_terminal_from(
 ) -> Result<Command> {
     let terminal = candidates
         .into_iter()
-        .find_map(|candidate| {
-            if candidate.is_absolute() {
-                crate::linux::apps::is_executable(&candidate).then_some(candidate)
-            } else {
-                find_on_path(&candidate.to_string_lossy())
-            }
-        })
+        .find_map(|candidate| crate::linux::apps::on_path_os(candidate.as_os_str()))
         .context("no terminal emulator was found; set $TERMINAL")?;
     // `x-terminal-emulator` is a symlink; its target decides the syntax.
     let resolved = fs::canonicalize(&terminal).unwrap_or_else(|_| terminal.clone());
@@ -310,11 +354,6 @@ fn terminal_prefix(name: &str) -> &'static [&'static str] {
         "kitty" | "foot" => &[],
         _ => &["-e"],
     }
-}
-
-#[cfg(not(windows))]
-fn find_on_path(name: &str) -> Option<PathBuf> {
-    crate::linux::apps::on_path(name)
 }
 
 #[cfg(windows)]
@@ -455,6 +494,92 @@ mod tests {
                 .map(|arg| arg.as_os_str())
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn relative_terminal_paths_keep_non_utf8_directory_names() {
+        use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
+        let root = tempfile::tempdir_in(".").unwrap();
+        let directory = root
+            .path()
+            .join(std::ffi::OsString::from_vec(b"terminal-\xff".to_vec()));
+        fs::create_dir(&directory).unwrap();
+        let terminal = directory.join("foot");
+        let terminal = terminal
+            .strip_prefix(std::env::current_dir().unwrap())
+            .unwrap()
+            .to_owned();
+        assert!(!terminal.is_absolute());
+        fs::write(&terminal, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+        fs::set_permissions(&terminal, fs::Permissions::from_mode(0o755)).unwrap();
+        let program = ["/bin/sh".into(), "-c".into(), "printf relative-ok".into()];
+        let output = linux_terminal_from(&program, [terminal])
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        assert_eq!(output.stdout, b"relative-ok");
+    }
+
+    #[test]
+    fn desktop_terminal_selection_keeps_binary_argv_and_empty_arguments() {
+        use std::os::unix::{ffi::OsStringExt, fs::PermissionsExt};
+        let root = tempfile::tempdir().unwrap();
+        let launcher = root.path().join("xdg-terminal-exec");
+        fs::write(&launcher, "#!/bin/sh\nif [ \"$1\" = --help ]; then printf '%s\\n' --print-cmd; exit 0; fi\n[ \"$1\" = --print-cmd ] && [ \"$2\" = '--print-cmd=\\0' ] && [ \"$3\" = -- ] || exit 64\nshift 3\nprintf '%s' \"${0%/*}/terminal\"\nfor arg in \"$@\"; do printf '\\000%s' \"$arg\"; done\n").unwrap();
+        let terminal = root.path().join("terminal");
+        fs::write(&terminal, "#!/bin/sh\nexec \"$@\"\n").unwrap();
+        for file in [&launcher, &terminal] {
+            fs::set_permissions(file, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        let script = root.path().join(std::ffi::OsString::from_vec(
+            b"script space-\xff.sh".to_vec(),
+        ));
+        fs::write(&script, "printf '%s\\0' \"$@\"\n").unwrap();
+        let payload = b"argument\nwith-\xfe $`&";
+        let program = [
+            "/bin/sh".into(),
+            script.into_os_string(),
+            std::ffi::OsString::from_vec(payload.to_vec()),
+            "".into(),
+        ];
+        let output = xdg_terminal_command(&launcher, &program)
+            .unwrap()
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let mut expected = payload.to_vec();
+        expected.extend([0, 0]);
+        assert_eq!(output.stdout, expected);
+    }
+
+    #[test]
+    fn failed_or_empty_desktop_terminal_selection_can_fall_back() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let launcher = root.path().join("xdg-terminal-exec");
+        for contents in [
+            "exit 1\n",
+            "exit 0\n",
+            "printf '/missing/minibar-fixture-terminal'\n",
+        ] {
+            fs::write(&launcher, format!("#!/bin/sh\nif [ \"$1\" = --help ]; then printf '%s\\n' --print-cmd; exit 0; fi\n{contents}")).unwrap();
+            fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(xdg_terminal_command(&launcher, &["bash".into()]).is_err());
+        }
+    }
+
+    #[test]
+    fn legacy_desktop_selectors_are_not_asked_to_execute_a_print_request() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let launcher = root.path().join("xdg-terminal-exec");
+        for help in ["legacy selector help", "--print-cmd"] {
+            fs::write(&launcher, format!("#!/bin/sh\nif [ \"$1\" = --help ]; then printf '%s\\n' '{help}'; exit 0; fi\nif [ \"$1\" = --print-cmd ]; then printf '/missing/terminal\\n-e\\nbash\\n'; exit 0; fi\nprintf launched > \"${{0%/*}}/unexpected-launch\"\n")).unwrap();
+            fs::set_permissions(&launcher, fs::Permissions::from_mode(0o755)).unwrap();
+            assert!(xdg_terminal_command(&launcher, &["bash".into()]).is_err());
+            assert!(!root.path().join("unexpected-launch").exists());
+        }
     }
 
     #[test]

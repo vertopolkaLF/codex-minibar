@@ -11,9 +11,22 @@ use std::{
 /// deadlock the child before it exits. A stalled desktop service is bounded,
 /// including helpers that inherit the command's file descriptors.
 pub(super) fn output(
-    mut command: Command,
+    command: Command,
     timeout: Duration,
 ) -> Result<(std::process::ExitStatus, String, String)> {
+    let (status, stdout, stderr) = output_bytes(command, timeout)?;
+    Ok((
+        status,
+        String::from_utf8(stdout).context("desktop command output is not UTF-8")?,
+        String::from_utf8(stderr).context("desktop command output is not UTF-8")?,
+    ))
+}
+
+/// Binary output keeps NUL-delimited argv and non-UTF-8 paths intact.
+pub(crate) fn output_bytes(
+    mut command: Command,
+    timeout: Duration,
+) -> Result<(std::process::ExitStatus, Vec<u8>, Vec<u8>)> {
     let mut stdout = tempfile::tempfile().context("capture desktop command output")?;
     let mut stderr = tempfile::tempfile().context("capture desktop command errors")?;
     command
@@ -33,7 +46,7 @@ pub(super) fn output(
         }
         std::thread::sleep(Duration::from_millis(10));
     };
-    let read = |file: &mut std::fs::File| -> Result<String> {
+    let read = |file: &mut std::fs::File| -> Result<Vec<u8>> {
         file.rewind()?;
         let mut bytes = Vec::new();
         // Fail rather than parse truncated settings data.
@@ -41,7 +54,7 @@ pub(super) fn output(
         if bytes.len() > 1024 * 1024 {
             bail!("desktop command output exceeds 1 MiB");
         }
-        String::from_utf8(bytes).context("desktop command output is not UTF-8")
+        Ok(bytes)
     };
     Ok((status, read(&mut stdout)?, read(&mut stderr)?))
 }

@@ -79,6 +79,10 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
 - Built-in shortcut installation is gated on a GNOME session identifier and a
   working GNOME media-keys schema. Other sessions must show the manual command;
   merely having GNOME packages installed does not imply shortcut integration.
+- For troubleshooting, verify `$TERMINAL` overrides the desktop selection and
+  `xdg-terminal-exec` uses the configured terminal when `$TERMINAL` is unset.
+  An absent, failing or stalled selector must fall back to the existing emulator
+  search. Include a relative terminal path and paths containing non-UTF-8 bytes.
 
 ## Automated checks
 

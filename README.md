@@ -287,6 +287,10 @@ Provider discovery also checks installed NVM versions when the desktop session's
 `PATH` omits them. Explicit CLI selections and executables already on `PATH` keep
 priority over these fallback locations.
 
+Troubleshooting uses the executable named by `$TERMINAL` when available, then the
+desktop's `xdg-terminal-exec` selection. Distribution alternatives and common
+terminal emulators remain fallbacks when neither is available.
+
 Differences from Windows:
 
 - **Popup placement.** The popup is a floating panel by default. On X11, **Settings → Customize →

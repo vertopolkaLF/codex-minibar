@@ -18,6 +18,16 @@ pub fn find_app(binaries: &[&str], locations: &[&str], appimage_prefix: &str) ->
 
 /// The first executable named `name` on `PATH`.
 pub fn on_path(name: &str) -> Option<PathBuf> {
+    on_path_os(std::ffi::OsStr::new(name))
+}
+
+/// Follow exec's path rules without converting Unix filenames to UTF-8.
+pub(crate) fn on_path_os(name: &std::ffi::OsStr) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+    if name.as_bytes().contains(&b'/') {
+        let path = PathBuf::from(name);
+        return is_executable(&path).then_some(path);
+    }
     let path = std::env::var_os("PATH")?;
     std::env::split_paths(&path)
         .map(|directory| directory.join(name))
