@@ -37,11 +37,14 @@ impl LoginControl {
     pub(crate) fn cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst) == 1
     }
+    /// Safe to call again: `login` commits and its caller then saves the result.
     pub(crate) fn begin_save(&self) -> Result<()> {
         ensure!(
-            self.0
-                .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok(),
+            !matches!(
+                self.0
+                    .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst),
+                Err(1)
+            ),
             "Sign-in cancelled."
         );
         Ok(())
@@ -302,5 +305,7 @@ printf '%s' '{"claudeAiOauth":{"accessToken":"sk-ant-oat-fixture","refreshToken"
         control.begin_save().unwrap();
         control.cancel();
         assert!(!control.cancelled());
+        // `login` commits, then the Settings dialog commits before saving.
+        control.begin_save().unwrap();
     }
 }
