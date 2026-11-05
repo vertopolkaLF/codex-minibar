@@ -91,6 +91,9 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
   Previously saved secrets must not be silently replaced when their key is unavailable.
 - Test a CLI login cancellation and timeout with a fixture CLI. Its descendants
   must exit. Use fixtures rather than launching real browser login flows repeatedly.
+  Also let a fixture leader exit while a background helper holds stderr open:
+  completion must retain the leader's exit status and close the helper's pipe
+  without waiting indefinitely for EOF.
 - With a fixture npm layout under a Node installation and a test desktop `PATH`
   containing no Node runtime, select its CLI explicitly. Test background requests,
   sign-in and the troubleshooting terminal through both the npm launcher symlink

@@ -28,6 +28,12 @@ impl LoginChild {
     }
 
     pub(crate) fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
+        if self.running {
+            if !self.exited(true)? {
+                return Ok(None);
+            }
+            self.kill_group();
+        }
         let status = self.child.try_wait()?;
         if status.is_some() {
             // Once reaped, the PID may be reused. Never signal it again.
@@ -36,14 +42,40 @@ impl LoginChild {
         Ok(status)
     }
 
+    /// Observe exit without reaping: the zombie reserves the group leader's
+    /// PID while we terminate helpers that could still hold output pipes.
+    fn exited(&self, nonblocking: bool) -> io::Result<bool> {
+        loop {
+            // SAFETY: zero is a valid initial siginfo_t; waitid writes it and
+            // WNOWAIT keeps our owned child available for std::Child to reap.
+            let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+            let options =
+                libc::WEXITED | libc::WNOWAIT | if nonblocking { libc::WNOHANG } else { 0 };
+            // SAFETY: info is writable and the ID identifies our unreaped child.
+            let result = unsafe { libc::waitid(libc::P_PID, self.child.id(), &mut info, options) };
+            if result == 0 {
+                // SAFETY: waitid initialized the SIGCHLD fields; zero means
+                // no child changed state for a nonblocking observation.
+                return Ok(unsafe { info.si_pid() } != 0);
+            }
+            let error = io::Error::last_os_error();
+            if error.kind() != io::ErrorKind::Interrupted {
+                return Err(error);
+            }
+        }
+    }
+
+    fn kill_group(&self) -> bool {
+        // SAFETY: the unreaped child reserves this private group's ID. Callers
+        // never use this after std::Child reaps the leader.
+        unsafe { libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL) == 0 }
+    }
+
     pub(crate) fn kill(&mut self) -> io::Result<()> {
         if !self.running {
             return Ok(());
         }
-        // SAFETY: the unreaped child leads a private process group created by
-        // process_group(0). A negative PID addresses that group only.
-        let group_killed =
-            unsafe { libc::kill(-(self.child.id() as libc::pid_t), libc::SIGKILL) } == 0;
+        let group_killed = self.kill_group();
         // Also address the root directly in case the CLI moved to a different
         // group/session while helpers remained in the original group.
         let root = self.child.kill();
@@ -54,6 +86,10 @@ impl LoginChild {
         // Match std::process::Child::wait: EOF must reach a CLI waiting on
         // input before we wait for it. The wrapper owns this pipe separately.
         drop(self.stdin.take());
+        if self.running {
+            self.exited(false)?;
+            self.kill_group();
+        }
         let status = self.child.wait()?;
         self.running = false;
         Ok(status)
@@ -118,6 +154,40 @@ mod tests {
         let (child, reader) = process_tree();
         drop(child);
         assert_descendant_pipe_closed(reader);
+    }
+
+    #[test]
+    fn normal_exit_closes_descendant_pipes_before_reaping_the_leader() {
+        for poll in [false, true] {
+            let mut command = Command::new("/bin/sh");
+            command
+                .args(["-c", "sleep 30 & echo ready; exit 7"])
+                .stdin(Stdio::null())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null());
+            let mut child = LoginChild::spawn(command).unwrap();
+            let mut reader = BufReader::new(child.stdout.take().unwrap());
+            let mut ready = String::new();
+            reader.read_line(&mut ready).unwrap();
+            assert_eq!(ready.trim(), "ready");
+            let status = if poll {
+                let deadline = std::time::Instant::now() + Duration::from_secs(2);
+                loop {
+                    if let Some(status) = child.try_wait().unwrap() {
+                        break status;
+                    }
+                    assert!(std::time::Instant::now() < deadline);
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+            } else {
+                child.wait().unwrap()
+            };
+            assert_eq!(status.code(), Some(7));
+            assert_eq!(child.try_wait().unwrap(), Some(status));
+            child.kill().unwrap();
+            assert_eq!(child.wait().unwrap(), status);
+            assert_descendant_pipe_closed(reader);
+        }
     }
 
     #[test]
