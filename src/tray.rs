@@ -242,11 +242,14 @@ pub(crate) fn system_uses_light_theme() -> bool {
 fn system_font() -> Option<&'static Font> {
     static FONT: OnceLock<Option<Font>> = OnceLock::new();
     FONT.get_or_init(|| {
-        font_candidates().into_iter().find_map(|path| {
+        let font = font_candidates().into_iter().find_map(|path| {
             fs::read(path)
                 .ok()
                 .and_then(|bytes| Font::from_bytes(bytes, FontSettings::default()).ok())
-        })
+        });
+        #[cfg(not(windows))]
+        let font = font.or_else(fontconfig_bold_sans);
+        font
     })
     .as_ref()
 }
@@ -576,24 +579,38 @@ fn font_candidates() -> Vec<PathBuf> {
         ]
         .map(PathBuf::from),
     );
-    #[cfg(not(windows))]
-    candidates.extend(fontconfig_bold_sans());
     candidates
 }
 
 /// Whatever bold sans face fontconfig resolves, for other layouts.
 #[cfg(not(windows))]
-fn fontconfig_bold_sans() -> Option<PathBuf> {
-    let output = std::process::Command::new("fc-match")
-        .args(["--format=%{file}", "sans-serif:bold"])
-        .output()
+fn fontconfig_bold_sans() -> Option<Font> {
+    // Share GPUI's fontconfig library rather than requiring the separate
+    // fc-match utility. Only consult it when the ordinary paths failed.
+    let handle = font_kit::source::SystemSource::new()
+        .select_best_match(
+            &[font_kit::family_name::FamilyName::SansSerif],
+            font_kit::properties::Properties::new().weight(font_kit::properties::Weight::BOLD),
+        )
         .ok()?;
-    let path = PathBuf::from(String::from_utf8(output.stdout).ok()?.trim());
-    // fontdue reads TrueType/OpenType files, not collections.
-    let usable = path
-        .extension()
-        .is_some_and(|ext| ext.eq_ignore_ascii_case("ttf") || ext.eq_ignore_ascii_case("otf"));
-    (output.status.success() && usable).then_some(path)
+    font_from_handle(handle)
+}
+
+#[cfg(not(windows))]
+fn font_from_handle(handle: font_kit::handle::Handle) -> Option<Font> {
+    let (bytes, collection_index) = match handle {
+        font_kit::handle::Handle::Path { path, font_index } => (fs::read(path).ok()?, font_index),
+        font_kit::handle::Handle::Memory { bytes, font_index } => ((*bytes).clone(), font_index),
+        font_kit::handle::Handle::Native { .. } => return None,
+    };
+    Font::from_bytes(
+        bytes,
+        FontSettings {
+            collection_index,
+            ..FontSettings::default()
+        },
+    )
+    .ok()
 }
 
 fn render_fallback_lines(lines: &[(String, [u8; 3])], right_align: bool) -> Vec<u8> {
@@ -1260,6 +1277,86 @@ mod tests {
 
     use super::*;
     use crate::settings::ProviderKind;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn fontconfig_tray_font_works_without_desktop_utilities_on_path() {
+        const CHILD: &str = "MINIBAR_TRAY_FONT_PROBE";
+        if std::env::var_os(CHILD).is_some() {
+            let font = fontconfig_bold_sans().expect("native fontconfig must find the fixture");
+            let (metrics, pixels) = font.rasterize('8', 18.0);
+            assert!(metrics.width > 0 && metrics.height > 0);
+            assert!(pixels.iter().any(|pixel| *pixel > 0));
+            return;
+        }
+        let root = tempfile::tempdir().unwrap();
+        // No standard system directories, no filename extension, no helper
+        // executable: only a user-installed font registered with fontconfig.
+        fs::write(
+            root.path().join("user-font"),
+            include_bytes!("../assets/fonts/geist/Geist-Bold.ttf"),
+        )
+        .unwrap();
+        let config = root.path().join("fonts.conf");
+        fs::write(&config, format!("<?xml version=\"1.0\"?><!DOCTYPE fontconfig SYSTEM \"urn:fontconfig:fonts.dtd\"><fontconfig><dir>{}</dir><cachedir>{}/cache</cachedir></fontconfig>", root.path().display(), root.path().display())).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "tray::tests::fontconfig_tray_font_works_without_desktop_utilities_on_path",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .env("FONTCONFIG_FILE", config)
+            .env("FONTCONFIG_PATH", root.path())
+            .env("PATH", root.path().join("no-utilities"))
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn tray_font_handle_preserves_the_selected_collection_face() {
+        // Build a TTC containing regular then bold. SFNT table offsets in a
+        // collection are absolute, so rebase each embedded font's table list.
+        let faces: [&[u8]; 2] = [
+            include_bytes!("../assets/fonts/geist/Geist-Regular.ttf"),
+            include_bytes!("../assets/fonts/geist/Geist-Bold.ttf"),
+        ];
+        let mut collection = b"ttcf\0\x01\0\0\0\0\0\x02".to_vec();
+        collection.resize(20, 0);
+        for (index, face) in faces.iter().enumerate() {
+            let start = collection.len();
+            collection[12 + index * 4..16 + index * 4]
+                .copy_from_slice(&(start as u32).to_be_bytes());
+            collection.extend_from_slice(face);
+            let tables = u16::from_be_bytes([face[4], face[5]]) as usize;
+            for table in 0..tables {
+                let offset = 12 + table * 16 + 8;
+                let original = u32::from_be_bytes(face[offset..offset + 4].try_into().unwrap());
+                collection[start + offset..start + offset + 4]
+                    .copy_from_slice(&(original + start as u32).to_be_bytes());
+            }
+            while !collection.len().is_multiple_of(4) {
+                collection.push(0);
+            }
+        }
+        let font = font_from_handle(font_kit::handle::Handle::from_memory(
+            std::sync::Arc::new(collection),
+            1,
+        ))
+        .unwrap();
+        let expected = Font::from_bytes(faces[1], FontSettings::default()).unwrap();
+        let regular = Font::from_bytes(faces[0], FontSettings::default()).unwrap();
+        let rendered = font.rasterize('8', 18.0);
+        assert_eq!(rendered, expected.rasterize('8', 18.0));
+        assert_ne!(rendered, regular.rasterize('8', 18.0));
+    }
 
     #[test]
     fn tray_instances_resolve_independently_and_missing_instances_keep_their_slot() {

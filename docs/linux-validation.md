@@ -55,6 +55,10 @@ An X11 application inside a Wayland session must be recorded as X11/XWayland.
 
 ## Installation and optional-service checks
 
+- On a desktop with user-installed fonts outside the common distribution
+  paths, check numeric tray indicators with `fc-match` absent from session
+  PATH. Native fontconfig should still resolve a bold sans face, including
+  the selected face inside a font collection.
 - Test a tarball prefix containing spaces and shell metacharacters. Its launcher
   and Toggle action must work without adding the prefix's `bin` to session PATH,
   including after an in-place update. Validate the installed desktop entry with
