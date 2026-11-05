@@ -138,12 +138,12 @@ fn run() -> Result<()> {
     codex_minibar::theme::apply_appearance(state.settings.theme, state.settings.accent_color);
     codex_minibar::popup_window::start(Arc::clone(&state));
     codex_minibar::whats_new::start(&state.settings, just_updated);
+    #[cfg(windows)]
     if onboarding_needed {
         codex_minibar::settings_window::open_onboarding();
-    } else {
-        #[cfg(not(windows))]
-        codex_minibar::linux::instance::show_initial_toggle();
     }
+    #[cfg(not(windows))]
+    codex_minibar::linux::instance::show_initial_window(onboarding_needed);
     // The GPUI thread owns every window and the bridge thread owns the tray;
     // both exit the process directly, so the main thread only stays alive.
     loop {
@@ -194,6 +194,13 @@ fn main() {
         return;
     }
 
+    #[cfg(not(windows))]
+    // SAFETY: only argument checks have run on this path. Capture before
+    // single-instance activation or any other app code can start threads.
+    // The terminal-only CLI path above forwards its launch context directly.
+    unsafe {
+        codex_minibar::linux::instance::capture_startup_activation_token();
+    }
     let instance = match SingleInstance::acquire_or_activate_existing() {
         Ok(Some(instance)) => instance,
         Ok(None) => return,

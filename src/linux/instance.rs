@@ -24,7 +24,7 @@ use std::{
         },
     },
     path::PathBuf,
-    sync::Mutex,
+    sync::{Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
@@ -38,8 +38,30 @@ const MAX_REQUEST: u64 = 8192;
 const MAX_TOKEN_BYTES: usize = 4096;
 const TOKEN_LIFETIME: Duration = Duration::from_secs(5);
 static ACTIVATION_TOKEN: Mutex<Option<(String, Instant)>> = Mutex::new(None);
+static STARTUP_ACTIVATION_TOKEN: OnceLock<Mutex<Option<String>>> = OnceLock::new();
 /// The command-line flag that toggles the running popup.
 pub const TOGGLE_FLAG: &str = "--toggle";
+
+/// Saves the launcher's one-use focus grant without passing it on to child
+/// processes. Call at the very beginning of `main`, before desktop services,
+/// provider workers or any other threads have started.
+///
+/// # Safety
+/// No other thread may access the process environment during this call.
+pub unsafe fn capture_startup_activation_token() {
+    STARTUP_ACTIVATION_TOKEN.get_or_init(|| {
+        let token = std::env::var("XDG_ACTIVATION_TOKEN")
+            .ok()
+            .filter(|token| is_token(token));
+        // SAFETY: the caller guarantees exclusive access to the environment.
+        unsafe { std::env::remove_var("XDG_ACTIVATION_TOKEN") };
+        Mutex::new(token)
+    });
+}
+
+fn take_startup_activation_token() -> Option<String> {
+    STARTUP_ACTIVATION_TOKEN.get()?.lock().ok()?.take()
+}
 
 /// `$XDG_RUNTIME_DIR` (per-user, `0700`), or a per-user temp directory.
 fn runtime_dir() -> Result<PathBuf> {
@@ -189,7 +211,7 @@ fn activate_existing(socket_path: &std::path::Path) {
             let toggle = toggle_requested(std::env::args_os().skip(1));
             let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
             let verb = if toggle { TOGGLE } else { ACTIVATE };
-            let request = activation_request(verb, activation_token_from_env().as_deref());
+            let request = activation_request(verb, take_startup_activation_token().as_deref());
             let _ = stream.write_all(&request);
         }
         Err(error) => eprintln!("could not reach the running Codex Minibar: {error}"),
@@ -202,12 +224,19 @@ fn toggle_requested(arguments: impl IntoIterator<Item = std::ffi::OsString>) -> 
         .any(|argument| argument == TOGGLE_FLAG)
 }
 
-/// A desktop shortcut can start the first process as well as toggle a running
-/// one. Call after the popup renderer is initialized; ordinary autostart stays
-/// in the tray. Onboarding takes priority at the call site.
-pub fn show_initial_toggle() {
-    if toggle_requested(std::env::args_os().skip(1)) {
-        show_with_token(activation_token_from_env());
+/// Give the launcher's focus grant to the first visible surface. Onboarding
+/// takes priority over `--toggle`; ordinary autostart stays in the tray.
+/// Call after the popup renderer is initialized.
+pub fn show_initial_window(onboarding_needed: bool) {
+    if onboarding_needed {
+        set_activation_token(take_startup_activation_token());
+        crate::settings_window::open_onboarding();
+    } else if toggle_requested(std::env::args_os().skip(1)) {
+        show_with_token(take_startup_activation_token());
+    } else {
+        // An ordinary tray startup has no window to activate. Do not retain
+        // its launch grant for an unrelated later click.
+        let _ = take_startup_activation_token();
     }
 }
 
@@ -251,13 +280,6 @@ fn activation_request(verb: &str, token: Option<&str>) -> Vec<u8> {
         .into_bytes(),
         None => format!("{verb}\n").into_bytes(),
     }
-}
-
-/// The token the desktop gave the launched process, if any.
-fn activation_token_from_env() -> Option<String> {
-    std::env::var("XDG_ACTIVATION_TOKEN")
-        .ok()
-        .filter(|token| is_token(token))
 }
 
 fn is_token(token: &str) -> bool {
