@@ -219,9 +219,9 @@ pub(crate) fn cache_savings_microusd(
     else {
         return 0;
     };
-    (cache_read_tokens as f64 * (rate.input_per_token - rate.cache_read_per_token) * 1_000_000.0)
-        .round()
-        .clamp(0.0, u64::MAX as f64) as u64
+    crate::money::from_usd(
+        cache_read_tokens as f64 * (rate.input_per_token - rate.cache_read_per_token),
+    )
 }
 
 fn cost_for_catalog(
@@ -242,7 +242,7 @@ fn cost_for_catalog(
         + cache_read_tokens as f64 * rate.cache_read_per_token
         + cache_creation_tokens as f64 * rate.cache_creation_per_token
         + output_tokens as f64 * rate.output_per_token;
-    Some((cost_usd * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64)
+    Some(crate::money::from_usd(cost_usd))
 }
 
 fn parse_rate_table(document: &Value) -> HashMap<String, ModelRate> {
@@ -390,9 +390,9 @@ pub(crate) fn test_pricer(
         )?;
         let savings = lookup_rate(&catalog, provider, model)
             .map(|rate| {
-                (cached as f64 * (rate.input_per_token - rate.cache_read_per_token) * 1_000_000.0)
-                    .round()
-                    .clamp(0.0, u64::MAX as f64) as u64
+                crate::money::from_usd(
+                    cached as f64 * (rate.input_per_token - rate.cache_read_per_token),
+                )
             })
             .unwrap_or(0);
         Some((cost, savings))

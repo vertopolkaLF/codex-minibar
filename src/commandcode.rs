@@ -580,7 +580,7 @@ fn usage_record(value: &Value) -> Option<UsageRecord> {
             cached_input_tokens: tokens("cacheReadTokens").min(input),
             output_tokens: output,
             requests: 1,
-            estimated_cost_microusd: cost.map_or(0, |cost| (cost * 1_000_000.0).round() as u64),
+            estimated_cost_microusd: cost.map_or(0, crate::money::from_usd),
             priced_requests: u64::from(cost.is_some()),
             ..TokenUsage::default()
         },

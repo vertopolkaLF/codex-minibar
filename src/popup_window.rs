@@ -53,12 +53,13 @@ mod tests;
 pub use state::AppState;
 pub(crate) use state::UiState;
 
+use crate::format::{
+    capitalize_plan_name, format_micro_usd, format_reset_in, format_time_ago, format_time_late,
+    format_token_count, format_usd,
+};
 pub(crate) use actions::*;
 use bridge::*;
 use formatting::*;
-pub(crate) use formatting::{
-    capitalize_plan_name, format_reset_in, format_token_count, format_usd,
-};
 pub(crate) use navigation::PopupView;
 use navigation::*;
 use state::*;

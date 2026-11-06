@@ -227,7 +227,7 @@ fn limit_identity(name: &str, limits: &RateLimits) -> String {
         .as_deref()
         .filter(|plan| !plan.trim().is_empty())
     {
-        parts.push(crate::popup_window::capitalize_plan_name(plan));
+        parts.push(crate::format::capitalize_plan_name(plan));
     }
     if let Some(account) = limits
         .account_name

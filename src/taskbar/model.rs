@@ -172,36 +172,6 @@ impl WidgetView {
 /// How many steps [`WidgetView::compacted`] takes to the shortest layout.
 pub(crate) const COMPACT_LEVELS: u8 = 5;
 
-/// Compact countdown: `2h 13m`, `3d 4h`, `45m`.
-pub(crate) fn countdown(reset: DateTime<Utc>, now: DateTime<Utc>) -> String {
-    let minutes = (reset - now).num_minutes().max(0);
-    let (days, hours, minutes) = (minutes / 1_440, (minutes % 1_440) / 60, minutes % 60);
-    if days > 0 {
-        if hours > 0 {
-            crate::i18n::format(
-                "days-d-hours-h",
-                &[("days", days.to_string()), ("hours", hours.to_string())],
-            )
-        } else {
-            crate::i18n::format("days-d", &[("days", days.to_string())])
-        }
-    } else if hours > 0 {
-        if minutes > 0 {
-            crate::i18n::format(
-                "hours-h-minutes-m",
-                &[
-                    ("hours", hours.to_string()),
-                    ("minutes", minutes.to_string()),
-                ],
-            )
-        } else {
-            crate::i18n::format("hours-h", &[("hours", hours.to_string())])
-        }
-    } else {
-        crate::i18n::format("minutes-m", &[("minutes", minutes.to_string())])
-    }
-}
-
 /// Local wall-clock time of a reset, with the date once it is not today.
 pub(crate) fn reset_clock(reset: DateTime<Utc>) -> String {
     let local = reset.with_timezone(&Local);
@@ -320,7 +290,7 @@ pub(crate) fn resolve(
             .filter(|at| *at > now)
             .and_then(|at| match reset {
                 TaskbarResetDisplay::Off => None,
-                TaskbarResetDisplay::Countdown => Some(countdown(at, now)),
+                TaskbarResetDisplay::Countdown => Some(crate::format::countdown(at, now)),
                 TaskbarResetDisplay::Clock => Some(reset_clock(at)),
             });
     }
@@ -408,7 +378,7 @@ fn card_sections(
                     .plan_type
                     .as_deref()
                     .filter(|plan| !plan.trim().is_empty())
-                    .map(crate::popup_window::capitalize_plan_name),
+                    .map(crate::format::capitalize_plan_name),
                 rows,
                 today: today_usage(provider, &provider_limits.usage),
             }
@@ -426,7 +396,7 @@ fn today_usage(provider: ProviderId, usage: &crate::usage::UsageStatistics) -> O
     if crate::popup_window::ui::is_cost_provider(provider.kind()) {
         return Some(format!(
             "{} \u{00b7} {}",
-            crate::popup_window::format_usd(today.estimated_cost_microusd as f64 / 1e6),
+            crate::format::format_micro_usd(today.estimated_cost_microusd),
             crate::i18n::format("requests", &[("v0", today.requests.to_string())]),
         ));
     }
@@ -434,13 +404,13 @@ fn today_usage(provider: ProviderId, usage: &crate::usage::UsageStatistics) -> O
         "taskbar-card-tokens",
         &[(
             "count",
-            crate::popup_window::format_token_count(today.total_tokens()),
+            crate::format::format_token_count(today.total_tokens()),
         )],
     );
     Some(match today.estimated_api_value_usd() {
         Some(value) => format!(
             "{tokens} \u{00b7} \u{2248} {}",
-            crate::popup_window::format_usd(value)
+            crate::format::format_usd(value)
         ),
         None => tokens,
     })
@@ -683,19 +653,5 @@ mod tests {
     fn retired_compact_style_reads_as_glance() {
         let widget: TaskbarWidget = toml::from_str("style = \"compact\"").unwrap();
         assert_eq!(widget.style, TaskbarWidgetStyle::Glance);
-    }
-
-    #[test]
-    fn countdown_is_compact() {
-        let now = Utc::now();
-        assert_eq!(countdown(now + chrono::Duration::minutes(45), now), "45m");
-        assert_eq!(
-            countdown(now + chrono::Duration::minutes(133), now),
-            "2h 13m"
-        );
-        assert_eq!(
-            countdown(now + chrono::Duration::minutes(3 * 1440 + 240), now),
-            "3d 4h"
-        );
     }
 }

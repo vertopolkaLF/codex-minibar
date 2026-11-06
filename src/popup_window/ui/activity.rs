@@ -193,7 +193,7 @@ pub(crate) fn visible_tokens(usage: &TokenUsage, mask: u8) -> u64 {
 
 pub(crate) fn cost_label(usage: &TokenUsage) -> String {
     if usage.priced_requests > 0 {
-        let value = format_usd(usage.estimated_cost_microusd as f64 / 1_000_000.0);
+        let value = format_micro_usd(usage.estimated_cost_microusd);
         if usage.priced_requests < usage.requests {
             crate::i18n::format("value-partially-priced", &[("value", value.to_string())])
         } else {
@@ -1435,7 +1435,7 @@ impl PopupRoot {
         }
         let usage = &bucket.usage;
         let cost = if usage.priced_requests > 0 {
-            format_usd(usage.estimated_cost_microusd as f64 / 1_000_000.0)
+            format_micro_usd(usage.estimated_cost_microusd)
         } else if usage.requests == 0 {
             "$0.00".into()
         } else {
@@ -1512,7 +1512,7 @@ fn usage_card_metrics(
     let period = statistics.history_days;
     let row = div().flex().flex_row().w_full().gap(px(8.0));
     if is_cost_provider(provider) {
-        let spend = |usage: &TokenUsage| format_usd(usage.estimated_cost_microusd as f64 / 1e6);
+        let spend = |usage: &TokenUsage| format_micro_usd(usage.estimated_cost_microusd);
         return row
             .child(metric_cell(
                 crate::i18n::tr("today").into(),

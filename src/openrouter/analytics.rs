@@ -613,7 +613,7 @@ fn row_usage(row: &Value) -> Result<(String, TokenUsage)> {
             cached_input_tokens: count(row, "cached_tokens")?,
             requests,
             priced_requests: requests,
-            estimated_cost_microusd: (cost * 1_000_000.0).round() as u64,
+            estimated_cost_microusd: crate::money::from_usd(cost),
             ..Default::default()
         },
     ))

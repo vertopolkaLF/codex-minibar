@@ -240,7 +240,7 @@ impl OpenCodeClient {
                 // field while using the stored cost as the spend authority.
                 output_tokens: output.saturating_add(reasoning),
                 requests: 1,
-                estimated_cost_microusd: usd_to_microusd(cost),
+                estimated_cost_microusd: crate::money::from_usd(cost),
                 priced_requests: 1,
                 ..Default::default()
             };
@@ -531,13 +531,6 @@ fn non_negative_i64(value: i64) -> u64 {
     value.max(0) as u64
 }
 
-fn usd_to_microusd(value: f64) -> u64 {
-    if !value.is_finite() || value <= 0.0 {
-        return 0;
-    }
-    (value * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64
-}
-
 #[cfg(test)]
 fn catalog_for_test(provider: ProviderKind) -> Catalog {
     catalog(provider).expect("OpenCode provider")
@@ -603,8 +596,8 @@ mod tests {
 
     #[test]
     fn maps_usd_cost_to_micro_usd_without_negative_values() {
-        assert_eq!(usd_to_microusd(1.25), 1_250_000);
-        assert_eq!(usd_to_microusd(-1.0), 0);
+        assert_eq!(crate::money::from_usd(1.25), 1_250_000);
+        assert_eq!(crate::money::from_usd(-1.0), 0);
     }
 
     #[test]

@@ -1778,7 +1778,7 @@ impl Renderer {
                     Some(reset) if row.progress.is_some() => crate::i18n::format(
                         "taskbar-card-resets",
                         &[
-                            ("time", super::model::countdown(reset, now)),
+                            ("time", crate::format::countdown(reset, now)),
                             ("clock", super::model::reset_clock(reset)),
                         ],
                     ),

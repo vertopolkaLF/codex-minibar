@@ -137,12 +137,12 @@ impl KeyRowView {
                 expired: key.expires_at.is_some_and(|at| at <= now),
                 disabled: key.disabled,
                 percent: used_percent(key.period_usage_microusd(), key.limit_microusd),
-                amount: usd(key.period_usage_microusd()),
+                amount: format_micro_usd(key.period_usage_microusd()),
                 summary: key_summary(key, now),
                 aside: (!key.is_expired(now) && !key.disabled).then(|| {
                     crate::i18n::format(
                         "openrouter-keys-today",
-                        &[("amount", usd(key.usage_daily_microusd))],
+                        &[("amount", format_micro_usd(key.usage_daily_microusd))],
                     )
                 }),
                 badge: tracked.is_some(),
@@ -354,7 +354,7 @@ pub(crate) fn parse_limit(text: &str) -> Result<Option<u64>, ()> {
     if !value.is_finite() || !(0.0..=1_000_000_000.0).contains(&value) {
         return Err(());
     }
-    Ok(Some((value * 1_000_000.0).round() as u64))
+    Ok(Some(crate::money::from_usd(value)))
 }
 
 /// Whether `text` can be a dollar amount being typed: digits with at most one
@@ -396,15 +396,11 @@ fn edge_layer(edge: RowEdge, color: Hsla, card_radius: f32) -> Option<AnyElement
 /// Editable text for a stored limit: `25`, `12.5`, or empty for none.
 fn limit_text(limit: Option<u64>) -> String {
     limit.map_or_else(String::new, |limit| {
-        format!("{:.2}", limit as f64 / 1_000_000.0)
+        format!("{:.2}", crate::money::to_usd(limit))
             .trim_end_matches('0')
             .trim_end_matches('.')
             .to_owned()
     })
-}
-
-fn usd(microusd: u64) -> String {
-    format_usd(microusd as f64 / 1_000_000.0)
 }
 
 fn reset_suffix(reset: LimitReset) -> Option<&'static str> {
@@ -419,7 +415,7 @@ fn reset_suffix(reset: LimitReset) -> Option<&'static str> {
 /// "$3.40 of $10 · resets monthly", "No limit · expires Oct 31".
 fn key_summary(key: &ManagedKey, now: DateTime<Utc>) -> String {
     limit_summary(
-        usd(key.period_usage_microusd()),
+        format_micro_usd(key.period_usage_microusd()),
         key.limit_microusd,
         reset_suffix(key.limit_reset),
         key.expires_at,
@@ -447,7 +443,7 @@ fn tracked_summary(key: &TrackedKey, now: DateTime<Utc>) -> String {
 /// Spend of a tracked key; unknown until its usage was fetched.
 fn tracked_amount(key: &TrackedKey) -> String {
     if key.has_live_usage {
-        usd(key.spending.used_microusd)
+        format_micro_usd(key.spending.used_microusd)
     } else {
         "?.??".into()
     }
@@ -464,7 +460,7 @@ fn limit_summary(
     match limit {
         Some(limit) => parts.push(crate::i18n::format(
             "openrouter-keys-of-limit",
-            &[("amount", amount), ("limit", usd(limit))],
+            &[("amount", amount), ("limit", format_micro_usd(limit))],
         )),
         None => parts.push(crate::i18n::tr("openrouter-keys-no-limit").to_owned()),
     }
@@ -2122,10 +2118,10 @@ impl PopupRoot {
         let breakdown = crate::i18n::format(
             "openrouter-keys-usage-breakdown",
             &[
-                ("today", usd(key.usage_daily_microusd)),
-                ("week", usd(key.usage_weekly_microusd)),
-                ("month", usd(key.usage_monthly_microusd)),
-                ("total", usd(key.usage_microusd)),
+                ("today", format_micro_usd(key.usage_daily_microusd)),
+                ("week", format_micro_usd(key.usage_weekly_microusd)),
+                ("month", format_micro_usd(key.usage_monthly_microusd)),
+                ("total", format_micro_usd(key.usage_microusd)),
             ],
         );
         let limit_field = self.key_field(

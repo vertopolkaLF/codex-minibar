@@ -199,10 +199,7 @@ impl PopupRoot {
                 let row = match balance_microusd {
                     Some(balance) => components::split_row(
                         name,
-                        components::body_strong(
-                            format_usd(*balance as f64 / 1_000_000.0),
-                            palette.accent_text,
-                        ),
+                        components::body_strong(format_micro_usd(*balance), palette.accent_text),
                     ),
                     None => div().child(name),
                 };
@@ -717,7 +714,7 @@ impl PopupRoot {
         }
         if let Some(balance) = heading.balance_microusd {
             trailing = trailing.child(components::body_strong(
-                format_usd(balance as f64 / 1_000_000.0),
+                format_micro_usd(balance),
                 palette.accent_text,
             ));
         }
@@ -1062,16 +1059,16 @@ impl PopupRoot {
             right = right.child(row);
         } else {
             let amount = if has_live_usage {
-                let used = format_usd(spending.used_microusd as f64 / 1_000_000.0);
+                let used = format_micro_usd(spending.used_microusd);
                 spending.limit_microusd.map_or_else(
                     || used.clone(),
-                    |limit| format!("{used} / {}", format_usd(limit as f64 / 1_000_000.0)),
+                    |limit| format!("{used} / {}", format_micro_usd(limit)),
                 )
             } else {
                 // Unknown usage — never show a bare limit that looks like spend.
                 spending.limit_microusd.map_or_else(
                     || "?.??".into(),
-                    |limit| format!("?.?? / {}", format_usd(limit as f64 / 1_000_000.0)),
+                    |limit| format!("?.?? / {}", format_micro_usd(limit)),
                 )
             };
             right_width = metrics.body(crate::i18n::tr("usage")) + 6.0 + metrics.strong(&amount);

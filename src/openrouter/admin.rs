@@ -303,7 +303,7 @@ fn api_error_message(body: &str) -> Option<String> {
 }
 
 fn dollars(microusd: u64) -> Value {
-    json!(microusd as f64 / 1_000_000.0)
+    json!(crate::money::to_usd(microusd))
 }
 
 fn create_body(new: &NewKey) -> Value {

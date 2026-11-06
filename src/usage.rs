@@ -54,7 +54,7 @@ impl TokenUsage {
     /// API-rate value is an estimate, not the user's subscription bill.
     pub fn estimated_api_value_usd(&self) -> Option<f64> {
         (self.requests > 0 && self.priced_requests > 0)
-            .then(|| self.estimated_cost_microusd as f64 / 1_000_000.0)
+            .then(|| crate::money::to_usd(self.estimated_cost_microusd))
     }
 
     pub(crate) fn add(&mut self, other: &Self) {
@@ -1222,18 +1222,16 @@ fn claude_usage_from_line(line: &[u8]) -> Option<CachedClaudeUsageEntry> {
         .as_ref()
         .and_then(Value::as_f64)
         .filter(|cost| cost.is_finite() && *cost >= 0.0);
-    let estimated_cost_microusd = reported_cost
-        .map(|cost| (cost * 1_000_000.0).round().clamp(0.0, u64::MAX as f64) as u64)
-        .or_else(|| {
-            pricing::request_cost_microusd(
-                ProviderKind::Claude,
-                Some(model),
-                cache_creation_tokens,
-                input_tokens,
-                cache_read,
-                output_tokens,
-            )
-        });
+    let estimated_cost_microusd = reported_cost.map(crate::money::from_usd).or_else(|| {
+        pricing::request_cost_microusd(
+            ProviderKind::Claude,
+            Some(model),
+            cache_creation_tokens,
+            input_tokens,
+            cache_read,
+            output_tokens,
+        )
+    });
     let cache_savings_microusd =
         pricing::cache_savings_microusd(ProviderKind::Claude, Some(model), cache_read);
     let usage = TokenUsage {

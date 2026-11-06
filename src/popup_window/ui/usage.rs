@@ -19,7 +19,6 @@ use gpui::{
 use super::{
     components::{self, caption, card, nowrap},
     fx,
-    home::{format_spend_full, format_thousands},
     root::{PopupRoot, SnapshotSlot, eid},
     theme::Palette,
     tooltip::{ChartTip, TipContent},
@@ -899,7 +898,7 @@ impl PopupRoot {
         ]
         .map(|(id, value, money)| {
             let text = if money {
-                format_spend(value)
+                format_micro_usd(value)
             } else {
                 format_token_count(value)
             };
@@ -1157,8 +1156,8 @@ impl PopupRoot {
             let value = point.by_provider.get(provider).copied().unwrap_or(0);
             let (amount, hidden) = match metric {
                 OverviewMetric::Cost => {
-                    total_cents = total_cents.saturating_add(spend_display_cents(value));
-                    (format_spend_full(value), spend_display_cents(value) == 0)
+                    total_cents = total_cents.saturating_add(crate::money::to_cents(value));
+                    (format_micro_usd(value), crate::money::to_cents(value) == 0)
                 }
                 OverviewMetric::Tokens => {
                     total_tokens = total_tokens.saturating_add(value);
@@ -1176,7 +1175,7 @@ impl PopupRoot {
             ));
         }
         let total = match metric {
-            OverviewMetric::Cost => format_spend_from_cents(total_cents),
+            OverviewMetric::Cost => crate::format::format_cents(total_cents),
             OverviewMetric::Tokens => format_token_count(total_tokens),
         };
         ChartTip { title, rows, total }
@@ -1495,7 +1494,7 @@ fn breakdown_table(
                 .child(div().flex_1().min_w_0().child(title))
                 .child(cell(
                     56.0,
-                    caption(format_spend(row.cost_microusd), palette.text_primary),
+                    caption(format_micro_usd(row.cost_microusd), palette.text_primary),
                 ))
                 .child(cell(
                     44.0,
@@ -1939,20 +1938,16 @@ fn chart_scale_max(raw_max: u64) -> u64 {
 
 fn format_axis_value(value: u64, metric: OverviewMetric) -> String {
     match metric {
-        OverviewMetric::Cost => format_spend(value),
+        OverviewMetric::Cost => format_micro_usd(value),
         OverviewMetric::Tokens => format_token_count(value),
     }
-}
-
-fn format_spend(microusd: u64) -> String {
-    format_spend_full(microusd)
 }
 
 fn format_total_cost(usage: &TokenUsage) -> String {
     if usage.requests > 0 && usage.priced_requests == 0 {
         "—".into()
     } else {
-        format_spend_full(usage.estimated_cost_microusd)
+        format_micro_usd(usage.estimated_cost_microusd)
     }
 }
 
@@ -1960,7 +1955,7 @@ fn format_usage_cost(usage: &TokenUsage) -> String {
     if usage.requests > 0 && usage.priced_requests == 0 {
         "—".into()
     } else {
-        format_spend(usage.estimated_cost_microusd)
+        format_micro_usd(usage.estimated_cost_microusd)
     }
 }
 
@@ -1968,7 +1963,7 @@ fn format_usage_day_cost(usage: &TokenUsage) -> String {
     if usage.requests > 0 && usage.priced_requests == 0 {
         "—".into()
     } else {
-        format_day_cost(usage.estimated_cost_microusd)
+        format_micro_usd(usage.estimated_cost_microusd)
     }
 }
 
@@ -1976,20 +1971,8 @@ fn format_breakdown_cost(row: &BreakdownRow) -> String {
     if row.requests > 0 && row.priced_requests == 0 {
         "—".into()
     } else {
-        format_spend(row.cost_microusd)
+        format_micro_usd(row.cost_microusd)
     }
-}
-
-fn format_day_cost(microusd: u64) -> String {
-    format_spend_full(microusd)
-}
-
-fn spend_display_cents(microusd: u64) -> u64 {
-    microusd / 10_000 + u64::from(microusd % 10_000 >= 5_000)
-}
-
-fn format_spend_from_cents(cents: u64) -> String {
-    format!("${}.{:02}", format_thousands(cents / 100), cents % 100)
 }
 
 #[cfg(test)]
@@ -2079,8 +2062,8 @@ mod tests {
 
     #[test]
     fn day_costs_keep_full_dollars_and_cents() {
-        assert_eq!(format_day_cost(0), "$0.00");
-        assert_eq!(format_day_cost(1_234_567), "$1.23");
-        assert_eq!(format_day_cost(1_500_000_000), "$1,500.00");
+        assert_eq!(format_micro_usd(0), "$0.00");
+        assert_eq!(format_micro_usd(1_234_567), "$1.23");
+        assert_eq!(format_micro_usd(1_500_000_000), "$1,500.00");
     }
 }

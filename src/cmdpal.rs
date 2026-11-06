@@ -255,7 +255,7 @@ fn openrouter_balance(limits: &RateLimits) -> Option<u64> {
 }
 
 fn format_balance(microusd: u64) -> String {
-    crate::popup_window::format_usd(microusd as f64 / 1_000_000.0)
+    crate::format::format_micro_usd(microusd)
 }
 
 /// The Dock's title and subtitle for a Glance, line for line as the taskbar
@@ -330,7 +330,7 @@ fn summary(
                     )
                 },
                 progress: row.progress,
-                reset_in: reset.map(|at| model::countdown(at, now)),
+                reset_in: reset.map(|at| crate::format::countdown(at, now)),
                 reset_at: reset.map(model::reset_clock),
             }
         })
