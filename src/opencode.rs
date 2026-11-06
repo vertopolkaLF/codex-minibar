@@ -716,4 +716,26 @@ mod tests {
         assert_eq!(go_stats.history.estimated_cost_microusd, 0);
         assert!(go_stats.history.requests > 0);
     }
+
+    #[test]
+    fn go_usage_normalizes_offsets_clamps_percent_and_ignores_null_optional_windows() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 1, 5, 0, 0).unwrap();
+        let limits = parse_go_usage(
+            r#"{"data":{"usage":{
+            "rolling":{"percent":101.5,"resetsAt":"2026-11-01T01:30:00-04:00","resetInSec":1},
+            "weekly":null, "monthly":{"percent":null}, "future":{"percent":99}
+        }}}"#,
+            now,
+        )
+        .unwrap();
+        assert_eq!(limits.primary.used_percent, Some(100));
+        assert_eq!(
+            limits.primary.resets_at,
+            Some(now + chrono::Duration::minutes(30))
+        );
+        assert_eq!(limits.secondary, LimitWindow::default());
+        assert!(limits.additional_limits.is_empty());
+        assert!(parse_go_usage(r#"{"usage":{"rolling":{"percent":null}}}"#, now).is_err());
+        assert!(parse_model_count(r#"{"data":null}"#).is_err());
+    }
 }

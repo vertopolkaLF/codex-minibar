@@ -943,4 +943,31 @@ mod tests {
         assert_eq!(unpriced.usage.cached_input_tokens, 5);
         assert_eq!(unpriced.usage.priced_requests, 0);
     }
+
+    #[test]
+    fn transcript_null_metadata_and_partial_cache_usage_keep_real_tokens() {
+        let record = usage_record(&serde_json::json!({
+            "id": null, "model": null, "type": "future-response",
+            "timestamp": "2026-11-01T01:30:00-04:00",
+            "usage": {"inputTokens": 10, "outputTokens": null,
+                      "cacheReadTokens": 99, "costUsd": null, "futureTokens": 500}
+        }))
+        .unwrap();
+        assert_eq!(
+            record.timestamp,
+            "2026-11-01T05:30:00Z".parse::<DateTime<Utc>>().unwrap()
+        );
+        assert_eq!(record.model, "unknown");
+        assert_eq!(record.id, None);
+        assert_eq!(record.usage.input_tokens, 10);
+        assert_eq!(record.usage.cached_input_tokens, 10);
+        assert_eq!(record.usage.output_tokens, 0);
+        assert_eq!(record.usage.priced_requests, 0);
+        assert!(
+            usage_record(&serde_json::json!({
+                "timestamp": "invalid", "usage": {"inputTokens": 10}
+            }))
+            .is_none()
+        );
+    }
 }

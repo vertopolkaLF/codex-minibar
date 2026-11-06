@@ -1269,4 +1269,41 @@ mod tests {
         assert!(args.contains(&"model_reasoning_effort=\"low\"".into()));
         assert!(!args.iter().any(|arg| arg == "service_tier=\"priority\""));
     }
+
+    #[test]
+    fn wham_null_windows_and_future_plan_do_not_invent_quota_or_credits() {
+        let value = json!({
+            "rate_limit": {"primary_window": null},
+            "plan_type": "future-enterprise", "email": "  ada@example.com  ",
+            "credits": null, "additional_rate_limits": null, "future": true
+        });
+        let parsed = parse_wham_usage(&value, Utc::now()).unwrap();
+        assert_eq!(parsed.primary, LimitWindow::default());
+        assert_eq!(parsed.secondary, LimitWindow::default());
+        assert_eq!(parsed.plan_type.as_deref(), Some("future-enterprise"));
+        assert_eq!(parsed.account_name.as_deref(), Some("ada@example.com"));
+        assert!(!parsed.credits.has_credits);
+        assert_eq!(parsed.credits.balance, None);
+        assert!(parsed.additional_limits.is_empty());
+        assert!(parse_wham_usage(&json!({}), Utc::now()).is_err());
+    }
+
+    #[test]
+    fn reset_credit_future_status_and_bad_dates_remain_distinct_from_available() {
+        let summary = parse_wham_reset_credits(Some(&json!({
+            "credits": [
+                {"status": "future-status", "expires_at": "2026-11-01T01:30:00-04:00"},
+                {"status": null, "expires_at": "not-a-date", "granted_at": null}
+            ]
+        })))
+        .unwrap();
+        assert_eq!(summary.available_count, 0);
+        assert_eq!(summary.credits[0].status, "future-status");
+        assert_eq!(
+            summary.credits[0].expires_at,
+            Some("2026-11-01T05:30:00Z".parse().unwrap())
+        );
+        assert_eq!(summary.credits[1].expires_at, None);
+        assert_eq!(summary.credits[1].granted_at, None);
+    }
 }

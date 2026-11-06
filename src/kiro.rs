@@ -1299,4 +1299,71 @@ mod tests {
         assert!(cli_auth_cache_is_fresh_at(&path, now));
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
+
+    #[test]
+    fn live_credits_prefer_precision_and_ignore_unrelated_resources() {
+        let response = serde_json::from_value(serde_json::json!({
+            "nextDateReset": "2024-03-01T03:00:00+03:00",
+            "subscriptionInfo": {"subscriptionTitle": "Kiro Pro", "type": "FUTURE_PLAN"},
+            "userInfo": {"email": "ada@example.com"},
+            "usageBreakdownList": [
+                {"resourceType": "FUTURE_RESOURCE", "currentUsage": 999, "usageLimit": 1},
+                {"resourceType": "CREDIT", "currentUsage": 10,
+                 "currentUsageWithPrecision": "12.75", "usageLimit": 100,
+                 "usageLimitWithPrecision": "150", "nextDateReset": null}
+            ],
+            "futureField": true
+        }))
+        .unwrap();
+        let limits = limits_from_live_usage(response).unwrap();
+        let amount = limits.secondary_usage_amount.unwrap();
+        assert_eq!(amount.used, 12.75);
+        assert_eq!(amount.limit, 150.0);
+        assert_eq!(limits.secondary.used_percent, Some(9));
+        assert_eq!(limits.account_name.as_deref(), Some("ada@example.com"));
+        assert_eq!(limits.plan_type.as_deref(), Some("Pro"));
+        assert_eq!(
+            limits.secondary.resets_at,
+            Some("2024-03-01T00:00:00Z".parse().unwrap())
+        );
+        assert_eq!(limits.secondary.duration_minutes, Some(29 * 24 * 60));
+    }
+
+    #[test]
+    fn live_credits_reject_absent_or_invalid_amounts() {
+        for raw in [
+            r#"{}"#,
+            r#"{"usageBreakdownList":[]}"#,
+            r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":null,"usageLimit":100}]}"#,
+            r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":-1,"usageLimit":100}]}"#,
+            r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":1,"usageLimit":0}]}"#,
+            r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":"NaN","usageLimit":100}]}"#,
+        ] {
+            assert!(
+                limits_from_live_usage(serde_json::from_str(raw).unwrap()).is_err(),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_timestamps_accept_offsets_and_numeric_units_but_not_nonfinite_values() {
+        let expected = timestamp_value(&serde_json::json!("2024-03-01T00:00:00Z"));
+        for value in [
+            serde_json::json!("2024-02-29T19:00:00-05:00"),
+            serde_json::json!(1709251200),
+            serde_json::json!(1709251200000_i64),
+            serde_json::json!("1709251200"),
+        ] {
+            assert_eq!(timestamp_value(&value), expected, "{value}");
+        }
+        for value in [
+            Value::Null,
+            serde_json::json!("NaN"),
+            serde_json::json!("Infinity"),
+            serde_json::json!("not-a-date"),
+        ] {
+            assert_eq!(timestamp_value(&value), None);
+        }
+    }
 }
