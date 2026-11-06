@@ -2463,4 +2463,36 @@ mod tests {
         .unwrap();
         assert_eq!(limits.spending.unwrap().used_microusd, 2_000_000);
     }
+
+    #[test]
+    fn oauth_future_windows_preserve_offsets_without_inventing_missing_usage() {
+        let limits = parse_usage_response(
+            r#"{
+            "five_hour": null,
+            "seven_day": {"utilization": 120.4, "resets_at": "2026-11-01T01:30:00-04:00"},
+            "seven_day_future_model": {"utilization": 12.6, "resets_at": "invalid"},
+            "future_metadata": {"status": "unknown"},
+            "future_null": null
+        }"#,
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(limits.primary, LimitWindow::default());
+        assert_eq!(limits.secondary.used_percent, Some(100));
+        assert_eq!(
+            limits.secondary.resets_at,
+            Some("2026-11-01T05:30:00Z".parse().unwrap())
+        );
+        assert_eq!(limits.additional_limits.len(), 1);
+        assert_eq!(limits.additional_limits[0].id, "seven_day_future_model");
+        assert_eq!(limits.additional_limits[0].window.used_percent, Some(13));
+        assert_eq!(limits.additional_limits[0].window.resets_at, None);
+        for raw in [
+            r#"{}"#,
+            r#"{"five_hour":null,"seven_day":null}"#,
+            r#"{"five_hour":{"utilization":"unknown"}}"#,
+        ] {
+            assert!(parse_usage_response(raw, Utc::now()).is_err(), "{raw}");
+        }
+    }
 }

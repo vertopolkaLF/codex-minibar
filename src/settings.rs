@@ -5126,4 +5126,71 @@ enabled = true
         assert!(loaded.onboarding_completed);
         assert!(path.with_extension("toml.corrupt").exists());
     }
+
+    #[test]
+    fn corrupt_recovery_keeps_original_bytes_and_persists_usable_defaults() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        let corrupt = "version = [\nthis is not TOML";
+        fs::write(&path, corrupt).unwrap();
+        let recovered = Settings::load_or_create(&path).unwrap();
+        assert_eq!(
+            fs::read_to_string(path.with_extension("toml.corrupt")).unwrap(),
+            corrupt
+        );
+        let saved = fs::read_to_string(&path).unwrap();
+        let reloaded = Settings::load_or_create(&path).unwrap();
+        assert_eq!(
+            toml::to_string(&recovered).unwrap(),
+            toml::to_string(&reloaded).unwrap()
+        );
+        assert_eq!(fs::read_to_string(&path).unwrap(), saved);
+        assert!(reloaded.onboarding_completed);
+    }
+
+    #[test]
+    fn importing_legacy_or_corrupt_files_never_rewrites_or_creates_backups() {
+        for (raw, valid) in [
+            (
+                "automatic_activation = false\nstart_at_login = true\ntray_widgets = []\n",
+                true,
+            ),
+            ("version = [broken", false),
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let path = directory.path().join("import.toml");
+            fs::write(&path, raw).unwrap();
+            let result = Settings::load_from_import(&path);
+            assert_eq!(result.is_ok(), valid);
+            if let Ok(settings) = result {
+                assert_eq!(settings.version, SETTINGS_VERSION);
+                assert!(settings.start_at_login);
+                assert!(
+                    settings
+                        .instances
+                        .iter()
+                        .all(|instance| !instance.auto_activation)
+                );
+            }
+            assert_eq!(fs::read_to_string(&path).unwrap(), raw);
+            assert_eq!(fs::read_dir(directory.path()).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn future_unknown_scalars_do_not_reset_known_preferences_on_roundtrip() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(&path, format!(
+            "version = {}\nstart_at_login = true\ncheck_for_updates = false\nfuture_option = 'new-value'\n",
+            SETTINGS_VERSION + 1
+        )).unwrap();
+        let settings = Settings::load_or_create(&path).unwrap();
+        assert!(settings.start_at_login);
+        assert!(!settings.check_for_updates);
+        settings.save(&path).unwrap();
+        let reloaded = Settings::load_or_create(&path).unwrap();
+        assert!(reloaded.start_at_login);
+        assert!(!reloaded.check_for_updates);
+    }
 }

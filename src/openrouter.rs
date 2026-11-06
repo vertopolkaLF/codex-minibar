@@ -1839,4 +1839,42 @@ mod tests {
             "Saved name"
         );
     }
+
+    #[test]
+    fn key_response_unknown_reset_and_null_limit_do_not_invent_a_budget() {
+        let parsed = parse_key_response(
+            r#"{"data":{
+            "name":null,"label":null,"usage":1.25,"limit":null,
+            "limit_remaining":null,"limit_reset":"future-period",
+            "expires_at":"2026-11-01T01:30:00-04:00","future":true
+        }}"#,
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(parsed.account_name, None);
+        assert_eq!(parsed.spending.used_microusd, 1_250_000);
+        assert_eq!(parsed.spending.limit_microusd, None);
+        assert_eq!(parsed.spending.remaining_microusd, None);
+        assert_eq!(parsed.spending.resets_at, None);
+        assert_eq!(
+            parsed.expires_at,
+            Some("2026-11-01T05:30:00Z".parse().unwrap())
+        );
+        for raw in [r#"{}"#, r#"{"data":null}"#, r#"{"data":{"usage":-1}}"#] {
+            assert!(parse_key_response(raw, Utc::now()).is_err(), "{raw}");
+        }
+    }
+
+    #[test]
+    fn monthly_reset_bounds_follow_utc_leap_year_and_year_rollover() {
+        for (sample, reset, days) in [
+            ("2024-02-29T23:59:59Z", "2024-03-01T00:00:00Z", 29),
+            ("2026-12-31T23:59:59Z", "2027-01-01T00:00:00Z", 31),
+            ("2024-03-01T00:00:00Z", "2024-04-01T00:00:00Z", 31),
+        ] {
+            let (_, end, minutes) = period_bounds(sample.parse().unwrap(), "monthly").unwrap();
+            assert_eq!(end, reset.parse::<DateTime<Utc>>().unwrap());
+            assert_eq!(minutes, days * 24 * 60);
+        }
+    }
 }

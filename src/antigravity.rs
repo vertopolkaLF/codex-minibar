@@ -1011,4 +1011,28 @@ mod tests {
             Some(app.as_path())
         );
     }
+
+    #[test]
+    fn summary_unknown_cadence_keeps_quota_and_offset_without_inventing_duration() {
+        let summary = json!({"groups":[null, {"displayName":"Gemini Models","buckets":[
+            {"bucketId":"gemini-future","window":"future-cadence",
+             "remainingFraction":0.25,"resetTime":"2026-11-01T01:30:00-04:00"},
+            {"bucketId":"gemini-weekly","remainingFraction":null}
+        ]}]});
+        let limits = limits_from_summary(&summary, None).unwrap();
+        assert_eq!(limits.primary.used_percent, Some(75));
+        assert_eq!(limits.primary.duration_minutes, None);
+        assert_eq!(
+            limits.primary.resets_at,
+            Some("2026-11-01T05:30:00Z".parse().unwrap())
+        );
+        assert!(limits.secondary.is_empty());
+        for summary in [
+            json!({}),
+            json!({"groups":null}),
+            json!({"groups":[{"buckets":null}]}),
+        ] {
+            assert!(limits_from_summary(&summary, None).is_err());
+        }
+    }
 }
