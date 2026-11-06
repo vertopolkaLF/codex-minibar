@@ -9,7 +9,7 @@ use std::{
     time::Instant,
 };
 
-use chrono::{DateTime, Duration, Local, NaiveDate};
+use chrono::{Duration, Local, NaiveDate};
 use gpui::{
     AnyElement, AnyView, AppContext, Bounds, ClickEvent, Context, FontWeight, Hsla,
     InteractiveElement, IntoElement, MouseMoveEvent, ParentElement, PathBuilder, Pixels, Render,
@@ -239,7 +239,7 @@ impl PopupRoot {
             self.ui.usage_revision,
             enabled,
             crate::store::codex_accounts::cached_current_id(),
-            crate::usage::truncate_local_hour(Local::now()),
+            crate::local_time::truncate_hour(Local::now()),
             metric,
             range,
             crate::i18n::current_language().index()
@@ -1920,7 +1920,7 @@ fn fill_daily_series(
     let mut day = start_date;
     while day <= end_date {
         filled.push(by_date.remove(&day).unwrap_or(DailySeriesPoint {
-            at: start_of_local_day(day),
+            at: crate::local_time::start_of_local_day(day),
             date: day,
             by_provider: BTreeMap::new(),
             total: 0,
@@ -1928,13 +1928,6 @@ fn fill_daily_series(
         day += Duration::days(1);
     }
     filled
-}
-
-fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
-    use chrono::TimeZone;
-    date.and_hms_opt(0, 0, 0)
-        .and_then(|naive| Local.from_local_datetime(&naive).single())
-        .unwrap_or_else(Local::now)
 }
 
 fn chart_scale_max(raw_max: u64) -> u64 {
@@ -2013,7 +2006,7 @@ mod tests {
                 ..Default::default()
             }],
             daily_series: vec![DailySeriesPoint {
-                at: start_of_local_day(date),
+                at: crate::local_time::start_of_local_day(date),
                 date,
                 by_provider: BTreeMap::from([(ProviderKind::Codex.into(), 100)]),
                 total: 100,

@@ -235,8 +235,8 @@ impl CursorClient {
             if Utc::now() - fetched_at >= USAGE_CACHE_TTL {
                 return Ok(None);
             }
-            let start = crate::usage::truncate_local_hour(Local::now() - ChronoDuration::hours(47));
-            let end = crate::usage::truncate_local_hour(Local::now());
+            let start = crate::local_time::hourly_window_start(Local::now());
+            let end = crate::local_time::truncate_hour(Local::now());
             if store.load_usage_hourly(CURSOR, start, end)?.is_empty() {
                 return Ok(None);
             }
@@ -420,7 +420,7 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
             .add(&row_usage);
         if let Some(timestamp) = timestamp {
             hourly
-                .entry(crate::usage::truncate_local_hour(timestamp))
+                .entry(crate::local_time::truncate_hour(timestamp))
                 .or_default()
                 .add(&row_usage);
         }

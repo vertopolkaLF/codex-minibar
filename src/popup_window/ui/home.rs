@@ -592,7 +592,7 @@ impl PopupRoot {
             self.ui.usage_revision,
             enabled,
             crate::store::codex_accounts::cached_current_id(),
-            crate::usage::truncate_local_hour(Local::now()),
+            crate::local_time::truncate_hour(Local::now()),
             period.key(),
             crate::i18n::current_language().index()
         );

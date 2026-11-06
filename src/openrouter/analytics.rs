@@ -1,11 +1,12 @@
 //! Account-wide OpenRouter analytics with atomic, persistent daily and hourly caches.
 use super::OpenRouterClient;
+use crate::local_time::{HOURLY_WINDOW_HOURS, RETENTION_DAYS, truncate_hour};
 use crate::{
     store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
 };
 use anyhow::{Context, Result, ensure};
-use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -55,13 +56,6 @@ struct HourlyRow {
     usage: TokenUsage,
 }
 
-// Subtract elapsed time rather than reconstructing an ambiguous local wall clock.
-fn hour_start<T: TimeZone>(at: DateTime<T>) -> DateTime<T> {
-    let elapsed = Duration::minutes(i64::from(at.minute()))
-        + Duration::seconds(i64::from(at.second()))
-        + Duration::nanoseconds(i64::from(at.nanosecond()));
-    at - elapsed
-}
 // Anchor to the chart's elapsed-hour grid. Rounding each wall-clock label
 // separately misaligns samples across half-hour DST changes (e.g. Lord Howe).
 fn window_bucket<T: TimeZone>(
@@ -405,7 +399,7 @@ fn query(
 // Fetch enough history for every supported overview range, including on upgrades.
 fn first_fetch_day(today: NaiveDate, history_days: u16) -> NaiveDate {
     let days = history_days
-        .clamp(1, 365)
+        .clamp(1, RETENTION_DAYS)
         .max(crate::usage_overview::OVERVIEW_MAX_DAYS);
     today - Duration::days(i64::from(days - 1))
 }
@@ -497,9 +491,9 @@ fn refresh_account(
             );
         }
     }
-    let current_hour = hour_start(now.with_timezone(&Local));
-    let start = (current_hour - Duration::hours(47)).with_timezone(&Utc);
-    let granularity = if (0..48).all(|i| {
+    let current_hour = truncate_hour(now.with_timezone(&Local));
+    let start = (current_hour - Duration::hours(HOURLY_WINDOW_HOURS - 1)).with_timezone(&Utc);
+    let granularity = if (0..HOURLY_WINDOW_HOURS).all(|i| {
         (current_hour - Duration::hours(i))
             .offset()
             .local_minus_utc()
@@ -704,6 +698,7 @@ fn parse_hourly(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
     #[test]
     fn truncated_dense_minute_history_splits_without_missing_or_duplicate_buckets() {
         let start = DateTime::parse_from_rfc3339("2026-10-01T18:30:00Z")
@@ -894,20 +889,20 @@ mod tests {
         let first = DateTime::parse_from_rfc3339("2026-10-25T02:37:00+02:00").unwrap();
         let second = DateTime::parse_from_rfc3339("2026-10-25T02:37:00+01:00").unwrap();
         assert_eq!(
-            hour_start(second).with_timezone(&Utc) - hour_start(first).with_timezone(&Utc),
+            truncate_hour(second).with_timezone(&Utc) - truncate_hour(first).with_timezone(&Utc),
             Duration::hours(1)
         );
-        assert_eq!(hour_start(first).minute(), 0);
+        assert_eq!(truncate_hour(first).minute(), 0);
         let fractional = DateTime::parse_from_rfc3339("2026-09-10T12:37:00+05:45").unwrap();
         assert_eq!(
-            hour_start(fractional).with_timezone(&Utc).to_rfc3339(),
+            truncate_hour(fractional).with_timezone(&Utc).to_rfc3339(),
             "2026-09-10T06:15:00+00:00"
         );
         // A spring-forward skips a local label but not an elapsed hour.
         let before = DateTime::parse_from_rfc3339("2026-03-29T01:37:00+01:00").unwrap();
         let after = DateTime::parse_from_rfc3339("2026-03-29T03:37:00+02:00").unwrap();
         assert_eq!(
-            hour_start(after).with_timezone(&Utc) - hour_start(before).with_timezone(&Utc),
+            truncate_hour(after).with_timezone(&Utc) - truncate_hour(before).with_timezone(&Utc),
             Duration::hours(1)
         );
     }
@@ -937,7 +932,7 @@ mod tests {
 
     #[test]
     fn rolling_window_includes_exactly_24_hours_and_aggregates_models() {
-        let end = hour_start(Local::now());
+        let end = truncate_hour(Local::now());
         let start = end - Duration::hours(23);
         let cache = Cache {
             hourly: Some(HourlyCache {

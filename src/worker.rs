@@ -600,7 +600,7 @@ fn run_usage_task_with_rate_limit(
                 }
             }
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
-                let days = days.clamp(1, 365);
+                let days = days.clamp(1, crate::local_time::RETENTION_DAYS);
                 if days != history_retention_days {
                     history_retention_days = days;
                     if (usage_collection_enabled || load_cached_usage_when_disabled)
@@ -670,7 +670,7 @@ fn run_usage_task_with_rate_limit(
                     next_refresh = Instant::now();
                 }
                 Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
-                    history_retention_days = days.clamp(1, 365);
+                    history_retention_days = days.clamp(1, crate::local_time::RETENTION_DAYS);
                     if load_cached_usage_when_disabled
                         && let Ok(usage) =
                             provider.load_cached_usage_statistics(history_retention_days)
@@ -758,7 +758,7 @@ fn run_usage_task_with_rate_limit(
         ) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
-                let days = days.clamp(1, 365);
+                let days = days.clamp(1, crate::local_time::RETENTION_DAYS);
                 if days != history_retention_days {
                     history_retention_days = days;
                     if let Ok(usage) = provider.load_cached_usage_statistics(history_retention_days)

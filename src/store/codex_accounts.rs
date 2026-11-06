@@ -839,7 +839,7 @@ impl ProviderStore {
         days: u16,
     ) -> Result<UsageStatistics> {
         let today = Local::now().date_naive();
-        let start = today - Duration::days(i64::from(days.clamp(1, 365) - 1));
+        let start = today - Duration::days(i64::from(days.clamp(1, RETENTION_DAYS) - 1));
         let mut query=self.conn.prepare(&format!("SELECT date,{SUMS} FROM (
             SELECT date,{VALUES} FROM codex_events WHERE account=(SELECT id FROM codex_names WHERE name=?1) AND date>=?2 AND date<=?3 AND covered=0
             UNION ALL SELECT date,{VALUES} FROM codex_legacy_daily WHERE account=?1 AND date>=?2 AND date<=?3
@@ -943,7 +943,7 @@ impl ProviderStore {
                 &mut result
             };
             hours
-                .entry(truncate_local_hour(at.with_timezone(&Local)))
+                .entry(truncate_hour(at.with_timezone(&Local)))
                 .or_default()
                 .add(&usage);
         }
@@ -1338,7 +1338,7 @@ mod tests {
             &[("model-a".into(), yesterday, old.clone())],
         )
         .unwrap();
-        let hour = truncate_local_hour(Local::now() - Duration::hours(2));
+        let hour = truncate_hour(Local::now() - Duration::hours(2));
         db.replace_usage_hourly(
             crate::instances::ProviderId::from(ProviderKind::Codex),
             &[(hour, old.clone())],
@@ -1537,7 +1537,7 @@ mod tests {
                 1
             );
         }
-        let hour = truncate_local_hour(now.with_timezone(&Local));
+        let hour = truncate_hour(now.with_timezone(&Local));
         assert_eq!(
             db.account_hourly_for("only-account", hour - Duration::hours(1), hour)
                 .unwrap()

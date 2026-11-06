@@ -2538,7 +2538,9 @@ impl Settings {
     /// Clamps out-of-range values instead of rejecting the whole file.
     fn repair_inplace(&mut self) -> bool {
         let mut changed = false;
-        let retention = self.history_retention_days.clamp(1, 365);
+        let retention = self
+            .history_retention_days
+            .clamp(1, crate::local_time::RETENTION_DAYS);
         if retention != self.history_retention_days {
             self.history_retention_days = retention;
             changed = true;
@@ -2634,7 +2636,7 @@ impl Settings {
 
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
-            (1..=365).contains(&self.history_retention_days),
+            (1..=crate::local_time::RETENTION_DAYS).contains(&self.history_retention_days),
             crate::i18n::tr("history-retention-must-be-between-1-and-365-days")
         );
         anyhow::ensure!(

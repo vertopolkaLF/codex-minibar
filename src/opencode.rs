@@ -26,7 +26,6 @@ use crate::{
 const ZEN_MODELS_URL: &str = "https://opencode.ai/zen/v1/models";
 const GO_USAGE_URL: &str = "https://opencode.ai/zen/go/v1/usage";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
-const LOCAL_HISTORY_DAYS: i64 = 365;
 const ZEN_SECRET_NAME: &str = "opencode-zen";
 const GO_SECRET_NAME: &str = "opencode-go";
 
@@ -193,8 +192,9 @@ impl OpenCodeClient {
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )
         .with_context(|| format!("open OpenCode database read-only at {}", path.display()))?;
-        let oldest_ms =
-            (Utc::now() - chrono::Duration::days(LOCAL_HISTORY_DAYS)).timestamp_millis();
+        let oldest_ms = (Utc::now()
+            - chrono::Duration::days(i64::from(crate::local_time::RETENTION_DAYS)))
+        .timestamp_millis();
         let mut statement = connection.prepare(
             "SELECT
                  CAST(COALESCE(json_extract(data, '$.time.created'), time_created) AS INTEGER),
@@ -223,7 +223,7 @@ impl OpenCodeClient {
 
         let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
         let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
-        let hourly_since = Utc::now() - chrono::Duration::hours(48);
+        let hourly_since = crate::local_time::hourly_window_start(Local::now());
         for row in rows {
             let (timestamp_ms, cost, input, cache_read, output, reasoning) = row?;
             if !cost.is_finite() || cost < 0.0 {
@@ -250,7 +250,7 @@ impl OpenCodeClient {
                 .add(&usage);
             if timestamp >= hourly_since {
                 hourly
-                    .entry(crate::usage::truncate_local_hour(
+                    .entry(crate::local_time::truncate_hour(
                         timestamp.with_timezone(&Local),
                     ))
                     .or_default()

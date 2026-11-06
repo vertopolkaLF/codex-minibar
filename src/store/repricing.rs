@@ -344,7 +344,8 @@ impl ProviderStore {
             let id = ProviderId::lookup(provider)
                 .unwrap_or_else(|| ProviderId::new(ProviderKind::Claude, provider));
             let cache = self.load_claude_cache(id)?;
-            let stats = usage::statistics_from_claude_cache(&cache, 365);
+            let stats =
+                usage::statistics_from_claude_cache(&cache, crate::local_time::RETENTION_DAYS);
             self.replace_usage_daily_bounded(id, &stats.daily, None)?;
             self.replace_usage_model_daily_in_transaction(
                 id,

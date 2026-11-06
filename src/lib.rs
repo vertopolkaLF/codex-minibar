@@ -16,6 +16,7 @@ pub mod i18n;
 pub mod instances;
 pub mod kiro;
 pub mod limits;
+pub mod local_time;
 pub mod logger;
 pub mod net;
 pub mod notifications;

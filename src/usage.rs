@@ -6,10 +6,11 @@ use std::{
 };
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Duration, Local, NaiveDate, Timelike, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::local_time::{HOURLY_WINDOW_HOURS, RETENTION_DAYS, hourly_window_start, truncate_hour};
 use crate::{instances::ProviderId, pricing, settings::ProviderKind, store};
 
 // Version 9 upgrades attributed event identity to include the record offset.
@@ -24,7 +25,6 @@ pub(crate) const CODEX_CACHE_VERSION: u8 = 9;
 // newly scanned lines only; bumping the version would rebuild from logs Claude
 // Code may already have deleted.
 pub(crate) const CLAUDE_CACHE_VERSION: u8 = 4;
-const CACHE_RETENTION_DAYS: i64 = 365;
 
 /// Locally recorded Codex token usage. This is deliberately derived only from
 /// session logs: it never reads credentials or contacts OpenAI directly.
@@ -261,7 +261,7 @@ pub fn refresh_usage_statistics(
     let known_paths: BTreeSet<String> = files.iter().map(|(_, key)| key.clone()).collect();
     cache.files.retain(|path, _| known_paths.contains(path));
 
-    let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+    let oldest = Local::now().date_naive() - Duration::days(i64::from(RETENTION_DAYS) - 1);
     let mut account_events = Vec::new();
     let mut rebuilt_sources = Vec::new();
     for (path, key) in files {
@@ -323,9 +323,11 @@ fn refresh_instance_usage_statistics(
     let files = collect_codex_session_files(home)?;
     let known_paths: BTreeSet<String> = files.iter().map(|(_, key)| key.clone()).collect();
     cache.files.retain(|path, _| known_paths.contains(path));
-    let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
-    let hourly_from = truncate_local_hour(Local::now() - Duration::hours(47));
-    let recent_since = std::time::SystemTime::now() - std::time::Duration::from_secs(49 * 3600);
+    let oldest = Local::now().date_naive() - Duration::days(i64::from(RETENTION_DAYS) - 1);
+    let hourly_from = hourly_window_start(Local::now());
+    // One hour of slack for files written just before the window opened.
+    let recent_since = std::time::SystemTime::now()
+        - std::time::Duration::from_secs((HOURLY_WINDOW_HOURS as u64 + 1) * 3600);
     let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
     for (path, key) in files {
         let cached = cache.files.entry(key.clone()).or_default();
@@ -345,7 +347,7 @@ fn refresh_instance_usage_statistics(
                 let at = event.timestamp.with_timezone(&Local);
                 if at >= hourly_from {
                     hourly
-                        .entry(truncate_local_hour(at))
+                        .entry(truncate_hour(at))
                         .or_default()
                         .add(&event.usage);
                 }
@@ -363,20 +365,12 @@ fn refresh_instance_usage_statistics(
     load_cached_usage_statistics(provider, history_days)
 }
 
-pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
-    // Preserve the UTC offset during repeated local hours at the DST transition.
-    timestamp
-        - Duration::minutes(i64::from(timestamp.minute()))
-        - Duration::seconds(i64::from(timestamp.second()))
-        - Duration::nanoseconds(i64::from(timestamp.nanosecond()))
-}
-
 /// Merges same-day rows and builds today/history totals for the requested window.
 pub(crate) fn statistics_from_daily(
     days: &[DailyTokenUsage],
     history_days: u16,
 ) -> UsageStatistics {
-    let history_days = history_days.clamp(1, 365);
+    let history_days = history_days.clamp(1, RETENTION_DAYS);
     let today = Local::now().date_naive();
     let first_day = today - Duration::days(i64::from(history_days.saturating_sub(1)));
     let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
@@ -833,7 +827,7 @@ pub fn refresh_claude_usage_statistics(
             cached.set_cwd(String::new());
         }
     }
-    let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+    let oldest = Local::now().date_naive() - Duration::days(i64::from(RETENTION_DAYS) - 1);
     prune_claude_history(&mut cache, &known_paths, oldest);
     cache.version = CLAUDE_CACHE_VERSION;
     let entries = deduplicate_claude_entries_by_file(&cache);
@@ -1544,7 +1538,7 @@ mod tests {
             ]),
         };
         let known = BTreeSet::from([key(&live)]);
-        let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
+        let oldest = Local::now().date_naive() - Duration::days(i64::from(RETENTION_DAYS) - 1);
 
         prune_claude_history(&mut cache, &known, oldest);
 

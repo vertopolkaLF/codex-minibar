@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use chrono::{DateTime, Datelike, Duration, Local, NaiveDate, TimeZone};
+use chrono::{DateTime, Datelike, Duration, Local, NaiveDate};
 
 use crate::{
     instances::ProviderId,
@@ -189,7 +189,7 @@ pub fn build_overview_snapshot(
 ) -> OverviewSnapshot {
     let now = Local::now();
     let hourly = range == OverviewRange::Past24h;
-    let end_hour = crate::usage::truncate_local_hour(now);
+    let end_hour = crate::local_time::truncate_hour(now);
     let start_hour = end_hour - Duration::hours(23);
     let end_date = now.date_naive();
     let start_date = if hourly {
@@ -219,7 +219,7 @@ fn assemble_overview_snapshot(
     hourly: bool,
 ) -> OverviewSnapshot {
     let now = Local::now();
-    let end_hour = crate::usage::truncate_local_hour(now);
+    let end_hour = crate::local_time::truncate_hour(now);
     let start_hour = end_hour - Duration::hours(23);
     // statistics_from_daily is always anchored to today, so load enough days
     // to include `start_date` even when the window ends on yesterday.
@@ -526,7 +526,7 @@ fn assemble_overview_snapshot(
                     total = total.saturating_add(value);
                 }
                 DailySeriesPoint {
-                    at: start_of_local_day(date),
+                    at: crate::local_time::start_of_local_day(date),
                     date,
                     by_provider: values,
                     total,
@@ -790,12 +790,6 @@ pub fn format_hour_label(at: DateTime<Local>) -> String {
     crate::settings::TimeFormat::current().format_hour_label(at)
 }
 
-fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
-    date.and_hms_opt(0, 0, 0)
-        .and_then(|naive| Local.from_local_datetime(&naive).single())
-        .unwrap_or_else(Local::now)
-}
-
 fn slice_provider_usage(days: &[DailyTokenUsage], start: NaiveDate, end: NaiveDate) -> TokenUsage {
     let mut usage = TokenUsage::default();
     for entry in days {
@@ -862,7 +856,7 @@ mod tests {
                 },
             ],
             daily_series: vec![DailySeriesPoint {
-                at: start_of_local_day(date),
+                at: crate::local_time::start_of_local_day(date),
                 date,
                 by_provider: BTreeMap::from([(claude, 100), (codex, 300)]),
                 total: 400,

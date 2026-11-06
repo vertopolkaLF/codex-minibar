@@ -11,12 +11,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Duration, Local, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Duration, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::limits::{ProviderLimits, RateLimits};
+use crate::local_time::{HOURLY_WINDOW_HOURS, RETENTION_DAYS, start_of_local_day, truncate_hour};
 use crate::usage::{
     CachedClaudeSessionFile, CachedClaudeUsageEntry, CachedSessionFile, ClaudeUsageCache,
     DailyTokenUsage, TokenUsage, UsageCache, UsageStatistics, statistics_from_daily,
@@ -30,7 +31,6 @@ const SCHEMA_VERSION: i64 = 1;
 const CODEX_CACHE_VERSION: u8 = crate::usage::CODEX_CACHE_VERSION;
 const CLAUDE_CACHE_VERSION: u8 = crate::usage::CLAUDE_CACHE_VERSION;
 const CURSOR_USAGE_VERSION: u8 = 8;
-const CACHE_RETENTION_DAYS: i64 = 365;
 
 static SHARED: OnceLock<Arc<Mutex<ProviderStore>>> = OnceLock::new();
 
@@ -612,10 +612,7 @@ impl ProviderStore {
             let (hour_str, usage) = row?;
             if let Some(dt) = parse_datetime_option(&hour_str) {
                 let hour = dt.with_timezone(&Local);
-                hourly
-                    .entry(truncate_local_hour(hour))
-                    .or_default()
-                    .add(&usage);
+                hourly.entry(truncate_hour(hour)).or_default().add(&usage);
             } else {
                 eprintln!(
                     "Skipping usage_hourly row with malformed hour: {}",
@@ -692,7 +689,7 @@ impl ProviderStore {
                 continue;
             }
             hourly
-                .entry(truncate_local_hour(local))
+                .entry(truncate_hour(local))
                 .or_default()
                 .add(&entry.usage);
         }
@@ -1111,10 +1108,7 @@ impl ProviderStore {
             i64::from(cache.version),
             Some(flags.to_string()),
         )?;
-        self.replace_usage_daily(
-            provider,
-            &aggregate_codex_daily(cache, CACHE_RETENTION_DAYS as u16),
-        )?;
+        self.replace_usage_daily(provider, &aggregate_codex_daily(cache, RETENTION_DAYS))?;
         self.replace_usage_model_daily(provider, &aggregate_codex_model_daily(cache))?;
         Ok(())
     }
@@ -1959,7 +1953,7 @@ impl ProviderStore {
             return Ok(false);
         }
         self.save_claude_cache(ProviderId::primary(ProviderKind::Claude), &cache)?;
-        let stats = crate::usage::statistics_from_claude_cache(&cache, CACHE_RETENTION_DAYS as u16);
+        let stats = crate::usage::statistics_from_claude_cache(&cache, RETENTION_DAYS);
         self.replace_usage_daily(ProviderId::primary(ProviderKind::Claude), &stats.daily)?;
         self.replace_usage_model_daily(
             ProviderId::primary(ProviderKind::Claude),
@@ -1992,7 +1986,7 @@ struct LegacyCursorUsageCache {
 }
 
 /// The primary instance keeps the original key so existing analytics survive.
-const HOURLY_RETENTION_DAYS: i64 = 8;
+const HOURLY_RETENTION_HOURS: i64 = 4 * HOURLY_WINDOW_HOURS;
 
 /// Canonical UTC key for `usage_hourly.hour`; lexical order equals time order.
 fn hour_key<Tz: TimeZone>(at: DateTime<Tz>) -> String {
@@ -2001,7 +1995,7 @@ fn hour_key<Tz: TimeZone>(at: DateTime<Tz>) -> String {
 }
 
 fn hourly_cutoff() -> String {
-    hour_key(Utc::now() - Duration::days(HOURLY_RETENTION_DAYS))
+    hour_key(Utc::now() - Duration::hours(HOURLY_RETENTION_HOURS))
 }
 
 fn openrouter_analytics_key(provider: ProviderId) -> String {
@@ -2122,12 +2116,6 @@ fn aggregate_codex_model_daily(cache: &UsageCache) -> Vec<(String, NaiveDate, To
         .collect()
 }
 
-fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
-    date.and_hms_opt(0, 0, 0)
-        .and_then(|naive| Local.from_local_datetime(&naive).single())
-        .unwrap_or_else(Local::now)
-}
-
 fn parse_date_option(raw: &str) -> Option<NaiveDate> {
     NaiveDate::parse_from_str(raw, "%Y-%m-%d").ok()
 }
@@ -2142,14 +2130,6 @@ fn parse_datetime_option(raw: &str) -> Option<DateTime<Utc>> {
         .ok()
 }
 
-fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
-    timestamp
-        .with_minute(0)
-        .and_then(|value| value.with_second(0))
-        .and_then(|value| value.with_nanosecond(0))
-        .unwrap_or(timestamp)
-}
-
 /// Convenience helper used by workers that only need a short critical section.
 pub fn with_store<R>(f: impl FnOnce(&mut ProviderStore) -> Result<R>) -> Result<R> {
     let store = shared()?;
@@ -2162,6 +2142,7 @@ pub fn with_store<R>(f: impl FnOnce(&mut ProviderStore) -> Result<R>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
     use tempfile::tempdir;
 
     fn id(kind: ProviderKind) -> ProviderId {
@@ -2814,7 +2795,7 @@ mod tests {
     fn claude_hourly_dedupes_copied_messages_and_includes_the_end_hour() {
         let dir = tempdir().unwrap();
         let store = test_store(&dir.path().join("test.sqlite"));
-        let hour = truncate_local_hour(Local::now());
+        let hour = truncate_hour(Local::now());
         let at = hour + Duration::minutes(30);
         let entry = |message: &str| CachedClaudeUsageEntry {
             timestamp: at.with_timezone(&Utc),

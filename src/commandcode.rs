@@ -51,8 +51,6 @@ const CLI_NAMES: &[&str] = &[
     "commandcode.ps1",
 ];
 pub(crate) const MONTHLY_LIMIT_ID: &str = "monthly";
-const LOCAL_HISTORY_DAYS: i64 = 365;
-const HOURLY_HISTORY_HOURS: i64 = 48;
 
 /// Monthly USD allowance per subscription plan, from
 /// https://commandcode.ai/pricing. The credits response reports only the
@@ -598,8 +596,8 @@ struct UsageRollup {
 }
 
 fn rollup(sessions: &HashMap<PathBuf, SessionLog>, now: DateTime<Utc>) -> UsageRollup {
-    let oldest = now - chrono::Duration::days(LOCAL_HISTORY_DAYS);
-    let hourly_since = now - chrono::Duration::hours(HOURLY_HISTORY_HOURS);
+    let oldest = now - chrono::Duration::days(i64::from(crate::local_time::RETENTION_DAYS));
+    let hourly_since = crate::local_time::hourly_window_start(now.with_timezone(&Local));
     // A log without its own `session` header shares its siblings' project.
     let folder = |path: &Path| {
         path.parent()
@@ -650,7 +648,7 @@ fn rollup(sessions: &HashMap<PathBuf, SessionLog>, now: DateTime<Utc>) -> UsageR
                 .add(&record.usage);
             if record.timestamp >= hourly_since {
                 hourly
-                    .entry(crate::usage::truncate_local_hour(local))
+                    .entry(crate::local_time::truncate_hour(local))
                     .or_default()
                     .add(&record.usage);
             }

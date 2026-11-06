@@ -150,7 +150,11 @@ impl Series {
 }
 
 pub(crate) fn buckets(statistics: &UsageStatistics, today: NaiveDate) -> Vec<Bucket> {
-    let days = usize::from(statistics.history_days.clamp(1, 365));
+    let days = usize::from(
+        statistics
+            .history_days
+            .clamp(1, crate::local_time::RETENTION_DAYS),
+    );
     let first = today - ChronoDuration::days((days - 1) as i64);
     let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
     for entry in &statistics.daily {
