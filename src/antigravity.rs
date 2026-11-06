@@ -381,22 +381,14 @@ fn post_json(
         .set("User-Agent", USER_AGENT)
         .send_string(&body.to_string())
     {
-        Ok(response) => response,
-        Err(ureq::Error::Status(401, _)) => {
-            bail!("Antigravity session is not authorized; run `agy` and sign in")
-        }
         Err(ureq::Error::Status(403, _)) => {
             bail!("Antigravity limits are not available for this account")
         }
-        Err(ureq::Error::Status(429, _)) => {
-            return Err(crate::worker::rate_limit_error(
-                "Antigravity quota request was rate limited (HTTP 429).",
-            ));
-        }
-        Err(ureq::Error::Status(status, _)) => {
-            bail!("Antigravity quota request failed with HTTP {status}")
-        }
-        Err(error) => return Err(error).context("request Antigravity subscription quota"),
+        result => crate::net::provider_response(
+            result,
+            "Antigravity quota",
+            "Antigravity session is not authorized; run `agy` and sign in",
+        )?,
     };
     let body = response
         .into_string()
@@ -825,7 +817,7 @@ mod tests {
                 .timeout(Duration::from_secs(5))
                 .build();
             let error = read_remote_limits(&agent, &base, &base, "test-token").unwrap_err();
-            assert_eq!(crate::worker::is_rate_limited_error(&error), status == 429);
+            assert_eq!(crate::net::is_rate_limited_error(&error), status == 429);
             assert_eq!(peer.join().unwrap().len(), 2);
         }
     }

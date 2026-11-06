@@ -25,31 +25,6 @@ const RATE_LIMIT_FIRST_PAUSE: Duration = Duration::from_secs(5 * 60);
 const RATE_LIMIT_ESCALATED_PAUSE: Duration = Duration::from_secs(15 * 60);
 const RATE_LIMIT_ESCALATION_WINDOW: Duration = Duration::from_secs(5 * 60);
 
-#[derive(Debug)]
-pub(crate) struct ProviderRateLimitResponse;
-
-impl std::fmt::Display for ProviderRateLimitResponse {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("provider returned HTTP 429")
-    }
-}
-
-impl std::error::Error for ProviderRateLimitResponse {}
-
-pub(crate) fn rate_limit_error(message: impl Into<String>) -> anyhow::Error {
-    anyhow::Error::new(ProviderRateLimitResponse).context(message.into())
-}
-
-pub(crate) fn is_rate_limited_error(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause.downcast_ref::<ProviderRateLimitResponse>().is_some()
-            || matches!(
-                cause.downcast_ref::<ureq::Error>(),
-                Some(ureq::Error::Status(429, _))
-            )
-    })
-}
-
 #[derive(Default)]
 struct ProviderRateLimitPause {
     last_429_at: Option<Instant>,
@@ -498,7 +473,7 @@ fn run_limit_task(
                     let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Limits));
                 }
                 Err(error) => {
-                    rate_limited = is_rate_limited_error(&error);
+                    rate_limited = crate::net::is_rate_limited_error(&error);
                     let _ = events.send(WorkerEvent::PollFailed(error.to_string()));
                     let _ = events.send(WorkerEvent::RequestFinished(RequestKind::Limits));
                 }
@@ -752,7 +727,7 @@ fn run_usage_task_with_rate_limit(
                     rate_limited
                 }
                 Err(error) => {
-                    let rate_limited = is_rate_limited_error(&error);
+                    let rate_limited = crate::net::is_rate_limited_error(&error);
                     let _ = events.send(WorkerEvent::UsageRefreshFailed(error.to_string()));
                     rate_limited
                 }

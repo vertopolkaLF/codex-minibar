@@ -1477,7 +1477,7 @@ impl Render for DraggedProvider {
 }
 
 pub(super) fn open_url(url: &str) {
-    if let Err(error) = crate::updater::open_url(url) {
+    if let Err(error) = crate::shell::open_url(url) {
         eprintln!("failed to open {url}: {error:#}");
     }
 }

@@ -71,7 +71,7 @@ impl KiroClient {
 
         match read_live_usage_limits() {
             Ok(limits) => Ok(self.with_cli_identity(limits)),
-            Err(error) if crate::worker::is_rate_limited_error(&error) => Err(error),
+            Err(error) if crate::net::is_rate_limited_error(&error) => Err(error),
             Err(live_error)
                 if self.app_path.is_some()
                     || self.state_path.as_ref().is_some_and(|path| path.is_file()) =>
@@ -751,23 +751,14 @@ fn read_live_usage_limits() -> Result<RateLimits> {
     }
 
     let response = match request.call() {
-        Ok(response) => response,
-        Err(ureq::Error::Status(429, _)) => {
-            return Err(crate::worker::rate_limit_error(
-                "Kiro usage request was rate limited (HTTP 429).",
-            ));
-        }
-        Err(ureq::Error::Status(401 | 403, _)) => {
-            return Err(anyhow!(
-                "Kiro rejected its saved access token; open Kiro IDE or sign in again with Kiro CLI"
-            ));
-        }
-        Err(ureq::Error::Status(status, _)) => {
-            return Err(anyhow!("Kiro usage request failed with HTTP {status}"));
-        }
         Err(ureq::Error::Transport(_)) => {
             return Err(anyhow!("Kiro usage endpoint is unreachable"));
         }
+        result => crate::net::provider_response(
+            result,
+            "Kiro usage",
+            "Kiro rejected its saved access token; open Kiro IDE or sign in again with Kiro CLI",
+        )?,
     };
     let raw = response
         .into_string()

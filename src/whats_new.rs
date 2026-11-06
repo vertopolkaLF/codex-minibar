@@ -9,11 +9,9 @@
 //! the user last saw. A missing summary (404) simply means there is nothing
 //! to show for that release.
 
-use std::{
-    collections::HashMap, fs, io::Read, ops::Range, path::Path, sync::Arc, thread, time::Duration,
-};
+use std::{collections::HashMap, fs, ops::Range, path::Path, sync::Arc, thread, time::Duration};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use pulldown_cmark::{Event, HeadingLevel, Options, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
@@ -422,12 +420,10 @@ pub fn release_url(version: &str) -> String {
 }
 
 fn http_agent() -> Agent {
-    let tls = ureq::native_tls::TlsConnector::new().expect("create native-tls connector");
-    ureq::AgentBuilder::new()
+    crate::net::native_tls_agent()
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(Duration::from_secs(20))
         .timeout_write(Duration::from_secs(20))
-        .tls_connector(Arc::new(tls))
         .build()
 }
 
@@ -443,16 +439,10 @@ fn get(agent: &Agent, url: &str, limit: u64) -> Result<Option<Vec<u8>>> {
         Err(ureq::Error::Status(404, _)) => return Ok(None),
         Err(error) => return Err(error).with_context(|| format!("GET {url}")),
     };
-    let mut body = Vec::new();
-    response
-        .into_reader()
-        .take(limit + 1)
-        .read_to_end(&mut body)
-        .with_context(|| format!("read {url}"))?;
-    if body.len() as u64 > limit {
-        bail!("{url} is larger than {limit} bytes");
-    }
-    Ok(Some(body))
+    crate::net::read_limited(response, limit)
+        .with_context(|| format!("read {url}"))?
+        .with_context(|| format!("{url} is larger than {limit} bytes"))
+        .map(Some)
 }
 
 /// Fetch and decode the summary for `version` in `language`, falling back

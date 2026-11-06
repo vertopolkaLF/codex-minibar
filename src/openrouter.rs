@@ -115,7 +115,7 @@ fn read_key_with_agent(
                 return Ok(KeyReadOutcome::Expired);
             }
             if status == 429 {
-                return Err(crate::worker::rate_limit_error(
+                return Err(crate::net::rate_limit_error(
                     "OpenRouter API-key usage request was rate limited (HTTP 429).",
                 ));
             }
@@ -148,7 +148,7 @@ fn read_account_credits_with_agent(
     {
         Ok(response) => response,
         Err(ureq::Error::Status(429, _)) => {
-            return Err(crate::worker::rate_limit_error(
+            return Err(crate::net::rate_limit_error(
                 "OpenRouter account credits request was rate limited (HTTP 429).",
             ));
         }
@@ -175,7 +175,7 @@ fn read_key_directory_with_agent(
     {
         Ok(response) => response,
         Err(ureq::Error::Status(429, _)) => {
-            return Err(crate::worker::rate_limit_error(
+            return Err(crate::net::rate_limit_error(
                 "OpenRouter API key directory request was rate limited (HTTP 429).",
             ));
         }
@@ -258,7 +258,7 @@ fn fetch_openrouter_account(
             let mut rate_limited = directory
                 .as_ref()
                 .and_then(|result| result.as_ref().err())
-                .is_some_and(crate::worker::is_rate_limited_error);
+                .is_some_and(crate::net::is_rate_limited_error);
             let mut errors = Vec::new();
             if let Some(Err(error)) = &directory {
                 errors.push(format!("Key directory: {error:#}"));
@@ -276,7 +276,7 @@ fn fetch_openrouter_account(
                 result
                     .as_ref()
                     .err()
-                    .is_some_and(crate::worker::is_rate_limited_error)
+                    .is_some_and(crate::net::is_rate_limited_error)
             });
             for (key, result) in account.api_keys.iter().zip(&live_results) {
                 if let Err(error) = result {
@@ -291,7 +291,7 @@ fn fetch_openrouter_account(
             rate_limited |= credits
                 .as_ref()
                 .and_then(|result| result.as_ref().err())
-                .is_some_and(crate::worker::is_rate_limited_error);
+                .is_some_and(crate::net::is_rate_limited_error);
             if let Some(Err(error)) = &credits {
                 errors.push(format!("Account credits: {error:#}"));
             }
@@ -443,7 +443,7 @@ impl LimitProvider for OpenRouterClient {
         });
 
         if fetched.iter().any(|account| account.rate_limited) {
-            return Err(crate::worker::rate_limit_error(
+            return Err(crate::net::rate_limit_error(
                 "OpenRouter account usage request was rate limited (HTTP 429).",
             ));
         }

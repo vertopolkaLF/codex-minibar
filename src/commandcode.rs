@@ -86,31 +86,20 @@ impl CommandCodeClient {
     }
 
     fn get(&self, path: &str, api_key: &str) -> Result<String> {
-        let response = match self
+        let response = self
             .agent
             .get(&format!("{API_BASE}{path}"))
             .set("Authorization", &format!("Bearer {api_key}"))
             .set("Accept", "application/json")
             .set("User-Agent", "Codex Minibar")
-            .call()
-        {
-            Ok(response) => response,
-            Err(ureq::Error::Status(401 | 403, _)) => {
-                bail!("Command Code API key was rejected; run `cmdc login`")
-            }
-            Err(ureq::Error::Status(429, _)) => {
-                return Err(crate::worker::rate_limit_error(
-                    "Command Code billing request was rate limited (HTTP 429).",
-                ));
-            }
-            Err(ureq::Error::Status(status, _)) => {
-                bail!("Command Code billing request failed with HTTP {status}")
-            }
-            Err(error) => return Err(error).context("request Command Code billing"),
-        };
-        response
-            .into_string()
-            .context("read Command Code billing response")
+            .call();
+        crate::net::provider_response(
+            response,
+            "Command Code billing",
+            "Command Code API key was rejected; run `cmdc login`",
+        )?
+        .into_string()
+        .context("read Command Code billing response")
     }
 }
 

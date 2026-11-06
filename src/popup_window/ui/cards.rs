@@ -1736,7 +1736,7 @@ impl PopupRoot {
                         cx,
                     ))
                     .on_click(move |_: &ClickEvent, _, _| {
-                        if let Err(error) = crate::updater::open_url(&url) {
+                        if let Err(error) = crate::shell::open_url(&url) {
                             crate::logger::info(format!(
                                 "failed to open status page {url}: {error:#}"
                             ));
@@ -1910,7 +1910,7 @@ impl PopupRoot {
             .on_hover(self.hover_listener(hover_id, Some(tip), cx))
             .on_click(move |_: &ClickEvent, _, _| {
                 if let Some(url) = source.as_deref()
-                    && let Err(error) = crate::updater::open_url(url)
+                    && let Err(error) = crate::shell::open_url(url)
                 {
                     crate::logger::info(format!(
                         "failed to open forced reset source {url}: {error:#}"

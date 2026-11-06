@@ -67,7 +67,7 @@ impl LimitProvider for GrokClient {
             bail!("Grok team subscription usage is not available")
         }
 
-        let response = match self
+        let response = self
             .agent
             .get(BILLING_URL)
             .set(
@@ -77,22 +77,12 @@ impl LimitProvider for GrokClient {
             .set("x-xai-token-auth", "xai-grok-cli")
             .set("Accept", "application/json")
             .set("User-Agent", "Codex Minibar")
-            .call()
-        {
-            Ok(response) => response,
-            Err(ureq::Error::Status(401 | 403, _)) => {
-                bail!("Grok session is not authorized; run `grok login`")
-            }
-            Err(ureq::Error::Status(429, _)) => {
-                return Err(crate::worker::rate_limit_error(
-                    "Grok subscription quota request was rate limited (HTTP 429).",
-                ));
-            }
-            Err(ureq::Error::Status(status, _)) => {
-                bail!("Grok subscription quota request failed with HTTP {status}")
-            }
-            Err(error) => return Err(error).context("request Grok subscription quota"),
-        };
+            .call();
+        let response = crate::net::provider_response(
+            response,
+            "Grok subscription quota",
+            "Grok session is not authorized; run `grok login`",
+        )?;
         let body = response
             .into_string()
             .context("read Grok subscription quota response")?;

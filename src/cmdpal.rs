@@ -502,7 +502,7 @@ fn download_package() -> anyhow::Result<PathBuf> {
     let directory = std::env::temp_dir().join("Codex Minibar");
     fs::create_dir_all(&directory)?;
     let path = directory.join(format!("{PACKAGE_NAME}-{stamp}.msix"));
-    crate::updater::download_file(&package_url(), &path)?;
+    crate::net::download(&package_url(), &path)?;
     Ok(path)
 }
 

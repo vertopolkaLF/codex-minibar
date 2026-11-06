@@ -281,7 +281,7 @@ fn status_error(status: u16, body: &str) -> anyhow::Error {
         401 => anyhow!(crate::i18n::tr("openrouter-keys-management-key-rejected")),
         403 => anyhow!(crate::i18n::tr("openrouter-keys-not-a-management-key")),
         404 => anyhow!(crate::i18n::tr("openrouter-keys-key-not-found")),
-        429 => crate::worker::rate_limit_error(
+        429 => crate::net::rate_limit_error(
             "OpenRouter key management request was rate limited (HTTP 429).",
         ),
         _ => match message {

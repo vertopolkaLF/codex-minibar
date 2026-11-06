@@ -158,11 +158,8 @@ pub(crate) fn refresh_if_stale() -> Result<bool> {
 
 #[cfg(not(test))]
 fn download_catalog() -> Result<()> {
-    let tls = ureq::native_tls::TlsConnector::new()
-        .context("create TLS connector for LiteLLM pricing")?;
-    let agent = ureq::AgentBuilder::new()
+    let agent = crate::net::native_tls_agent()
         .timeout(StdDuration::from_secs(10))
-        .tls_connector(std::sync::Arc::new(tls))
         .build();
     let payload = agent
         .get(LITELLM_RATES_URL)

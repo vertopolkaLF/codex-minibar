@@ -3,7 +3,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, OnceLock},
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
@@ -633,14 +633,7 @@ impl ClaudeClient {
         if let Some(agent) = self.agent.get() {
             return Ok(agent.clone());
         }
-        // `ureq` is built without its default Rustls backend. Configure the
-        // native TLS adapter explicitly so Claude's HTTPS endpoint uses the
-        // Windows certificate store (Schannel), as the updater already does.
-        let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
-        let agent = ureq::AgentBuilder::new()
-            .timeout(self.timeout)
-            .tls_connector(Arc::new(tls))
-            .build();
+        let agent = crate::net::native_tls_agent().timeout(self.timeout).build();
         Ok(self.agent.get_or_init(|| agent).clone())
     }
 
@@ -665,7 +658,7 @@ impl ClaudeClient {
             sign_in_hint,
         )
         .inspect_err(|error| {
-            self.rate_limited |= crate::worker::is_rate_limited_error(error);
+            self.rate_limited |= crate::net::is_rate_limited_error(error);
         })?;
         let mut limits = parse_usage_response(&body, Utc::now())?;
         let reset_schedule = reset_schedule(&limits);
@@ -676,7 +669,7 @@ impl ClaudeClient {
             // profile request covers both the name and the plan fallback.
             let profile = match fetch_profile(agent, access_token) {
                 Ok(profile) => Some(profile),
-                Err(error) if crate::worker::is_rate_limited_error(&error) => return Err(error),
+                Err(error) if crate::net::is_rate_limited_error(&error) => return Err(error),
                 Err(_) => None,
             };
             cache.record(
@@ -898,7 +891,7 @@ fn send(request: ureq::Request, what: &str, sign_in_hint: &str) -> Result<String
         Err(ureq::Error::Status(401 | 403, _)) => {
             bail!("{what} was unauthorized. {sign_in_hint}")
         }
-        Err(ureq::Error::Status(429, _)) => Err(crate::worker::rate_limit_error(
+        Err(ureq::Error::Status(429, _)) => Err(crate::net::rate_limit_error(
             "Claude usage endpoint is rate limited. Try again in a few minutes.",
         )),
         Err(ureq::Error::Status(status, _)) => bail!("{what} failed with HTTP {status}"),

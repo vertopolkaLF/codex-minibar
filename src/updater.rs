@@ -2,7 +2,7 @@
 
 use std::{
     fs,
-    io::{Read, Write, copy},
+    io::copy,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{Arc, Mutex, OnceLock},
@@ -13,8 +13,6 @@ use std::{
 use anyhow::{Context, Result, bail};
 use semver::Version;
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
-use ureq::Agent;
 use zip::ZipArchive;
 
 use crate::notifications;
@@ -32,7 +30,6 @@ pub const CONTRIBUTING_URL: &str = "https://github.com/vertopolkaLF/codex-miniba
 const LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/vertopolkaLF/codex-minibar/releases/latest";
 const APP_EXE: &str = "codex-minibar.exe";
-const USER_AGENT: &str = "codex-minibar-updater";
 const UPDATE_SUCCESS_MARKER: &str = ".update-success-pending";
 const UPDATE_STAGING_DIR: &str = ".update-staging";
 
@@ -82,20 +79,6 @@ const LEGACY_WINUI_LOCALE_FILES: &[&str] = &[
     "Microsoft.ui.xaml.dll.mui",
     "Microsoft.UI.Xaml.Phone.dll.mui",
 ];
-
-fn http_agent() -> Agent {
-    static AGENT: OnceLock<Agent> = OnceLock::new();
-    AGENT
-        .get_or_init(|| {
-            // ureq's `native-tls` feature is not auto-selected for `ureq::get`;
-            // build an agent that uses the OS TLS stack (schannel on Windows).
-            let tls = ureq::native_tls::TlsConnector::new().expect("create native-tls connector");
-            ureq::AgentBuilder::new()
-                .tls_connector(Arc::new(tls))
-                .build()
-        })
-        .clone()
-}
 
 struct UpdateRuntime {
     updates: Arc<UpdateController>,
@@ -234,7 +217,7 @@ pub fn open_release_notes() -> Result<()> {
         .and_then(|runtime| runtime.updates.available_update())
         .map(|update| update.html_url)
         .unwrap_or_else(|| RELEASES_URL.to_string());
-    open_url(&url)
+    crate::shell::open_url(&url)
 }
 
 /// Shows a one-shot success toast after an in-place update relaunch.
@@ -589,8 +572,6 @@ struct GhAsset {
 
 /// Hard upper bound for a downloaded release package.
 const MAX_UPDATE_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
-/// Upper bound for auxiliary downloads (e.g. the Stream Deck plugin).
-const MAX_AUX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Extracts the lowercase hex SHA-256 from a GitHub `digest` field.
 fn parse_sha256_digest(digest: &str) -> Option<String> {
@@ -670,9 +651,8 @@ fn parse_release_version(tag: &str) -> Result<Version> {
 }
 
 fn github_get(url: &str) -> Result<GhRelease> {
-    let response = http_agent()
+    let response = crate::net::shared_agent()
         .get(url)
-        .set("User-Agent", USER_AGENT)
         .set("Accept", "application/vnd.github+json")
         .call()
         .with_context(|| format!("GET {url}"))?;
@@ -711,7 +691,7 @@ fn apply_update(update: &AvailableUpdate) -> Result<()> {
     report_download_started(&update.version);
     let install_dir = install_dir()?;
     if !install_dir_writable(&install_dir) {
-        open_url(&update.html_url)?;
+        crate::shell::open_url(&update.html_url)?;
         bail!(
             "cannot update in place because {} is not writable; opened the release page in your browser",
             install_dir.display()
@@ -732,7 +712,7 @@ fn apply_update(update: &AvailableUpdate) -> Result<()> {
         size.min(MAX_UPDATE_DOWNLOAD_BYTES)
     });
     let mut throttle = ProgressThrottle::new();
-    let digest = download_file_limited(
+    let digest = crate::net::download_limited(
         &update.asset_url,
         &zip_path,
         limit,
@@ -842,81 +822,6 @@ fn escape_ps_single_quoted_str(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-pub(crate) fn download_file(url: &str, destination: &Path) -> Result<()> {
-    download_file_limited(url, destination, MAX_AUX_DOWNLOAD_BYTES, &mut |_, _| {}).map(|_| ())
-}
-
-/// Downloads `url` to `destination`, failing if more than `max_bytes` arrive.
-/// Reports `(downloaded, Content-Length)` as bytes arrive and returns the
-/// lowercase hex SHA-256 of the written bytes.
-fn download_file_limited(
-    url: &str,
-    destination: &Path,
-    max_bytes: u64,
-    on_progress: &mut dyn FnMut(u64, Option<u64>),
-) -> Result<String> {
-    let response = http_agent()
-        .get(url)
-        .set("User-Agent", USER_AGENT)
-        .call()
-        .with_context(|| format!("download {url}"))?;
-    let status = response.status();
-    if status / 100 != 2 {
-        bail!("download failed with status {status}");
-    }
-    let length = response
-        .header("Content-Length")
-        .and_then(|value| value.trim().parse::<u64>().ok());
-    let reader = response.into_reader();
-    let mut file = fs::File::create(destination)
-        .with_context(|| format!("create {}", destination.display()))?;
-    let result = copy_limited(reader, &mut file, max_bytes, &mut |downloaded| {
-        on_progress(downloaded, length)
-    });
-    drop(file);
-    if result.is_err() {
-        let _ = fs::remove_file(destination);
-    }
-    result
-}
-
-/// Copies at most `max_bytes` from `reader`, erroring if more are available.
-/// Reports the running total after every chunk and returns the hex SHA-256
-/// of the copied bytes.
-fn copy_limited(
-    reader: impl Read,
-    writer: &mut impl Write,
-    max_bytes: u64,
-    on_progress: &mut dyn FnMut(u64),
-) -> Result<String> {
-    let mut limited = reader.take(max_bytes.saturating_add(1));
-    let mut hasher = Sha256::new();
-    let mut buf = [0u8; 64 * 1024];
-    let mut total: u64 = 0;
-    loop {
-        let read = limited
-            .read(&mut buf)
-            .context("read downloaded update package")?;
-        if read == 0 {
-            break;
-        }
-        total += read as u64;
-        if total > max_bytes {
-            bail!("download exceeds the {max_bytes} byte limit");
-        }
-        hasher.update(&buf[..read]);
-        writer
-            .write_all(&buf[..read])
-            .context("write downloaded update package")?;
-        on_progress(total);
-    }
-    Ok(hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect())
-}
-
 /// Reports `(entries done, entries)` as it goes.
 fn extract_portable_zip(
     archive_path: &Path,
@@ -964,79 +869,6 @@ fn payload_root_from_extracted(destination: &Path) -> Result<PathBuf> {
         }
     }
     Ok(destination.to_path_buf())
-}
-
-pub fn open_url(url: &str) -> Result<()> {
-    open_shell_target(url.into(), url.to_owned())
-}
-
-pub fn open_path(path: &Path) -> Result<()> {
-    open_shell_target(path.as_os_str().to_owned(), path.display().to_string())
-}
-
-/// Opens the target on a dedicated thread. ShellExecuteW pumps window
-/// messages while it runs; on the UI thread that dispatches queued GPUI
-/// foreground tasks re-entrantly from inside a click handler, while the app
-/// is already borrowed, and the resulting panic inside the window procedure
-/// aborts the process. Failures are therefore logged by the worker.
-fn open_shell_target(target: std::ffi::OsString, description: String) -> Result<()> {
-    std::thread::Builder::new()
-        .name("shell-open".into())
-        .spawn(move || {
-            if let Err(error) = shell_execute(&target, &description) {
-                crate::logger::info(format!("{error:#}"));
-            }
-        })
-        .context("spawn shell-open thread")?;
-    Ok(())
-}
-
-fn shell_execute(target: &std::ffi::OsStr, description: &str) -> Result<()> {
-    #[cfg(windows)]
-    {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::System::Com::{
-            COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
-        };
-        use windows_sys::Win32::UI::Shell::ShellExecuteW;
-
-        let operation: Vec<u16> = OsStr::new("open")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let target: Vec<u16> = target.encode_wide().chain(std::iter::once(0)).collect();
-        // Shell extensions behind ShellExecuteW may require an STA.
-        let com = unsafe {
-            CoInitializeEx(
-                std::ptr::null(),
-                (COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE) as u32,
-            )
-        };
-        let result = unsafe {
-            ShellExecuteW(
-                std::ptr::null_mut(),
-                operation.as_ptr(),
-                target.as_ptr(),
-                std::ptr::null(),
-                std::ptr::null(),
-                1,
-            )
-        };
-        if com >= 0 {
-            unsafe { CoUninitialize() };
-        }
-        if result as isize <= 32 {
-            bail!("ShellExecuteW failed for {description}");
-        }
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = target;
-        let _ = description;
-        bail!("opening URLs is only supported on Windows")
-    }
 }
 
 #[cfg(test)]
@@ -1098,19 +930,6 @@ mod tests {
         touch(".update-staging/run-1/package.zip");
         remove_update_staging(&dir.join(UPDATE_STAGING_DIR));
         assert!(!dir.join(UPDATE_STAGING_DIR).exists());
-    }
-
-    #[test]
-    fn copy_limited_enforces_cap_and_hashes() {
-        let mut out = Vec::new();
-        let digest = copy_limited(&b"abc"[..], &mut out, 3, &mut |_| {}).unwrap();
-        assert_eq!(out, b"abc");
-        assert_eq!(
-            digest,
-            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
-        );
-        let mut out = Vec::new();
-        assert!(copy_limited(&b"abcd"[..], &mut out, 3, &mut |_| {}).is_err());
     }
 
     #[test]

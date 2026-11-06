@@ -1283,7 +1283,7 @@ impl PopupRoot {
             .cursor_pointer()
             .on_hover(self.hover_listener(hover_id, Some(path.clone().into()), cx))
             .on_click(move |_: &ClickEvent, _, _| {
-                if let Err(error) = crate::updater::open_path(std::path::Path::new(&path)) {
+                if let Err(error) = crate::shell::open_path(std::path::Path::new(&path)) {
                     crate::logger::info(format!("failed to open project folder {path}: {error:#}"));
                 }
             });

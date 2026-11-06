@@ -135,23 +135,23 @@ impl CursorClient {
             )
         });
         if let Err(error) = &usage
-            && crate::worker::is_rate_limited_error(error)
+            && crate::net::is_rate_limited_error(error)
         {
-            return Err(crate::worker::rate_limit_error(format!(
+            return Err(crate::net::rate_limit_error(format!(
                 "Cursor quota request was rate limited: {error:#}"
             )));
         }
         if let Err(error) = &summary
-            && crate::worker::is_rate_limited_error(error)
+            && crate::net::is_rate_limited_error(error)
         {
-            return Err(crate::worker::rate_limit_error(format!(
+            return Err(crate::net::rate_limit_error(format!(
                 "Cursor quota summary was rate limited: {error:#}"
             )));
         }
         if let Err(error) = &sand
-            && crate::worker::is_rate_limited_error(error)
+            && crate::net::is_rate_limited_error(error)
         {
-            return Err(crate::worker::rate_limit_error(format!(
+            return Err(crate::net::rate_limit_error(format!(
                 "Cursor Grok Bot quota was rate limited: {error:#}"
             )));
         }
@@ -264,7 +264,7 @@ impl CursorClient {
                     store::with_store(|store| store.load_usage_daily(CURSOR, history_days))
                         .context("read cached Cursor usage after export failure")?;
                 if cached.has_data() {
-                    if crate::worker::is_rate_limited_error(&error) {
+                    if crate::net::is_rate_limited_error(&error) {
                         Ok(UsageStatistics {
                             error: Some("Cursor usage export was rate limited (HTTP 429).".into()),
                             ..cached

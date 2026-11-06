@@ -4,7 +4,7 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, OnceLock, mpsc},
+    sync::{OnceLock, mpsc},
     thread,
     time::{Duration as StdDuration, Instant},
 };
@@ -60,7 +60,7 @@ impl LimitProvider for CodexClient {
         self.rate_limited |= result
             .as_ref()
             .err()
-            .is_some_and(crate::worker::is_rate_limited_error);
+            .is_some_and(crate::net::is_rate_limited_error);
         result
     }
     fn take_rate_limit_response(&mut self) -> bool {
@@ -211,11 +211,7 @@ impl CodexClient {
         if let Some(agent) = self.oauth_agent.get() {
             return Ok(agent.clone());
         }
-        let tls = ureq::native_tls::TlsConnector::new().context("create Windows TLS connector")?;
-        let agent = ureq::AgentBuilder::new()
-            .timeout(self.timeout)
-            .tls_connector(Arc::new(tls))
-            .build();
+        let agent = crate::net::native_tls_agent().timeout(self.timeout).build();
         Ok(self.oauth_agent.get_or_init(|| agent).clone())
     }
 
@@ -228,7 +224,7 @@ impl CodexClient {
     pub fn read_rate_limits(&self) -> Result<RateLimits> {
         match self.read_rate_limits_via_oauth() {
             Ok(limits) => Ok(limits),
-            Err(error) if crate::worker::is_rate_limited_error(&error) => Err(error),
+            Err(error) if crate::net::is_rate_limited_error(&error) => Err(error),
             Err(oauth_error) => {
                 crate::logger::info(format!(
                     "Codex OAuth quota unavailable ({oauth_error:#}); falling back to app-server"
@@ -273,7 +269,7 @@ impl CodexClient {
                 .context("read Codex OAuth usage response")?,
             Err(ureq::Error::Status(401, _)) => return Err(OAuthUnauthorized.into()),
             Err(ureq::Error::Status(429, _)) => {
-                return Err(crate::worker::rate_limit_error(
+                return Err(crate::net::rate_limit_error(
                     "Codex usage endpoint is rate limited. Try again in a few minutes.",
                 ));
             }
@@ -287,7 +283,7 @@ impl CodexClient {
         let mut limits = parse_wham_usage(&value, Utc::now())?;
         match fetch_wham_reset_credits(agent, credentials) {
             Ok(reset_credits) => limits.reset_credits = reset_credits,
-            Err(error) if crate::worker::is_rate_limited_error(&error) => return Err(error),
+            Err(error) if crate::net::is_rate_limited_error(&error) => return Err(error),
             Err(_) => {}
         }
         Ok(limits)

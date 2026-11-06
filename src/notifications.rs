@@ -82,7 +82,7 @@ impl NotificationAction {
                 let _ = crate::updater::apply_pending_update();
             }
             NotificationAction::OpenUrl(url) => {
-                if let Err(error) = crate::updater::open_url(&url) {
+                if let Err(error) = crate::shell::open_url(&url) {
                     eprintln!("failed to open {url}: {error:#}");
                 }
             }

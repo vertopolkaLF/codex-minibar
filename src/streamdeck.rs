@@ -48,7 +48,7 @@ pub fn install_latest_plugin_async(on_phase: impl Fn(InstallPhase) + Send + 'sta
         let result = (|| -> anyhow::Result<()> {
             let plugin_path = download_latest_plugin()?;
             on_phase(InstallPhase::Launching);
-            crate::updater::open_path(&plugin_path)
+            crate::shell::open_path(&plugin_path)
         })();
 
         match result {
@@ -73,7 +73,7 @@ fn download_latest_plugin() -> anyhow::Result<PathBuf> {
         "codex-minibar-streamdeck-{}-{stamp}-{PLUGIN_FILE_NAME}",
         std::process::id()
     ));
-    crate::updater::download_file(PLUGIN_DOWNLOAD_URL, &path)?;
+    crate::net::download(PLUGIN_DOWNLOAD_URL, &path)?;
     Ok(path)
 }
 

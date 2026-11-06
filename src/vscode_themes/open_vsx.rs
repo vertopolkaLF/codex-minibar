@@ -2,12 +2,11 @@
 
 use std::{
     collections::HashMap,
-    io::Read,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use serde::Deserialize;
 
 use super::ThemeSource;
@@ -106,9 +105,6 @@ struct Files {
     icon: Option<String>,
 }
 
-/// Uses the OS TLS stack (schannel), like the app's other public fetches:
-/// it honors the Windows certificate store, which VPNs and proxies that
-/// inspect TLS rely on.
 /// Shared so its connection pool keeps TLS sessions to the registry warm
 /// across the many small manifest and icon requests.
 fn agent() -> ureq::Agent {
@@ -117,15 +113,8 @@ fn agent() -> ureq::Agent {
 }
 
 fn build_agent() -> ureq::Agent {
-    let builder = ureq::AgentBuilder::new().max_idle_connections_per_host(MANIFEST_WORKERS);
-    let builder = match ureq::native_tls::TlsConnector::new() {
-        Ok(tls) => builder.tls_connector(Arc::new(tls)),
-        Err(error) => {
-            eprintln!("Open VSX: falling back to bundled TLS: {error}");
-            builder
-        }
-    };
-    builder
+    crate::net::native_tls_agent()
+        .max_idle_connections_per_host(MANIFEST_WORKERS)
         .timeout_connect(Duration::from_secs(10))
         .timeout(Duration::from_secs(60))
         .user_agent(concat!("codex-minibar/", env!("CARGO_PKG_VERSION")))
@@ -270,12 +259,7 @@ fn contributes_color_themes(extension: &Extension) -> bool {
 
 fn fetch_manifest(url: &str) -> Option<Manifest> {
     let response = agent().get(url).call().ok()?;
-    let mut body = Vec::new();
-    response
-        .into_reader()
-        .take(MAX_MANIFEST_BYTES)
-        .read_to_end(&mut body)
-        .ok()?;
+    let body = crate::net::read_limited(response, MAX_MANIFEST_BYTES).ok()??;
     serde_json::from_slice(&body).ok()
 }
 
@@ -300,18 +284,14 @@ pub fn download(extension: &Extension) -> Result<Vec<super::VsCodeTheme>> {
         .call()
         .map_err(describe)
         .with_context(|| format!("could not download {}", extension.display_name))?;
-    let mut bytes = Vec::new();
-    response
-        .into_reader()
-        .take(MAX_VSIX_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .context("the download was interrupted")?;
-    if bytes.len() as u64 > MAX_VSIX_BYTES {
-        bail!(
-            "{} is too large to be a theme package",
-            extension.display_name
-        );
-    }
+    let bytes = crate::net::read_limited(response, MAX_VSIX_BYTES)
+        .context("the download was interrupted")?
+        .with_context(|| {
+            format!(
+                "{} is too large to be a theme package",
+                extension.display_name
+            )
+        })?;
     super::themes_from_vsix(
         &bytes,
         ThemeSource::OpenVsx {
@@ -324,23 +304,16 @@ pub fn download(extension: &Extension) -> Result<Vec<super::VsCodeTheme>> {
 
 /// The raw bytes of an extension icon.
 pub fn fetch_icon(url: &str) -> Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    agent()
-        .get(url)
-        .call()
-        .map_err(describe)?
-        .into_reader()
-        .take(MAX_ICON_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .context("the icon download was interrupted")?;
-    if bytes.len() as u64 > MAX_ICON_BYTES {
-        bail!("the icon is too large");
-    }
-    Ok(bytes)
+    let response = agent().get(url).call().map_err(describe)?;
+    crate::net::read_limited(response, MAX_ICON_BYTES)
+        .context("the icon download was interrupted")?
+        .context("the icon is too large")
 }
 
 #[cfg(test)]
 mod tests {
+    use std::io::Read;
+
     use super::*;
 
     /// Live registry round trip without touching the installed library:
