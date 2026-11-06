@@ -835,10 +835,11 @@ fn refresh_cli_login(agent: &ureq::Agent, refresh: &FileRefresh) -> Result<Renew
     );
     let now = Utc::now().timestamp_millis();
     let expires_at = renewal_expiry(now, renewed.expires_in)?;
+    // The refresh-token deadline is optional metadata: an unusable value must
+    // not discard an otherwise valid renewal.
     let refresh_expires_at = renewed
         .refresh_token_expires_in
-        .map(|seconds| renewal_expiry(now, seconds))
-        .transpose()?;
+        .and_then(|seconds| renewal_expiry(now, seconds).ok());
     let mut file = read_credential_file(&refresh.path)?;
     if oauth_refresh_token(&file) != Some(refresh.refresh_token.as_str()) {
         crate::logger::info("Claude Code renewed the login first; keeping its tokens");
