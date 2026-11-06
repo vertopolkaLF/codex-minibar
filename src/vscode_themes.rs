@@ -11,7 +11,7 @@ pub mod open_vsx;
 use std::{
     collections::{BTreeMap, HashMap},
     io::Read,
-    path::{Path, PathBuf},
+    path::Path,
     sync::{
         Arc, Mutex, OnceLock, RwLock,
         atomic::{AtomicU64, Ordering},
@@ -19,7 +19,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -193,14 +192,8 @@ pub fn preview_generation() -> u64 {
     PREVIEW_GENERATION.load(Ordering::SeqCst)
 }
 
-fn themes_dir() -> Result<PathBuf> {
-    ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-        .map(|dirs| dirs.config_dir().join("vscode-themes"))
-        .context("could not resolve the application config directory")
-}
-
 fn load_library() -> Vec<Arc<VsCodeTheme>> {
-    let Ok(dir) = themes_dir() else {
+    let Ok(dir) = crate::app_paths::vscode_themes() else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(&dir) else {
@@ -236,7 +229,7 @@ fn sort_library(themes: &mut [Arc<VsCodeTheme>]) {
 
 /// Store `themes`, replacing installed ones with the same id. Returns their ids.
 pub fn install(themes: Vec<VsCodeTheme>) -> Result<Vec<String>> {
-    let dir = themes_dir()?;
+    let dir = crate::app_paths::vscode_themes()?;
     std::fs::create_dir_all(&dir).with_context(|| format!("could not create {}", dir.display()))?;
     for theme in &themes {
         let path = dir.join(format!("{}.json", theme.id));
@@ -266,7 +259,7 @@ pub fn install(themes: Vec<VsCodeTheme>) -> Result<Vec<String>> {
 
 /// Delete an installed theme.
 pub fn remove(id: &str) -> Result<()> {
-    let path = themes_dir()?.join(format!("{}.json", sanitize_id(id)));
+    let path = crate::app_paths::vscode_themes()?.join(format!("{}.json", sanitize_id(id)));
     match std::fs::remove_file(&path) {
         Ok(()) => {}
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}

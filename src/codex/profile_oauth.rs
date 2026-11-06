@@ -109,10 +109,7 @@ fn read_login(directory: &Path) -> Result<()> {
 }
 
 fn login_root() -> Result<std::path::PathBuf> {
-    Ok(crate::settings::Settings::default_path()?
-        .parent()
-        .context("settings directory is unavailable")?
-        .join("codex-logins"))
+    crate::app_paths::codex_logins()
 }
 
 /// Removes temporary sign-in folders left by earlier versions. Never follows

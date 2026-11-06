@@ -270,7 +270,7 @@ impl SettingsWindow {
             let Ok(Ok(Some(path))) = prompt.await else {
                 return;
             };
-            let result = Settings::default_path()
+            let result = crate::app_paths::settings()
                 .and_then(|current| Settings::load_or_create(&current))
                 .and_then(|settings| settings.save(&path));
             let _ = this.update(cx, |this, cx| match result {

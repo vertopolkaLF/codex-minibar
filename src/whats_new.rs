@@ -10,14 +10,7 @@
 //! to show for that release.
 
 use std::{
-    collections::HashMap,
-    fs,
-    io::Read,
-    ops::Range,
-    path::{Path, PathBuf},
-    sync::Arc,
-    thread,
-    time::Duration,
+    collections::HashMap, fs, io::Read, ops::Range, path::Path, sync::Arc, thread, time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -33,7 +26,6 @@ use crate::settings::Settings;
 pub const BASE_URL: &str =
     "https://raw.githubusercontent.com/vertopolkaLF/codex-minibar/main/data/releases";
 const USER_AGENT: &str = "codex-minibar-whats-new";
-const STATE_FILE: &str = "whats-new.json";
 const MAX_MARKDOWN_BYTES: u64 = 64 * 1024;
 const MAX_IMAGE_BYTES: u64 = 3 * 1024 * 1024;
 const MAX_IMAGES: usize = 6;
@@ -560,10 +552,6 @@ struct State {
     pending_since: Option<DateTime<Utc>>,
 }
 
-fn state_path() -> Result<PathBuf> {
-    Ok(Settings::default_path()?.with_file_name(STATE_FILE))
-}
-
 fn load_state(path: &Path) -> Option<State> {
     let raw = fs::read_to_string(path).ok()?;
     serde_json::from_str(&raw).ok()
@@ -579,7 +567,7 @@ fn save_state(path: &Path, state: &State) -> Result<()> {
 
 /// Record that `version`'s summary was shown or deliberately skipped.
 pub fn mark_seen(version: &str) {
-    let result = state_path().and_then(|path| {
+    let result = crate::app_paths::whats_new_state().and_then(|path| {
         save_state(
             &path,
             &State {
@@ -694,7 +682,7 @@ pub fn start(settings: &Settings, just_updated: bool) {
 fn run(onboarding_completed: bool, just_updated: bool) {
     let current = crate::updater::current_version();
     let version = current.to_string();
-    let path = match state_path() {
+    let path = match crate::app_paths::whats_new_state() {
         Ok(path) => path,
         Err(error) => {
             eprintln!("what's new state is unavailable: {error:#}");
@@ -892,7 +880,7 @@ mod tests {
     #[test]
     fn state_round_trips() {
         let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join(STATE_FILE);
+        let path = directory.path().join("whats-new.json");
         let state = State {
             seen_version: Some("1.2.0".into()),
             pending_since: Some(Utc::now()),

@@ -14,9 +14,9 @@ use chrono::{DateTime, Local};
 static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
 const MAX_ARCHIVED_LOGS: usize = 10;
 
-/// Archives the preceding `log.txt`, creates a clean one, and starts a new session.
-pub fn initialize(settings_path: &Path) -> Result<PathBuf> {
-    let path = settings_path.with_file_name("log.txt");
+/// Archives the preceding log at `path`, creates a clean one, and starts a new session.
+pub fn initialize(path: &Path) -> Result<PathBuf> {
+    let path = path.to_path_buf();
     // Logging starts before Settings::load_or_create on a fresh install.
     // Rotation enumerates the directory, so it must already exist here.
     if let Some(directory) = path
@@ -159,7 +159,7 @@ mod tests {
             .join("settings.toml");
         assert!(!settings.parent().unwrap().exists());
 
-        let log = initialize(&settings).unwrap();
+        let log = initialize(&settings.with_file_name("log.txt")).unwrap();
 
         assert!(log.is_file());
         assert!(!settings.exists());
@@ -170,7 +170,7 @@ mod tests {
         );
         // A subsequent launch still archives its predecessor and preserves settings.
         fs::write(&settings, "version = 36\n").unwrap();
-        initialize(&settings).unwrap();
+        initialize(&settings.with_file_name("log.txt")).unwrap();
         assert_eq!(fs::read_to_string(&settings).unwrap(), "version = 36\n");
         let archives = fs::read_dir(log.parent().unwrap())
             .unwrap()
@@ -185,7 +185,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let blocked = directory.path().join("config");
         fs::write(&blocked, "existing file").unwrap();
-        assert!(initialize(&blocked.join("settings.toml")).is_err());
+        assert!(initialize(&blocked.join("log.txt")).is_err());
         assert_eq!(fs::read_to_string(blocked).unwrap(), "existing file");
     }
 

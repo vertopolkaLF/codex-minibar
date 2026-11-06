@@ -25,7 +25,6 @@ use crate::{
     instances::ProviderId,
     popup_window::AppState,
     provider_registry,
-    settings::Settings,
     widget_data::{self, ProviderSnapshot},
 };
 
@@ -79,7 +78,6 @@ fn download_latest_plugin() -> anyhow::Result<PathBuf> {
 }
 
 pub const PROTOCOL_VERSION: u32 = 1;
-const ENDPOINT_FILE_NAME: &str = "streamdeck-bridge.json";
 const LOOPBACK_HOST: &str = "127.0.0.1";
 /// Requests are one small JSON line; anything longer is hostile or broken.
 const MAX_REQUEST_BYTES: u64 = 16 * 1024;
@@ -187,8 +185,8 @@ struct MetricInfo {
 pub fn start_server(state: Arc<AppState>) -> mpsc::Receiver<Command> {
     let (commands_tx, commands_rx) = mpsc::channel();
     thread::spawn(move || {
-        let endpoint_path = match Settings::default_path() {
-            Ok(path) => path.with_file_name(ENDPOINT_FILE_NAME),
+        let endpoint_path = match crate::app_paths::streamdeck_endpoint() {
+            Ok(path) => path,
             Err(error) => {
                 eprintln!("Stream Deck bridge could not resolve its endpoint path: {error:#}");
                 return;

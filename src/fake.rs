@@ -5,12 +5,9 @@
 //! minutes later (`MINIBAR_FAKE_RESET_EXPIRES_IN` overrides Codex's minutes).
 //! Redeeming a fake credit only flips local state.
 
-use std::{
-    path::PathBuf,
-    sync::{
-        OnceLock,
-        atomic::{AtomicBool, Ordering},
-    },
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicBool, Ordering},
 };
 
 use anyhow::{Result, bail};
@@ -24,22 +21,9 @@ use crate::usage::UsageStatistics;
 static CODEX_SPENT: AtomicBool = AtomicBool::new(false);
 static CLAUDE_SPENT: AtomicBool = AtomicBool::new(false);
 
-pub fn enabled() -> bool {
-    static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| {
-        std::env::var_os("MINIBAR_FAKE_PROVIDERS").is_some_and(|value| value != "0")
-    })
-}
-
 /// Whether `driver` is served by the sandbox instead of its real client.
 pub fn serves(driver: ProviderKind) -> bool {
-    enabled() && matches!(driver, ProviderKind::Codex | ProviderKind::Claude)
-}
-
-pub fn settings_path() -> PathBuf {
-    std::env::temp_dir()
-        .join("codex-minibar-fake")
-        .join("settings.toml")
+    crate::app_paths::fake_sandbox() && matches!(driver, ProviderKind::Codex | ProviderKind::Claude)
 }
 
 /// Minutes after launch at which Codex's credit expires; 62 by default.
@@ -80,9 +64,8 @@ pub fn seed_settings() -> Result<()> {
         instance.auto_reset = served;
         instance.usage_stats = false;
     }
-    let path = settings_path();
-    let _ = std::fs::remove_dir_all(path.parent().unwrap_or(&path));
-    settings.save(&path)
+    let _ = std::fs::remove_dir_all(crate::app_paths::config_dir()?);
+    settings.save(&crate::app_paths::settings()?)
 }
 
 pub fn limits(driver: ProviderKind) -> RateLimits {

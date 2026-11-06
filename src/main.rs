@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
-    notifications,
+    app_paths, notifications,
     popup_window::AppState,
     provider::start_enabled_workers,
     provider_status, reset_feed,
@@ -23,11 +23,11 @@ fn run() -> Result<()> {
     codex_minibar::banked_reset::mark_process_start();
     notifications::initialize();
     sync_installed_display_version();
-    let path = Settings::default_path()?;
-    if codex_minibar::fake::enabled() {
+    let path = app_paths::settings()?;
+    if app_paths::fake_sandbox() {
         codex_minibar::fake::seed_settings()?;
     }
-    codex_minibar::logger::initialize(&path)?;
+    codex_minibar::logger::initialize(&app_paths::log()?)?;
     if let Err(error) = codex_minibar::pricing::initialize() {
         eprintln!("failed to hydrate pricing catalog: {error:#}");
     }
@@ -53,7 +53,7 @@ fn run() -> Result<()> {
             ));
         }
     });
-    let activation_path = path.with_file_name("activation.toml");
+    let activation_path = app_paths::activation_state()?;
     let last_activation_at: Option<DateTime<Utc>> =
         match ActivationState::load_or_default(&activation_path) {
             Ok(state) => state.last_attempt_at,
@@ -66,12 +66,12 @@ fn run() -> Result<()> {
     let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
     let reset_feed_worker = reset_feed::start_worker(
         &settings,
-        reset_feed::cache_path(&path),
+        app_paths::reset_feed_cache()?,
         worker_events_tx.clone(),
     );
     let provider_status_worker = provider_status::start_worker(
         &settings,
-        provider_status::cache_path(&path),
+        app_paths::provider_status_cache()?,
         worker_events_tx.clone(),
     );
     let hydrated_limits = store::shared()

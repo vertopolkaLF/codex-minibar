@@ -141,7 +141,7 @@ fn commit_update<T>(
     settings_tx: Sender<Settings>,
     update: impl FnOnce(&mut Settings) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
-    let path = Settings::default_path()?;
+    let path = crate::app_paths::settings()?;
     let mut settings = Settings::load_or_create(&path)?;
     let value = update(&mut settings)?;
     settings.normalize_tray_widgets();
@@ -164,7 +164,7 @@ fn commit_update<T>(
 
 /// Runs on the writer thread only.
 fn commit_replace(settings_tx: Sender<Settings>, mut settings: Settings) -> anyhow::Result<()> {
-    let path = Settings::default_path()?;
+    let path = crate::app_paths::settings()?;
     settings.normalize_tray_widgets();
     settings.taskbar.normalize();
     settings.command_palette.normalize();
@@ -180,7 +180,7 @@ fn commit_replace(settings_tx: Sender<Settings>, mut settings: Settings) -> anyh
 }
 
 pub(crate) fn load_settings_for_window() -> Settings {
-    match Settings::default_path().and_then(|path| Settings::load_or_create(&path)) {
+    match crate::app_paths::settings().and_then(|path| Settings::load_or_create(&path)) {
         Ok(settings) => settings,
         Err(error) => {
             eprintln!("failed to load settings for window: {error:#}");

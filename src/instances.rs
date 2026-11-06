@@ -567,13 +567,7 @@ pub fn badge_text(explicit: &str, name: &str) -> String {
 /// App-managed `CLAUDE_CONFIG_DIR` / `CODEX_HOME` for an instance without an
 /// explicit folder.
 pub fn managed_folder(id: &str) -> anyhow::Result<PathBuf> {
-    use anyhow::Context;
-    let dirs = directories::ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-        .context("could not resolve the application data directory")?;
-    Ok(dirs
-        .data_local_dir()
-        .join("instances")
-        .join(sanitize_id(id)))
+    Ok(crate::app_paths::managed_instances()?.join(sanitize_id(id)))
 }
 
 fn sanitize_id(id: &str) -> String {

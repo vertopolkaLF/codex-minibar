@@ -1393,7 +1393,7 @@ fn sign_in(
     control: crate::claude::profile_oauth::LoginControl,
     settings_tx: Sender<Settings>,
 ) -> anyhow::Result<DialogOutcome> {
-    let settings = Settings::load_or_create(&Settings::default_path()?)?;
+    let settings = Settings::load_or_create(&crate::app_paths::settings()?)?;
     let instance = settings
         .instance(provider)
         .cloned()

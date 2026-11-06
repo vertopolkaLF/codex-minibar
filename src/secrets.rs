@@ -13,10 +13,8 @@ use std::{
 
 use anyhow::{Context, Result, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-const FILE_NAME: &str = "provider-secrets.json";
 // Serialize read/modify/replace across provider UI writes and token refreshes.
 static OPERATIONS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 // Ciphertext detects replacements; generations also detect repeated removals
@@ -62,7 +60,7 @@ struct SecretFile {
 
 pub fn load(name: &str) -> Result<Option<String>> {
     let _guard = operation_guard()?;
-    let path = path()?;
+    let path = crate::app_paths::secrets()?;
     load_from(&path, name)
 }
 
@@ -95,7 +93,7 @@ pub(crate) struct EncodedRollback {
 impl EncodedRollback {
     pub(crate) fn restore(self) -> Result<()> {
         let _guard = operation_guard()?;
-        let path = path()?;
+        let path = crate::app_paths::secrets()?;
         restore_encoded_to(&path, &self)
     }
 }
@@ -104,7 +102,7 @@ impl EncodedRollback {
 /// rollback compares exact ciphertext so a newer write to a slot always wins.
 pub(crate) fn apply_with_rollback(changes: &[(String, Option<String>)]) -> Result<EncodedRollback> {
     let _guard = operation_guard()?;
-    apply_with_rollback_to(&path()?, changes)
+    apply_with_rollback_to(&crate::app_paths::secrets()?, changes)
 }
 
 fn apply_with_rollback_to(
@@ -143,7 +141,7 @@ pub fn save(name: &str, value: Option<&str>) -> Result<()> {
 /// so account-level edits cannot leave only part of their keys updated.
 pub fn save_many(changes: &[(String, Option<String>)]) -> Result<()> {
     let _guard = operation_guard()?;
-    let path = path()?;
+    let path = crate::app_paths::secrets()?;
     save_many_to(&path, changes)
 }
 
@@ -285,7 +283,7 @@ pub fn masked_hint(value: &str) -> String {
 /// Checks whether a protected secret with the given logical-name prefix is
 /// present without decrypting every value in the file.
 pub fn contains_prefix(prefix: &str) -> bool {
-    let Ok(path) = path() else {
+    let Ok(path) = crate::app_paths::secrets() else {
         return false;
     };
     let Ok(raw) = fs::read_to_string(path) else {
@@ -294,12 +292,6 @@ pub fn contains_prefix(prefix: &str) -> bool {
     serde_json::from_str::<SecretFile>(&raw)
         .ok()
         .is_some_and(|file| file.values.keys().any(|name| name.starts_with(prefix)))
-}
-
-fn path() -> Result<PathBuf> {
-    ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-        .map(|dirs| dirs.config_dir().join(FILE_NAME))
-        .context("could not resolve the provider secrets directory")
 }
 
 #[cfg(windows)]

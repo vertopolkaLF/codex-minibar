@@ -245,10 +245,6 @@ impl ProviderStatusWorker {
     }
 }
 
-pub fn cache_path(settings_path: &Path) -> PathBuf {
-    settings_path.with_file_name("provider-status-cache.json")
-}
-
 pub fn start_worker(
     settings: &Settings,
     cache_path: PathBuf,

@@ -394,19 +394,10 @@ fn keywords(provider: ProviderId) -> Vec<String> {
     keywords
 }
 
-fn icon_directory() -> Option<PathBuf> {
-    Some(
-        Settings::default_path()
-            .ok()?
-            .with_file_name("command-palette")
-            .join("icons"),
-    )
-}
-
 /// A tinted PNG of the mark, written once per name and tint.
 fn icon_file(icon: &model::Icon) -> Option<String> {
     let [red, green, blue] = icon.tint;
-    let directory = icon_directory()?;
+    let directory = crate::app_paths::command_palette_icons().ok()?;
     let path = directory.join(format!("{}-{red:02x}{green:02x}{blue:02x}.png", icon.name));
     if !path.exists() {
         let png = rasterize_icon(icon.name, ICON_PIXELS, icon.tint)?;

@@ -1,13 +1,12 @@
 use std::{
     collections::BTreeMap,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::atomic::{AtomicU8, Ordering},
 };
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local, Timelike};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
 pub const SETTINGS_VERSION: u32 = 41;
@@ -2391,15 +2390,6 @@ impl Settings {
         changed
     }
 
-    pub fn default_path() -> Result<PathBuf> {
-        if crate::fake::enabled() {
-            return Ok(crate::fake::settings_path());
-        }
-        let dirs = ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-            .context("could not resolve the application config directory")?;
-        Ok(dirs.config_dir().join("settings.toml"))
-    }
-
     pub fn load_or_create(path: &Path) -> Result<Self> {
         if !path.exists() {
             let settings = Self::default();
@@ -3025,7 +3015,7 @@ impl Settings {
         );
         self.time_format.apply();
         // The sandbox must never rewrite the real install's login entry.
-        if crate::fake::enabled() {
+        if crate::app_paths::fake_sandbox() {
             return Ok(());
         }
         apply_startup_registration(self.start_at_login)
@@ -3035,7 +3025,10 @@ impl Settings {
     /// settings still say off, adopt that into settings before we apply them —
     /// otherwise `apply_runtime_effects` would delete the Run value on launch.
     pub fn reconcile_startup_from_registry(&mut self, path: &Path) -> Result<()> {
-        if crate::fake::enabled() || self.start_at_login || !startup_registration_present()? {
+        if crate::app_paths::fake_sandbox()
+            || self.start_at_login
+            || !startup_registration_present()?
+        {
             return Ok(());
         }
         self.start_at_login = true;

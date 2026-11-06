@@ -12,7 +12,6 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, Duration, Local, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
-use directories::ProjectDirs;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -58,7 +57,7 @@ pub struct ProviderStore {
 
 impl ProviderStore {
     pub fn open() -> Result<Self> {
-        let path = store_path()?;
+        let path = crate::app_paths::store_db()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create provider store dir {}", parent.display()))?;
@@ -1884,7 +1883,7 @@ impl ProviderStore {
     /// multi-gigabyte rescan of local session logs. Malformed caches remain on
     /// disk and the normal scanner can recover without losing their evidence.
     fn migrate_legacy_json_caches(&self) {
-        let Ok(config) = config_dir() else {
+        let Ok(config) = crate::app_paths::config_dir() else {
             return;
         };
 
@@ -2149,21 +2148,6 @@ fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
         .and_then(|value| value.with_second(0))
         .and_then(|value| value.with_nanosecond(0))
         .unwrap_or(timestamp)
-}
-
-fn config_dir() -> Result<PathBuf> {
-    // The sandbox must never read or overwrite the real install's cache.
-    if crate::fake::enabled() {
-        let settings = crate::fake::settings_path();
-        return Ok(settings.parent().unwrap_or(&settings).to_path_buf());
-    }
-    ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-        .map(|dirs| dirs.config_dir().to_path_buf())
-        .context("could not resolve the application config directory")
-}
-
-fn store_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join("provider-store.sqlite"))
 }
 
 /// Convenience helper used by workers that only need a short critical section.

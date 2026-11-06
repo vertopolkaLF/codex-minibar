@@ -163,10 +163,6 @@ fn default_schema_version() -> u8 {
     FEED_SCHEMA_VERSION
 }
 
-pub fn cache_path(settings_path: &Path) -> PathBuf {
-    settings_path.with_file_name("codex-resets-cache.json")
-}
-
 pub fn start_worker(
     settings: &Settings,
     cache_path: PathBuf,

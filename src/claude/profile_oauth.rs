@@ -99,10 +99,7 @@ fn read_login(directory: &Path) -> Result<()> {
 }
 
 fn login_root() -> Result<std::path::PathBuf> {
-    Ok(crate::settings::Settings::default_path()?
-        .parent()
-        .context("settings directory is unavailable")?
-        .join("claude-logins"))
+    crate::app_paths::claude_logins()
 }
 
 /// Removes temporary sign-in folders left by earlier versions. Never follows
