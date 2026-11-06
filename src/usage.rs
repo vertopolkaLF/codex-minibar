@@ -339,6 +339,17 @@ fn refresh_instance_usage_statistics(
     let oldest = Local::now().date_naive() - Duration::days(CACHE_RETENTION_DAYS - 1);
     let hourly_from = truncate_local_hour(Local::now() - Duration::hours(47));
     let recent_since = std::time::SystemTime::now() - std::time::Duration::from_secs(49 * 3600);
+    // SCAN above serializes refreshes, including retiring workers. Keep only
+    // recent, still-discovered files, and never retain raw transcript events.
+    static HOURLY: std::sync::Mutex<BTreeMap<ProviderId, BTreeMap<PathBuf, HourlyFileScan>>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let mut hourly_cache = HOURLY
+        .lock()
+        .map_err(|_| anyhow::anyhow!("hourly scan lock poisoned"))?;
+    let scans = hourly_cache.entry(provider).or_default();
+    let paths: BTreeSet<_> = files.iter().map(|(path, _)| path).collect();
+    scans.retain(|path, _| paths.contains(path));
+    drop(paths);
     let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
     for (path, key) in files {
         let cached = cache.files.entry(key.clone()).or_default();
@@ -347,22 +358,19 @@ fn refresh_instance_usage_statistics(
         }
         scan_file_delta(&path, &key, cached)?;
         cached.prune_before(oldest);
-        // The daily cache is incremental, so recent hours are rebuilt from a
-        // throwaway scan of logs touched in the window (Past 24h view).
+        // Keep hourly totals incremental too, while retaining the same recent
+        // file selection used by the Past 24h view.
         if fs::metadata(&path)
             .and_then(|meta| meta.modified())
             .is_ok_and(|modified| modified >= recent_since)
         {
-            let delta = scan_file_delta(&path, &key, &mut CachedSessionFile::default())?;
-            for event in delta.events {
-                let at = event.timestamp.with_timezone(&Local);
-                if at >= hourly_from {
-                    hourly
-                        .entry(truncate_local_hour(at))
-                        .or_default()
-                        .add(&event.usage);
-                }
+            let scan = scans.entry(path.clone()).or_default();
+            scan.refresh(&path, &key, hourly_from)?;
+            for (at, usage) in &scan.hourly {
+                hourly.entry(*at).or_default().add(usage);
             }
+        } else {
+            scans.remove(&path);
         }
     }
     store::with_store(|store| {
@@ -374,6 +382,65 @@ fn refresh_instance_usage_statistics(
         Ok(())
     })?;
     load_cached_usage_statistics(provider, history_days)
+}
+
+/// In-memory hourly rollups for additional Codex accounts. The daily scan
+/// remains persisted separately; hourly state can always be rebuilt on startup.
+#[derive(Default)]
+struct HourlyFileScan {
+    state: CachedSessionFile,
+    hourly: BTreeMap<DateTime<Local>, TokenUsage>,
+    modified: Option<std::time::SystemTime>,
+    size: u64,
+    pricing_generation: u64,
+    from: Option<DateTime<Local>>,
+}
+
+impl HourlyFileScan {
+    fn refresh(&mut self, path: &Path, source: &str, from: DateTime<Local>) -> Result<()> {
+        let metadata = fs::metadata(path)?;
+        let modified = metadata.modified().ok();
+        let generation = pricing::catalog_generation();
+        // Appends preserve parser/dedupe state. A rewrite, replacement or new
+        // price catalog requires a clean rebuild, just as a cold scan does.
+        if self.from.is_some_and(|previous| from < previous)
+            || generation != self.pricing_generation
+            || metadata.len() < self.size
+            || session_file_identity(&metadata) != self.state.file_identity
+            || (metadata.len() == self.size && modified != self.modified)
+        {
+            *self = Self::default();
+        }
+        if self.from.is_some() && metadata.len() == self.size && modified == self.modified {
+            // Also skip unchanged unfinished lines; offset intentionally stays
+            // before their bytes until a writer appends the terminating newline.
+            self.hourly.retain(|at, _| *at >= from);
+            self.from = Some(from);
+            return Ok(());
+        }
+        let delta = scan_file_delta(path, source, &mut self.state)?;
+        if delta.rebuilt {
+            self.hourly.clear();
+        }
+        for event in delta.events {
+            let at = event.timestamp.with_timezone(&Local);
+            if at >= from {
+                self.hourly
+                    .entry(truncate_local_hour(at))
+                    .or_default()
+                    .add(&event.usage);
+            }
+        }
+        self.hourly.retain(|at, _| *at >= from);
+        // Only the parser's context and offset are needed between refreshes.
+        self.state.daily.clear();
+        self.state.model_daily.clear();
+        self.modified = modified;
+        self.size = metadata.len();
+        self.pricing_generation = generation;
+        self.from = Some(from);
+        Ok(())
+    }
 }
 
 pub(crate) fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
@@ -389,13 +456,23 @@ pub(crate) fn statistics_from_daily(
     days: &[DailyTokenUsage],
     history_days: u16,
 ) -> UsageStatistics {
+    statistics_from_daily_entries(
+        days.iter().map(|entry| (entry.date, &entry.usage)),
+        history_days,
+    )
+}
+
+fn statistics_from_daily_entries<'a>(
+    days: impl IntoIterator<Item = (NaiveDate, &'a TokenUsage)>,
+    history_days: u16,
+) -> UsageStatistics {
     let history_days = history_days.clamp(1, 365);
     let today = Local::now().date_naive();
     let first_day = today - Duration::days(i64::from(history_days.saturating_sub(1)));
     let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
-    for entry in days {
-        if entry.date >= first_day && entry.date <= today {
-            daily.entry(entry.date).or_default().add(&entry.usage);
+    for (date, usage) in days {
+        if date >= first_day && date <= today {
+            daily.entry(date).or_default().add(usage);
         }
     }
     let mut stats = UsageStatistics {
@@ -1039,14 +1116,15 @@ fn claude_project_daily(
 }
 
 fn claude_statistics(entries: &[&CachedClaudeUsageEntry], history_days: u16) -> UsageStatistics {
-    let days: Vec<DailyTokenUsage> = entries
-        .iter()
-        .map(|entry| DailyTokenUsage {
-            date: entry.timestamp.with_timezone(&Local).date_naive(),
-            usage: entry.usage.clone(),
-        })
-        .collect();
-    statistics_from_daily(&days, history_days)
+    statistics_from_daily_entries(
+        entries.iter().map(|entry| {
+            (
+                entry.timestamp.with_timezone(&Local).date_naive(),
+                &entry.usage,
+            )
+        }),
+        history_days,
+    )
 }
 
 fn claude_model_daily(entries: &[&CachedClaudeUsageEntry]) -> Vec<(NaiveDate, String, TokenUsage)> {
@@ -1387,6 +1465,183 @@ fn collect_claude_session_files(roots: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn synthetic_codex_line(at: DateTime<Utc>, tokens: u64) -> String {
+        format!(
+            "{{\"timestamp\":\"{}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"model\":\"gpt-5.4\",\"input_tokens\":{tokens},\"output_tokens\":2}}}}}}}}\n",
+            at.to_rfc3339()
+        )
+    }
+
+    fn full_hourly(path: &Path, from: DateTime<Local>) -> BTreeMap<DateTime<Local>, TokenUsage> {
+        let delta = scan_file_delta(path, "fixture", &mut CachedSessionFile::default()).unwrap();
+        let mut rows = BTreeMap::<_, TokenUsage>::new();
+        for event in delta.events {
+            let at = event.timestamp.with_timezone(&Local);
+            if at >= from {
+                rows.entry(truncate_local_hour(at))
+                    .or_default()
+                    .add(&event.usage);
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn hourly_incremental_scan_matches_full_scan_through_log_changes() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let now = Utc::now();
+        let from = truncate_local_hour(now.with_timezone(&Local)) - Duration::hours(1);
+        let first = synthetic_codex_line(now, 10);
+        fs::write(&path, first.repeat(2)).unwrap();
+        let mut scan = HourlyFileScan::default();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        assert_eq!(scan.hourly.values().map(|v| v.requests).sum::<u64>(), 1);
+        let offset = scan.state.offset;
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.state.offset, offset);
+        // Consecutive duplicate suppression survives an incremental boundary.
+        let next = synthetic_codex_line(now + Duration::hours(1), 20);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        write!(file, "{first}{}", next.trim_end()).unwrap();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        writeln!(file).unwrap();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        assert_eq!(
+            scan.hourly.values().map(|v| v.input_tokens).sum::<u64>(),
+            30
+        );
+        // Truncation and replacement discard the previous hourly totals.
+        fs::write(&path, synthetic_codex_line(now, 7)).unwrap();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        assert_eq!(scan.hourly.values().map(|v| v.input_tokens).sum::<u64>(), 7);
+        // A same-length rewrite must invalidate the hourly memo even on
+        // Windows, where session_file_identity is unavailable.
+        let modified = scan.modified.unwrap();
+        fs::write(&path, synthetic_codex_line(now, 9)).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(modified + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        assert_eq!(scan.hourly.values().map(|v| v.input_tokens).sum::<u64>(), 9);
+        // Catalog updates must reprice all events, not just appended events.
+        scan.pricing_generation = u64::MAX;
+        scan.hourly.clear();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        scan.refresh(&path, "fixture", from + Duration::hours(3))
+            .unwrap();
+        assert!(scan.hourly.is_empty());
+    }
+
+    #[test]
+    fn borrowed_daily_aggregation_merges_and_filters_without_changing_totals() {
+        let today = Local::now().date_naive();
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 3,
+            requests: 1,
+            ..Default::default()
+        };
+        let days = [
+            today,
+            today,
+            today - Duration::days(1),
+            today - Duration::days(30),
+            today + Duration::days(1),
+        ];
+        let stats = statistics_from_daily_entries(days.into_iter().map(|day| (day, &usage)), 7);
+        assert_eq!(stats.daily.len(), 2);
+        assert_eq!(stats.today.input_tokens, 20);
+        assert_eq!(stats.history.total_tokens(), 39);
+        assert_eq!(stats.history.requests, 3);
+    }
+
+    #[test]
+    #[ignore = "synthetic performance measurement; run with --ignored --nocapture"]
+    fn benchmark_incremental_hourly_and_borrowed_daily() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let now = Utc::now();
+        let from = truncate_local_hour(now.with_timezone(&Local)) - Duration::hours(47);
+        let transcript: String = (1..=20_000).map(|n| synthetic_codex_line(now, n)).collect();
+        fs::write(&path, &transcript).unwrap();
+        let mut scan = HourlyFileScan::default();
+        scan.refresh(&path, "fixture", from).unwrap();
+        let started = Instant::now();
+        for _ in 0..10 {
+            assert_eq!(full_hourly(&path, from), scan.hourly);
+        }
+        let full = started.elapsed();
+        let started = Instant::now();
+        for _ in 0..10 {
+            scan.refresh(&path, "fixture", from).unwrap();
+        }
+        let idle = started.elapsed();
+        eprintln!(
+            "hourly: 20,000 events, {} bytes, 10 refreshes: full={full:?}, incremental idle={idle:?}",
+            transcript.len()
+        );
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(synthetic_codex_line(now, 20_001).as_bytes())
+            .unwrap();
+        let started = Instant::now();
+        scan.refresh(&path, "fixture", from).unwrap();
+        let appended = started.elapsed();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        eprintln!("hourly: one appended event refresh={appended:?}");
+        let entry = CachedClaudeUsageEntry {
+            timestamp: now,
+            usage: TokenUsage {
+                input_tokens: 10,
+                requests: 1,
+                ..Default::default()
+            },
+            message_id: None,
+            request_id: None,
+            is_sidechain: false,
+            has_speed: false,
+            model: None,
+        };
+        let entries = vec![&entry; 100_000];
+        let started = Instant::now();
+        let mut baseline = UsageStatistics::default();
+        for _ in 0..10 {
+            let days: Vec<_> = entries
+                .iter()
+                .map(|entry| DailyTokenUsage {
+                    date: entry.timestamp.with_timezone(&Local).date_naive(),
+                    usage: entry.usage.clone(),
+                })
+                .collect();
+            baseline = statistics_from_daily(&days, 30);
+            std::hint::black_box(&baseline);
+        }
+        let cloned = started.elapsed();
+        let started = Instant::now();
+        for _ in 0..10 {
+            assert_eq!(claude_statistics(&entries, 30), baseline);
+        }
+        eprintln!(
+            "daily: 100,000 events, 10 aggregations: cloned={cloned:?}, borrowed={:?}, temporary bytes avoided={}",
+            started.elapsed(),
+            entries.len() * std::mem::size_of::<DailyTokenUsage>()
+        );
+    }
 
     #[cfg(not(windows))]
     #[test]
