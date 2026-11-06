@@ -267,20 +267,18 @@ impl WorkerHandle {
     /// of blocking the bridge/UI thread that disables or restarts a provider.
     /// Output from the retiring worker is discarded through `retired_flag`.
     pub fn shutdown(mut self) {
-        self.retired.store(true, Ordering::Release);
-        let _ = self.commands.send(WorkerCommand::Shutdown);
-        if let Some(join) = self.join.take() {
-            thread::spawn(move || {
-                let _ = join.join();
-            });
-        }
+        self.stop();
     }
 
     fn stop(&mut self) {
         self.retired.store(true, Ordering::Release);
         let _ = self.commands.send(WorkerCommand::Shutdown);
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            // Drop can run on the UI bridge too (for example on teardown).
+            // A provider request or transcript scan must not block that thread.
+            thread::spawn(move || {
+                let _ = join.join();
+            });
         }
     }
 
@@ -1103,6 +1101,32 @@ mod tests {
     struct ScriptedProvider {
         samples: Vec<RateLimits>,
         index: usize,
+    }
+
+    #[test]
+    fn dropping_worker_handle_does_not_wait_for_a_stalled_worker() {
+        let (commands, _) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let (finished, done) = mpsc::channel();
+        let retired = Arc::new(AtomicBool::new(false));
+        let handle = WorkerHandle {
+            commands,
+            events: None,
+            join: Some(thread::spawn(move || {
+                let _ = wait.recv();
+            })),
+            retired: Arc::clone(&retired),
+        };
+        let dropping = thread::spawn(move || {
+            drop(handle);
+            finished.send(()).unwrap();
+        });
+        let result = done.recv_timeout(Duration::from_secs(2));
+        // Release even on failure, so the regression cannot strand a test thread.
+        let _ = release.send(());
+        dropping.join().unwrap();
+        assert!(result.is_ok());
+        assert!(retired.load(Ordering::Acquire));
     }
 
     #[test]
