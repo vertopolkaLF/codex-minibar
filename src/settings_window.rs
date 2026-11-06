@@ -161,7 +161,7 @@ pub(crate) fn refresh_hotkey_status() {
 
 /// Push a committed settings snapshot into the open window.
 pub fn sync_open_window(settings: Settings) {
-    if SETTINGS_OPEN.load(Ordering::SeqCst) {
+    if is_open() {
         post(Command::Sync(Box::new(settings)));
     }
 }
@@ -266,9 +266,12 @@ pub(crate) fn handle(command: Command, state: &Arc<AppState>, cx: &mut AsyncApp)
             close_existing(&SETTINGS_WINDOW, cx);
             open_onboarding_window(Arc::clone(state), cx);
         }
-        Command::Sync(settings) => with_settings_window(cx, |root, cx| {
-            root.apply_sync(*settings, cx);
-        }),
+        Command::Sync(settings) => {
+            with_settings_window(cx, |root, cx| root.apply_sync((*settings).clone(), cx));
+            if let Some(handle) = ONBOARDING_WINDOW.with(|slot| *slot.borrow()) {
+                let _ = handle.update(cx, |root, _, cx| root.apply_sync(*settings, cx));
+            }
+        }
         Command::DiscoveredBricks(labels) => with_settings_window(cx, |root, cx| {
             root.discovered_bricks = labels;
             cx.notify();

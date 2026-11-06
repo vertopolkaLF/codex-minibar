@@ -20,8 +20,6 @@ use std::sync::{
     mpsc::{self, Receiver, Sender},
 };
 
-use anyhow::Context as _;
-
 use crate::settings::Settings;
 
 type Job = Box<dyn FnOnce() + Send>;
@@ -29,6 +27,13 @@ type Job = Box<dyn FnOnce() + Send>;
 /// Jobs queued but not yet committed. While any are pending, live syncs of
 /// intermediate results are ignored so the window never flickers back.
 static PENDING: AtomicUsize = AtomicUsize::new(0);
+
+thread_local! {
+    // Only the serial writer accesses this slot. Publish after clearing its
+    // pending count so the last snapshot cannot be rejected as an interim edit.
+    static COMMITTED: std::cell::RefCell<Option<(Sender<Settings>, Settings)>> =
+        const { std::cell::RefCell::new(None) };
+}
 
 static WRITER: LazyLock<Mutex<Sender<Job>>> = LazyLock::new(|| {
     let (tx, rx) = mpsc::channel::<Job>();
@@ -44,6 +49,11 @@ static WRITER: LazyLock<Mutex<Sender<Job>>> = LazyLock::new(|| {
                     eprintln!("a settings write panicked; the writer keeps running");
                 }
                 PENDING.fetch_sub(1, Ordering::SeqCst);
+                if let Some((tx, settings)) = COMMITTED.with(|slot| slot.borrow_mut().take())
+                    && let Err(error) = tx.send(settings)
+                {
+                    eprintln!("failed to notify live settings listeners: {error}");
+                }
             }
         });
     if let Err(error) = spawned {
@@ -156,9 +166,7 @@ fn commit_update<T>(
     // Disk persistence is the transaction boundary. A disconnected live
     // listener means the UI is shutting down; it must not make callers
     // roll back secrets after the settings file has already committed.
-    if let Err(error) = settings_tx.send(settings) {
-        eprintln!("failed to notify live settings listeners: {error}");
-    }
+    COMMITTED.with(|slot| *slot.borrow_mut() = Some((settings_tx, settings)));
     Ok(value)
 }
 
@@ -173,9 +181,7 @@ fn commit_replace(settings_tx: Sender<Settings>, mut settings: Settings) -> anyh
     if let Err(error) = settings.apply_runtime_effects() {
         eprintln!("failed to apply runtime settings effects: {error:#}");
     }
-    settings_tx
-        .send(settings)
-        .context("notify live settings listeners")?;
+    COMMITTED.with(|slot| *slot.borrow_mut() = Some((settings_tx, settings)));
     Ok(())
 }
 
@@ -192,6 +198,24 @@ pub(crate) fn load_settings_for_window() -> Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn committed_snapshot_is_published_after_the_job_finishes() {
+        let (tx, rx) = mpsc::channel();
+        let (ready, started) = mpsc::channel();
+        let (release, resume) = mpsc::channel();
+        submit(move || {
+            COMMITTED.with(|slot| *slot.borrow_mut() = Some((tx, Settings::default())));
+            ready.send(()).unwrap();
+            resume.recv().unwrap();
+        });
+        started.recv().unwrap();
+        // Simulate the UI consuming a very fast commit. It must not receive
+        // the snapshot while that write is still marked pending.
+        assert!(matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        release.send(()).unwrap();
+        assert!(rx.recv_timeout(std::time::Duration::from_secs(5)).is_ok());
+    }
 
     #[test]
     fn fallible_jobs_run_serially_in_submission_order() {

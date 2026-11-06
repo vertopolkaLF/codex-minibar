@@ -7,7 +7,10 @@ use std::{
     fs,
     io::{Read, Write, copy},
     path::{Path, PathBuf},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -530,11 +533,13 @@ struct InnerState {
 
 pub struct UpdateController {
     inner: Mutex<InnerState>,
+    notifications_enabled: AtomicBool,
 }
 
 impl UpdateController {
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
+            notifications_enabled: AtomicBool::new(true),
             inner: Mutex::new(InnerState {
                 phase: UpdatePhase::Idle,
                 notified_version: None,
@@ -576,22 +581,28 @@ impl UpdateController {
         self.lock_state().phase = phase;
     }
 
+    /// Also affects checks already in flight, whose result may arrive later.
+    pub fn set_notifications_enabled(&self, enabled: bool) {
+        self.notifications_enabled.store(enabled, Ordering::Relaxed);
+    }
+
     pub fn check_async(self: &Arc<Self>, notify: bool, notify_enabled: bool) {
+        self.set_notifications_enabled(notify_enabled);
         let controller = Arc::clone(self);
         thread::spawn(move || {
-            if let Err(error) = controller.check_once(notify, notify_enabled) {
+            if let Err(error) = controller.check_once(notify) {
                 eprintln!("update check failed: {error:#}");
                 controller.set_phase(UpdatePhase::Failed(error.to_string()));
             }
         });
     }
 
-    fn check_once(&self, notify: bool, notify_enabled: bool) -> Result<()> {
+    fn check_once(&self, notify: bool) -> Result<()> {
         self.set_phase(UpdatePhase::Checking);
         match check_for_update()? {
             Some(update) => {
                 let should_notify = notify
-                    && notify_enabled
+                    && self.notifications_enabled.load(Ordering::Relaxed)
                     && self.lock_state().notified_version.as_deref()
                         != Some(update.version.as_str());
                 if should_notify {

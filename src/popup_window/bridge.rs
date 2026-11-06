@@ -424,6 +424,9 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 return;
             };
             while let Ok(settings) = settings_rx.try_recv() {
+                updates.set_notifications_enabled(
+                    settings.check_for_updates && settings.notifications.update_available,
+                );
                 if settings.check_for_updates && !*check_for_updates {
                     updates.check_async(false, settings.notifications.update_available);
                 }
@@ -938,6 +941,9 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             ("error", error.to_string()),
                         ],
                     );
+                    if notification_settings.activation_failure {
+                        notifications::show_error(&provider.qualified_name(), &ui.last_activation);
+                    }
                     publish_popup_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderPollFailed(provider, worker_revision, error)) => {
