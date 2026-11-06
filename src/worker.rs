@@ -857,11 +857,16 @@ fn run_usage_task_with_rate_limit(
 
         let wake_at = active_rate_limit_pause(&rate_limit_pause, now)
             .map_or(next_refresh, |paused_until| next_refresh.max(paused_until));
-        match commands.recv_timeout(
+        // A clear barrier suppresses scans even after their deadline passes.
+        // Waiting on that expired deadline would spin until Resume arrives.
+        let wait = if paused_after_clear.is_some() {
+            provider.identity_poll_interval()
+        } else {
             wake_at
                 .saturating_duration_since(now)
-                .min(provider.identity_poll_interval()),
-        ) {
+                .min(provider.identity_poll_interval())
+        };
+        match commands.recv_timeout(wait) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
                 let days = days.clamp(1, 365);
@@ -1763,6 +1768,58 @@ mod tests {
             }
         }
         panic!("no clear acknowledgement");
+    }
+
+    #[test]
+    fn clear_barrier_waits_instead_of_spinning_on_expired_scan_deadline() {
+        use std::sync::atomic::AtomicUsize;
+        struct IdentityCounter(Arc<AtomicUsize>);
+        impl UsageProvider for IdentityCounter {
+            fn account_identity(&self) -> Option<String> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                None
+            }
+            fn identity_poll_interval(&self) -> Duration {
+                Duration::from_millis(20)
+            }
+            fn load_cached_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                Ok(UsageStatistics::default())
+            }
+            fn refresh_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                panic!("clear barrier must prevent scans");
+            }
+        }
+        let polls = Arc::new(AtomicUsize::new(0));
+        let provider = IdentityCounter(Arc::clone(&polls));
+        let (tx, rx) = mpsc::channel();
+        let (events, received) = mpsc::channel();
+        // Queue the barrier before startup: next_refresh is already due when
+        // limits become ready, making this exercise an expired scan deadline.
+        tx.send(WorkerCommand::ClearUsageData(1)).unwrap();
+        let ready = Arc::new(AtomicBool::new(false));
+        let worker_ready = Arc::clone(&ready);
+        let task = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(600),
+                true,
+                rx,
+                events,
+                worker_ready,
+            );
+        });
+        recv_cleared(&received, 1);
+        ready.store(true, Ordering::Release);
+        thread::sleep(Duration::from_millis(200));
+        tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+        let count = polls.load(Ordering::SeqCst);
+        eprintln!("clear barrier: {count} identity samples in 200ms");
+        assert!(
+            count <= 15,
+            "busy-polled identity {count} times while paused"
+        );
     }
 
     #[test]
