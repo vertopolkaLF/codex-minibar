@@ -352,6 +352,18 @@ impl OnboardingWindow {
         onboarding
     }
 
+    /// Keep the wizard's snapshot current with commits from other surfaces.
+    pub(crate) fn apply_sync(&mut self, settings: Settings, cx: &mut Context<Self>) {
+        if super::persistence::has_pending() || self.settled || self.finishing {
+            return;
+        }
+        self.enabled = enabled_providers(&settings);
+        self.settings = settings;
+        self.settings.language.apply();
+        cx.refresh_windows();
+        cx.notify();
+    }
+
     /// Apply an edit locally and commit every choice so the popup follows.
     fn edit(&mut self, cx: &mut Context<Self>, edit: impl Fn(&mut Settings)) {
         edit(&mut self.settings);
@@ -836,6 +848,10 @@ impl Render for OnboardingWindow {
             self.settings.accent_color,
             window.appearance(),
             self.fonts.clone(),
+        );
+        theme.font = crate::popup_window::ui::theme::ui_font_family(
+            self.settings.font_family.as_deref(),
+            &self.fonts.text,
         );
         if self.backdrop.mica() {
             theme = theme.with_mica();

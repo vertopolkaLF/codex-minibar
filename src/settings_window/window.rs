@@ -1342,6 +1342,10 @@ impl Render for SettingsWindow {
             window.appearance(),
             self.fonts.clone(),
         );
+        theme.font = crate::popup_window::ui::theme::ui_font_family(
+            self.settings.font_family.as_deref(),
+            &self.fonts.text,
+        );
         if self.backdrop.mica() {
             theme = theme.with_mica();
         }
