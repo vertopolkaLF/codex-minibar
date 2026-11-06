@@ -101,7 +101,11 @@ impl SettingsWindow {
         let bare = !(modifiers.control || modifiers.alt || modifiers.shift || modifiers.platform);
         match key {
             "escape" if bare => self.shortcut_dialog = None,
-            "enter" if bare && dialog.pending.is_some() => self.save_shortcut(cx),
+            "enter" if bare => {
+                if dialog.pending.is_some() && dialog.pending != self.desktop_shortcut.current {
+                    self.save_shortcut(cx);
+                }
+            }
             _ => {
                 if let Some(accelerator) = Accelerator::from_press(
                     key,
@@ -130,6 +134,9 @@ impl SettingsWindow {
         let Some(dialog) = self.shortcut_dialog.as_mut() else {
             return;
         };
+        if dialog.saving || dialog.pending == self.desktop_shortcut.current {
+            return;
+        }
         let value = dialog.pending.clone();
         dialog.saving = true;
         dialog.failed = false;
@@ -177,6 +184,13 @@ impl SettingsWindow {
             .track(k, self.shortcut_dialog.clone())?;
         let theme = k.theme.clone();
         let cancel = Self::h(cx, |this, (), _, cx| {
+            if this
+                .shortcut_dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.saving)
+            {
+                return;
+            }
             this.shortcut_dialog = None;
             cx.notify();
         });
