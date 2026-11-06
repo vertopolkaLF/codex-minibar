@@ -542,12 +542,23 @@ impl UpdateController {
         })
     }
 
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, InnerState> {
+        self.inner.lock().unwrap_or_else(|poisoned| {
+            crate::logger::info("Update controller lock poisoned; resetting update state");
+            let mut state = poisoned.into_inner();
+            *state = InnerState {
+                phase: UpdatePhase::Failed(
+                    "Update task interrupted; check for updates again".into(),
+                ),
+                notified_version: None,
+            };
+            self.inner.clear_poison();
+            state
+        })
+    }
+
     pub fn snapshot(&self) -> UpdatePhase {
-        self.inner
-            .lock()
-            .expect("update controller lock")
-            .phase
-            .clone()
+        self.lock_state().phase.clone()
     }
 
     pub fn is_update_available(&self) -> bool {
@@ -562,7 +573,7 @@ impl UpdateController {
     }
 
     fn set_phase(&self, phase: UpdatePhase) {
-        self.inner.lock().expect("update controller lock").phase = phase;
+        self.lock_state().phase = phase;
     }
 
     pub fn check_async(self: &Arc<Self>, notify: bool, notify_enabled: bool) {
@@ -581,12 +592,7 @@ impl UpdateController {
             Some(update) => {
                 let should_notify = notify
                     && notify_enabled
-                    && self
-                        .inner
-                        .lock()
-                        .expect("update controller lock")
-                        .notified_version
-                        .as_deref()
+                    && self.lock_state().notified_version.as_deref()
                         != Some(update.version.as_str());
                 if should_notify {
                     notifications::show_update_available(
@@ -594,10 +600,7 @@ impl UpdateController {
                         &update.html_url,
                         !update.asset_url.is_empty(),
                     );
-                    self.inner
-                        .lock()
-                        .expect("update controller lock")
-                        .notified_version = Some(update.version.clone());
+                    self.lock_state().notified_version = Some(update.version.clone());
                 }
                 self.set_phase(UpdatePhase::Available(update));
             }
@@ -1153,6 +1156,24 @@ fn shell_execute(target: &std::ffi::OsStr, description: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poisoned_update_state_recovers_without_a_second_panic() {
+        let controller = UpdateController::new();
+        let other = Arc::clone(&controller);
+        assert!(
+            thread::spawn(move || {
+                let mut state = other.inner.lock().unwrap();
+                state.phase = UpdatePhase::Applying;
+                panic!("interrupted update task");
+            })
+            .join()
+            .is_err()
+        );
+        assert!(matches!(controller.snapshot(), UpdatePhase::Failed(_)));
+        controller.set_phase(UpdatePhase::Checking);
+        assert_eq!(controller.snapshot(), UpdatePhase::Checking);
+    }
 
     #[test]
     fn updater_requests_time_out_when_the_server_never_sends_headers() {
