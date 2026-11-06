@@ -176,18 +176,21 @@ pub(crate) fn provider_install_status(
         .then(|| std::path::Path::new(configured_folder.trim()));
     let (app, cli, used) = match provider {
         ProviderKind::Codex => {
-            let candidates = crate::discovery::discover(configured_folder);
+            let candidates = crate::codex::discovery::discover(configured_folder);
             let app = candidates
                 .iter()
-                .find(|candidate| candidate.source == crate::discovery::CandidateSource::DesktopApp)
+                .find(|candidate| candidate.desktop_app)
                 .map(|candidate| candidate.path.as_path());
             let cli = candidates
                 .iter()
-                .find(|candidate| candidate.source != crate::discovery::CandidateSource::DesktopApp)
+                .find(|candidate| !candidate.desktop_app)
                 .map(|candidate| candidate.path.as_path());
-            let used = candidates.first().map(|candidate| match candidate.source {
-                crate::discovery::CandidateSource::DesktopApp => ProviderInstallSource::App,
-                _ => ProviderInstallSource::Cli,
+            let used = candidates.first().map(|candidate| {
+                if candidate.desktop_app {
+                    ProviderInstallSource::App
+                } else {
+                    ProviderInstallSource::Cli
+                }
             });
             (app.map(display_fs_path), cli.map(display_fs_path), used)
         }

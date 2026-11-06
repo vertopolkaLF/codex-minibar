@@ -4,10 +4,6 @@
 use std::{
     path::Path,
     process::{Command, Stdio},
-    sync::{
-        Arc,
-        atomic::{AtomicU8, Ordering},
-    },
     thread,
     time::{Duration, Instant},
 };
@@ -15,38 +11,7 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use serde::Deserialize;
 
-#[cfg(windows)]
-pub(crate) mod login_child;
-
-/// 0 = waiting; 1 = cancelled; 2 = saving. Cancellation cannot race a commit.
-#[derive(Clone, Default)]
-pub(crate) struct LoginControl(Arc<AtomicU8>);
-
-impl PartialEq for LoginControl {
-    fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
-    }
-}
-
-impl LoginControl {
-    pub(crate) fn cancel(&self) {
-        let _ = self
-            .0
-            .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
-    }
-    pub(crate) fn cancelled(&self) -> bool {
-        self.0.load(Ordering::SeqCst) == 1
-    }
-    pub(crate) fn begin_save(&self) -> Result<()> {
-        ensure!(
-            self.0
-                .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok(),
-            "Sign-in cancelled."
-        );
-        Ok(())
-    }
-}
+use crate::provider_support::{LoginControl, is_link};
 
 /// The parts of `claudeAiOauth` that make a login usable for limits.
 #[derive(Deserialize)]
@@ -74,15 +39,14 @@ impl Session {
 }
 
 fn login_command(executable: &Path, directory: &Path) -> Command {
-    let mut command = Command::new(executable);
+    let mut command =
+        crate::provider_support::cli_command(executable, ["auth", "login", "--claudeai"]);
     command
-        .args(["auth", "login", "--claudeai"])
         .current_dir(directory)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
     super::scope_command(&mut command, Some(directory));
-    crate::provider_cli::disable_auto_update(&mut command);
     command
 }
 
@@ -106,17 +70,6 @@ fn login_root() -> Result<std::path::PathBuf> {
 /// reparse points.
 pub(crate) fn cleanup_abandoned_logins() -> Result<()> {
     cleanup_root(&login_root()?)
-}
-
-pub(crate) fn is_link(metadata: &std::fs::Metadata) -> bool {
-    #[cfg(windows)]
-    {
-        use std::os::windows::fs::MetadataExt;
-        if metadata.file_attributes() & 0x400 != 0 {
-            return true;
-        }
-    }
-    metadata.file_type().is_symlink()
 }
 
 fn cleanup_root(root: &Path) -> Result<()> {
@@ -169,7 +122,7 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
     );
     let command = login_command(&executable, folder);
     #[cfg(windows)]
-    let mut child = login_child::LoginChild::spawn(&command)?;
+    let mut child = crate::provider_support::login_child::LoginChild::spawn(&command)?;
     #[cfg(not(windows))]
     let mut child = {
         let mut command = command;
@@ -270,16 +223,5 @@ mod tests {
             serde_json::json!({"accessToken":"sk-ant-oat-x","refreshToken":"r","scopes":["user:profile"]}),
         );
         assert!(read_login(folder.path()).is_ok());
-    }
-
-    #[test]
-    fn cancellation_and_save_are_mutually_exclusive() {
-        let control = LoginControl::default();
-        control.cancel();
-        assert!(control.begin_save().is_err());
-        let control = LoginControl::default();
-        control.begin_save().unwrap();
-        control.cancel();
-        assert!(!control.cancelled());
     }
 }

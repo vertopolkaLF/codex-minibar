@@ -14,7 +14,7 @@ use serde_json::Value;
 
 use crate::{
     limits::{LimitWindow, RateLimits},
-    provider_cli,
+    provider_support,
     usage::UsageStatistics,
     worker::{Activator, LimitProvider, UsageProvider},
 };
@@ -42,7 +42,7 @@ impl GrokClient {
 
     fn fresh_credentials(&self) -> Result<GrokCredentials> {
         recover_stale_credentials(load_credentials()?, || {
-            provider_cli::refresh_session(
+            provider_support::refresh_session(
                 "Grok",
                 &cli_candidates(self.cli_folder.as_deref()),
                 &["models"],
@@ -152,7 +152,14 @@ fn grok_home_cli() -> Option<PathBuf> {
 }
 
 fn cli_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
-    provider_cli::candidates_from(explicit, grok_home_cli(), CLI_NAMES)
+    provider_support::find_cli(
+        explicit,
+        &provider_support::CliSearch {
+            names: CLI_NAMES,
+            known: grok_home_cli().into_iter().collect(),
+            user_bins: false,
+        },
+    )
 }
 
 struct GrokCredentials {
@@ -437,9 +444,6 @@ mod tests {
         let executable = directory.path().join("grok.exe");
         fs::write(&executable, b"fixture").unwrap();
 
-        assert_eq!(
-            cli_available(Some(directory.path())),
-            Some(fs::canonicalize(executable).unwrap())
-        );
+        assert_eq!(cli_available(Some(directory.path())), Some(executable));
     }
 }

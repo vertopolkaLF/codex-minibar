@@ -169,7 +169,7 @@ fn no_links(path: &Path) -> Result<()> {
         }
         match fs::symlink_metadata(ancestor) {
             Ok(metadata) => ensure!(
-                !crate::claude::profile_oauth::is_link(&metadata),
+                !crate::provider_support::is_link(&metadata),
                 "CLI cache path must not contain links: {}",
                 ancestor.display()
             ),
@@ -182,9 +182,7 @@ fn no_links(path: &Path) -> Result<()> {
 
 fn usable(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|metadata| {
-        metadata.is_file()
-            && metadata.len() > 0
-            && !crate::claude::profile_oauth::is_link(&metadata)
+        metadata.is_file() && metadata.len() > 0 && !crate::provider_support::is_link(&metadata)
     })
 }
 
@@ -203,7 +201,7 @@ fn cache_directories(root: &Path) -> Result<Vec<(Version, PathBuf)>> {
             continue;
         };
         let metadata = fs::symlink_metadata(entry.path())?;
-        if metadata.is_dir() && !crate::claude::profile_oauth::is_link(&metadata) {
+        if metadata.is_dir() && !crate::provider_support::is_link(&metadata) {
             versions.push((version, entry.path()));
         }
     }
@@ -351,7 +349,7 @@ fn prune(root: &Path, current: &Path, pins: &HashMap<PathBuf, usize>) -> Result<
                 && !name.starts_with(".codex-cache-")
                 || !entry.file_type().is_ok_and(|kind| kind.is_file())
                 || fs::symlink_metadata(entry.path())
-                    .is_ok_and(|metadata| crate::claude::profile_oauth::is_link(&metadata))
+                    .is_ok_and(|metadata| crate::provider_support::is_link(&metadata))
         }) {
             crate::logger::info(format!(
                 "Codex CLI cache cleanup skipped {}: contains unknown files or links",

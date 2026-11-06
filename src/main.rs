@@ -47,7 +47,7 @@ fn run() -> Result<()> {
         codex_minibar::updater::cleanup_install_dir();
     });
     std::thread::spawn(|| {
-        if let Err(error) = codex_minibar::discovery::cleanup() {
+        if let Err(error) = codex_minibar::codex::discovery::cleanup() {
             codex_minibar::logger::info(format!(
                 "Codex CLI startup cache cleanup deferred: {error:#}"
             ));

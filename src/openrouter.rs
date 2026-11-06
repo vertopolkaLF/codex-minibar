@@ -486,10 +486,7 @@ pub fn is_installed() -> bool {
 }
 
 pub fn key_is_configured() -> bool {
-    secrets::load(SECRET_NAME)
-        .ok()
-        .flatten()
-        .is_some_and(|key| !key.trim().is_empty())
+    secrets::has_value(SECRET_NAME)
 }
 
 pub fn save_api_key(value: Option<&str>) -> Result<()> {
@@ -551,11 +548,11 @@ pub fn is_installed_for_accounts(accounts: &[OpenRouterAccount]) -> bool {
 }
 
 pub fn api_key_is_configured(account_id: &str, key_id: &str) -> bool {
-    load_secret(&api_secret_name(account_id, key_id))
+    secrets::has_value(&api_secret_name(account_id, key_id))
 }
 
 pub fn management_key_is_configured(account_id: &str) -> bool {
-    load_secret(&management_secret_name(account_id))
+    secrets::has_value(&management_secret_name(account_id))
 }
 
 pub(crate) fn has_management_key(accounts: &[OpenRouterAccount]) -> bool {
@@ -883,13 +880,6 @@ fn load_credentials(instance: &ProviderInstance) -> Result<Vec<AccountCredential
         })
         .filter_map(|result| result.transpose())
         .collect()
-}
-
-fn load_secret(name: &str) -> bool {
-    secrets::load(name)
-        .ok()
-        .flatten()
-        .is_some_and(|value| !value.trim().is_empty())
 }
 
 fn load_secret_value(name: &str) -> Result<Option<String>> {

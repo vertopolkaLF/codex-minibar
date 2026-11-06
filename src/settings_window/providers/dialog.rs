@@ -93,7 +93,7 @@ pub(crate) struct ProviderDialog {
     error: Option<String>,
     checking: bool,
     claude_method: ProfileCredentialMethod,
-    login_control: crate::claude::profile_oauth::LoginControl,
+    login_control: crate::provider_support::LoginControl,
     focused: bool,
 }
 
@@ -122,7 +122,7 @@ impl ProviderDialog {
         Self::new(ProviderDialogKind::AddInstance)
     }
 
-    pub(crate) fn login_control(&self) -> crate::claude::profile_oauth::LoginControl {
+    pub(crate) fn login_control(&self) -> crate::provider_support::LoginControl {
         self.login_control.clone()
     }
 
@@ -1390,7 +1390,7 @@ impl SettingsWindow {
 /// its credential revision so the worker re-reads the folder.
 fn sign_in(
     provider: ProviderId,
-    control: crate::claude::profile_oauth::LoginControl,
+    control: crate::provider_support::LoginControl,
     settings_tx: Sender<Settings>,
 ) -> anyhow::Result<DialogOutcome> {
     let settings = Settings::load_or_create(&crate::app_paths::settings()?)?;

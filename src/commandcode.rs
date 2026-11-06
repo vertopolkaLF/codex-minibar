@@ -27,7 +27,7 @@ use serde_json::Value;
 use crate::{
     instances::ProviderId,
     limits::{AdditionalLimit, Credits, LimitWindow, RateLimits, UsageAmount},
-    provider_cli, store,
+    provider_support, store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
     worker::{Activator, LimitProvider, UsageProvider},
 };
@@ -172,17 +172,16 @@ pub fn is_installed(explicit: Option<&Path>) -> bool {
 /// Resolves a Command Code CLI launcher. An explicit folder is searched first;
 /// a file path remains supported so a copied launcher still counts.
 pub fn cli_available(explicit: Option<&Path>) -> Option<PathBuf> {
-    provider_cli::candidates_from(explicit, npm_launchers(), CLI_NAMES)
-        .into_iter()
-        .next()
-}
-
-fn npm_launchers() -> Vec<PathBuf> {
-    let Some(appdata) = std::env::var_os("APPDATA") else {
-        return Vec::new();
-    };
-    let npm = PathBuf::from(appdata).join("npm");
-    CLI_NAMES.iter().map(|name| npm.join(name)).collect()
+    provider_support::find_cli(
+        explicit,
+        &provider_support::CliSearch {
+            names: CLI_NAMES,
+            known: Vec::new(),
+            user_bins: true,
+        },
+    )
+    .into_iter()
+    .next()
 }
 
 fn auth_path() -> Option<PathBuf> {
@@ -782,10 +781,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let launcher = directory.path().join("cmdc.cmd");
         fs::write(&launcher, b"fixture").unwrap();
-        assert_eq!(
-            cli_available(Some(directory.path())),
-            Some(fs::canonicalize(launcher).unwrap())
-        );
+        assert_eq!(cli_available(Some(directory.path())), Some(launcher));
     }
 
     fn transcript(lines: &[&str]) -> tempfile::TempDir {

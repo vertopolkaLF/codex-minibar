@@ -97,10 +97,7 @@ pub(crate) fn restore_manual_key(rollback: secrets::EncodedRollback) -> Result<(
 }
 
 pub fn key_is_configured(provider: ProviderId) -> bool {
-    manual_key(provider)
-        .ok()
-        .flatten()
-        .is_some_and(|value| !value.trim().is_empty())
+    secret_name(provider).is_some_and(|name| secrets::has_value(&name))
 }
 
 pub struct OpenCodeClient {

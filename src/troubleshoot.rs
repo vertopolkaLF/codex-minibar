@@ -90,7 +90,7 @@ fn launch_terminal(selected: Option<&AvailableAiTool>) -> Result<()> {
     let script = script_path()?;
     let prepared = selected
         .filter(|tool| tool.tool == AiTool::Codex)
-        .map(|tool| crate::discovery::prepare(&tool.executable))
+        .map(|tool| crate::codex::discovery::prepare(&tool.executable))
         .transpose()?;
     let mut powershell_args = vec![
         "-NoLogo".to_owned(),

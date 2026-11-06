@@ -64,6 +64,11 @@ pub fn load(name: &str) -> Result<Option<String>> {
     load_from(&path, name)
 }
 
+/// Whether `name` holds a readable, non-blank value.
+pub fn has_value(name: &str) -> bool {
+    load(name).ok().flatten().is_some()
+}
+
 fn load_from(path: &Path, name: &str) -> Result<Option<String>> {
     let Some(file) = read_secret_file(path)? else {
         return Ok(None);

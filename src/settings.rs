@@ -2887,7 +2887,7 @@ impl Settings {
         );
         crate::provider_registry::apply_logo_settings(self.replace_chatgpt_logo_with_codex);
         crate::instances::publish(&self.instances);
-        crate::discovery::protect_configured_paths(
+        crate::codex::discovery::protect_configured_paths(
             self.instances
                 .iter()
                 .filter(|instance| instance.driver == ProviderKind::Codex)

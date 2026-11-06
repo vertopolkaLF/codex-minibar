@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::{
     limits::{LimitWindow, RateLimits},
-    provider_cli,
+    provider_support,
     usage::UsageStatistics,
     worker::{Activator, LimitProvider, UsageProvider},
 };
@@ -44,7 +44,7 @@ impl AntigravityClient {
 
     fn fresh_session(&self) -> Result<AntigravitySession> {
         recover_stale_session(parse_credential_blob(&credential_blob()?)?, || {
-            provider_cli::refresh_session(
+            provider_support::refresh_session(
                 "Antigravity",
                 &cli_candidates(self.cli_folder.as_deref()),
                 &["models"],
@@ -147,7 +147,14 @@ fn cli_candidates(explicit: Option<&Path>) -> Vec<PathBuf> {
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         known.push(PathBuf::from(local_app_data).join("agy/bin/agy.exe"));
     }
-    provider_cli::candidates_from(explicit, known, CLI_NAMES)
+    provider_support::find_cli(
+        explicit,
+        &provider_support::CliSearch {
+            names: CLI_NAMES,
+            known,
+            user_bins: false,
+        },
+    )
 }
 
 fn is_desktop_app_name(path: &Path) -> bool {
@@ -900,10 +907,7 @@ mod tests {
         std::fs::write(&cli, b"cli").unwrap();
         std::fs::write(&app, b"app").unwrap();
 
-        assert_eq!(
-            cli_available(Some(directory.path())),
-            Some(std::fs::canonicalize(&cli).unwrap())
-        );
+        assert_eq!(cli_available(Some(directory.path())), Some(cli.clone()));
         assert_eq!(
             desktop_app(Some(directory.path())).as_deref(),
             Some(app.as_path())

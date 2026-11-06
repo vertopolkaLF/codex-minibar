@@ -1,7 +1,7 @@
 //! Signs a Codex instance in by running Codex's own login with the instance's
 //! `CODEX_HOME`. Codex keeps and refreshes the login there; Minibar only reads
 //! it.
-pub(crate) use crate::claude::profile_oauth::LoginControl;
+use crate::provider_support::{LoginControl, is_link};
 use anyhow::{Context, Result, bail, ensure};
 use std::{
     path::{Path, PathBuf},
@@ -23,9 +23,11 @@ pub(crate) const AUTH_OVERRIDES: &[&str] = &[
 ];
 
 fn login_command(executable: &Path, directory: &Path) -> Command {
-    let mut command = Command::new(executable);
+    let mut command = crate::provider_support::cli_command(
+        executable,
+        ["-c", "cli_auth_credentials_store=\"file\"", "login"],
+    );
     command
-        .args(["-c", "cli_auth_credentials_store=\"file\"", "login"])
         .env("CODEX_HOME", directory)
         .current_dir(directory)
         .stdin(Stdio::null())
@@ -38,7 +40,7 @@ fn login_command(executable: &Path, directory: &Path) -> Command {
 }
 
 fn native_login_executable(explicit: Option<&Path>) -> Option<PathBuf> {
-    crate::discovery::discover(explicit)
+    crate::codex::discovery::discover(explicit)
         .into_iter()
         .find_map(|candidate| native_for_candidate(&candidate.path))
 }
@@ -119,7 +121,6 @@ pub(crate) fn cleanup_abandoned_logins() -> Result<()> {
 }
 
 fn cleanup_root(root: &Path) -> Result<()> {
-    use crate::claude::profile_oauth::is_link;
     let metadata = match std::fs::symlink_metadata(root) {
         Ok(metadata) => metadata,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -155,7 +156,7 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
     ensure!(!control.cancelled(), "Codex sign-in cancelled.");
     let executable = native_login_executable(explicit)
         .context("Install native Windows Codex CLI or Codex desktop to sign in from Minibar.")?;
-    let prepared = crate::discovery::prepare(&executable)?;
+    let prepared = crate::codex::discovery::prepare(&executable)?;
     let executable = &prepared.path;
     ensure!(
         executable
@@ -165,12 +166,12 @@ pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginContr
     );
     std::fs::create_dir_all(folder).with_context(|| format!("create {}", folder.display()))?;
     ensure!(
-        !crate::claude::profile_oauth::is_link(&std::fs::symlink_metadata(folder)?),
+        !is_link(&std::fs::symlink_metadata(folder)?),
         "The config folder must not be a link."
     );
     let command = login_command(executable, folder);
     #[cfg(windows)]
-    let mut child = crate::claude::profile_oauth::login_child::LoginChild::spawn(&command)?;
+    let mut child = crate::provider_support::login_child::LoginChild::spawn(&command)?;
     #[cfg(not(windows))]
     let mut child = {
         let mut command = command;

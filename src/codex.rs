@@ -6,7 +6,7 @@ use std::{
     process::{Child, Command, Stdio},
     sync::{OnceLock, mpsc},
     thread,
-    time::{Duration as StdDuration, Instant},
+    time::Duration as StdDuration,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -34,6 +34,7 @@ const WHAM_USAGE_URL: &str = "https://chatgpt.com/backend-api/wham/usage";
 const WHAM_RESET_CREDITS_URL: &str =
     "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 
+pub mod discovery;
 pub(crate) mod profile_oauth;
 
 /// Removes leftovers of the former temporary sign-in folders.
@@ -123,7 +124,7 @@ impl CodexActivator {
             ACTIVATION_MODEL
         ));
         let args = activation_args(&workspace, &last_message_path);
-        let prepared = crate::discovery::prepare(&self.executable)?;
+        let prepared = crate::codex::discovery::prepare(&self.executable)?;
         let mut child = command_for_codex(&prepared.path, &args, self.home.as_deref())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -138,23 +139,17 @@ impl CodexActivator {
             }
             buf
         });
-        let deadline = Instant::now() + self.timeout;
-        let status = loop {
-            if let Some(status) = child.try_wait().context("wait for Codex activation")? {
-                break status;
+        let Some(status) = crate::provider_support::wait_with_timeout(&mut child, self.timeout)
+            .context("wait for Codex activation")?
+        else {
+            let stderr = stderr_reader.join().unwrap_or_default().trim().to_owned();
+            if stderr.is_empty() {
+                bail!("Codex activation timed out after {:?}", self.timeout);
             }
-            if Instant::now() >= deadline {
-                terminate(&mut child);
-                let stderr = stderr_reader.join().unwrap_or_default().trim().to_owned();
-                if stderr.is_empty() {
-                    bail!("Codex activation timed out after {:?}", self.timeout);
-                }
-                bail!(
-                    "Codex activation timed out after {:?}: {stderr}",
-                    self.timeout
-                );
-            }
-            thread::sleep(StdDuration::from_millis(100));
+            bail!(
+                "Codex activation timed out after {:?}: {stderr}",
+                self.timeout
+            );
         };
         let stderr = stderr_reader.join().unwrap_or_default();
         let stderr = stderr.trim();
@@ -302,7 +297,7 @@ impl CodexClient {
         )?;
         let stderr = child.stderr.take();
         let result = self.exchange(&mut child);
-        terminate(&mut child);
+        crate::provider_support::terminate(&mut child);
         let result = match (result, stderr) {
             (Err(error), Some(stderr)) => Err(enrich_with_stderr(error, stderr)),
             (result, _) => result,
@@ -346,7 +341,7 @@ impl CodexClient {
                 "account/rateLimitResetCredit/consume",
                 json!({"idempotencyKey": key}),
             );
-            terminate(&mut child);
+            crate::provider_support::terminate(&mut child);
             let response = result?;
             crate::banked_reset::Outcome::parse(
                 response
@@ -951,7 +946,7 @@ fn spawn_codex(
     home: Option<&Path>,
     stderr: Stdio,
 ) -> Result<Child> {
-    let prepared = crate::discovery::prepare(executable)?;
+    let prepared = crate::codex::discovery::prepare(executable)?;
     // The lease covers the preparation-to-spawn gap. Windows protects the
     // executable mapping from deletion for the child's lifetime afterwards.
     command_for_codex(&prepared.path, args, home)
@@ -967,51 +962,16 @@ fn command_for_codex(
     args: impl IntoIterator<Item = impl AsRef<OsStr>>,
     home: Option<&Path>,
 ) -> Command {
-    let extension = executable
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default();
-    // `.cmd`/`.bat` shims are spawned directly: std routes them through
-    // cmd.exe with its own escaping and refuses arguments it cannot quote
-    // safely, so `&`, `|`, `^`, `%` and quotes never become shell syntax.
-    let mut command = if cfg!(windows) && extension.eq_ignore_ascii_case("ps1") {
-        let mut command = Command::new("powershell.exe");
-        command
-            .args([
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-ExecutionPolicy",
-                "Bypass",
-                "-File",
-            ])
-            .arg(executable)
-            .args(args);
-        command
-    } else {
-        let mut command = Command::new(executable);
-        command.args(args);
-        command
-    };
+    let mut command = crate::provider_support::cli_command(executable, args);
     if let Some(home) = home {
         command.env("CODEX_HOME", home);
         command.env_remove("OPENAI_API_KEY");
     }
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
     command
 }
 
-fn terminate(child: &mut Child) {
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
 pub fn first_available(explicit: Option<&Path>) -> Result<PathBuf> {
-    crate::discovery::discover(explicit)
+    crate::codex::discovery::discover(explicit)
         .into_iter()
         .next()
         .map(|candidate| candidate.path)

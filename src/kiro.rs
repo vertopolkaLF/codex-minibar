@@ -7,8 +7,7 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    thread,
+    process::Stdio,
     time::{Duration, Instant, SystemTime},
 };
 
@@ -196,49 +195,30 @@ fn cli_identity_account_name(executable: &Path) -> Option<String> {
         return None;
     }
 
-    let mut command = Command::new(executable);
-    command
-        .args(["whoami", "--format", "json"])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null());
-    crate::provider_cli::disable_auto_update(&mut command);
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
+    let mut child =
+        crate::provider_support::cli_command(executable, ["whoami", "--format", "json"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .ok()?;
+    let status = crate::provider_support::wait_with_timeout(&mut child, Duration::from_secs(5))
+        .ok()
+        .flatten()?;
+    if !status.success() {
+        return None;
     }
-
-    let mut child = command.spawn().ok()?;
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                if !status.success() {
-                    return None;
-                }
-                let output = child.wait_with_output().ok()?;
-                if !output.status.success() {
-                    return None;
-                }
-                let response: Value = serde_json::from_slice(&output.stdout).ok()?;
-                let user = response
-                    .get("userInfo")
-                    .or_else(|| response.get("user_info"))
-                    .unwrap_or(&response);
-                let user: KiroUserInfo = serde_json::from_value(user.clone()).ok()?;
-                return account_display_name(&user);
-            }
-            Ok(None) if Instant::now() < deadline => {
-                thread::sleep(Duration::from_millis(50));
-            }
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-        }
+    let output = child.wait_with_output().ok()?;
+    if !output.status.success() {
+        return None;
     }
+    let response: Value = serde_json::from_slice(&output.stdout).ok()?;
+    let user = response
+        .get("userInfo")
+        .or_else(|| response.get("user_info"))
+        .unwrap_or(&response);
+    let user: KiroUserInfo = serde_json::from_value(user.clone()).ok()?;
+    account_display_name(&user)
 }
 
 fn cli_auth_cache_is_fresh() -> bool {
@@ -508,7 +488,12 @@ pub fn cli_path(explicit: Option<&Path>) -> Option<PathBuf> {
         known.push(base.home_dir().join(".local/bin/kiro-cli.exe"));
         known.push(base.home_dir().join(".local/bin/kiro-cli"));
     }
-    crate::provider_cli::candidates_from(explicit, known, &["kiro-cli.exe", "kiro-cli"])
+    let search = crate::provider_support::CliSearch {
+        names: &["kiro-cli.exe", "kiro-cli"],
+        known,
+        user_bins: false,
+    };
+    crate::provider_support::find_cli(explicit, &search)
         .into_iter()
         .next()
 }
