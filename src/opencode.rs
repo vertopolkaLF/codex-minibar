@@ -474,7 +474,14 @@ fn parse_window(parent: &Value, names: &[&str], sampled_at: DateTime<Utc>) -> Op
     .iter()
     .find_map(|key| object.get(*key).and_then(Value::as_i64));
     let resets_at = resets_at.or_else(|| {
-        reset_in_seconds.map(|seconds| sampled_at + chrono::Duration::seconds(seconds.max(0)))
+        reset_in_seconds.and_then(|seconds| {
+            let reset = chrono::Duration::try_seconds(seconds.max(0))
+                .and_then(|duration| sampled_at.checked_add_signed(duration));
+            if reset.is_none() {
+                crate::logger::info("OpenCode returned an out-of-range reset interval");
+            }
+            reset
+        })
     });
     Some(LimitWindow {
         // The OpenCode Go API reports percentage points. In particular, 1 is
@@ -543,6 +550,20 @@ fn catalog_for_test(provider: ProviderKind) -> Catalog {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn go_usage_ignores_out_of_range_reset_intervals() {
+        for (sampled_at, seconds) in [
+            (Utc::now(), i64::MAX),
+            (Utc::now(), i64::MAX / 1000),
+            (DateTime::<Utc>::MAX_UTC, 1),
+        ] {
+            let raw = serde_json::json!({"rolling": {"percent": 25, "resetInSec": seconds}});
+            let limits = parse_go_usage(&raw.to_string(), sampled_at).unwrap();
+            assert_eq!(limits.primary.used_percent, Some(25));
+            assert_eq!(limits.primary.resets_at, None);
+        }
+    }
 
     #[test]
     fn go_usage_maps_all_windows_without_rescaling_one_percent() {

@@ -758,6 +758,16 @@ fn read_credential_file(path: &Path) -> Result<Value> {
     serde_json::from_slice(&contents).with_context(|| format!("parse {}", path.display()))
 }
 
+fn renewal_expiry(now: i64, seconds: i64) -> Result<i64> {
+    let expires_at = seconds
+        .checked_mul(1000)
+        .and_then(|millis| now.checked_add(millis))
+        .filter(|_| seconds > 0)
+        .filter(|millis| DateTime::<Utc>::from_timestamp_millis(*millis).is_some())
+        .context("Claude login renewal returned an out-of-range expiry")?;
+    Ok(expires_at)
+}
+
 /// Renews a CLI login with its refresh token, exactly as Claude Code does,
 /// and writes the new tokens back into the same file. Only an expired login
 /// is renewed, and a running Claude Code renews ahead of expiry, so this
@@ -824,6 +834,11 @@ fn refresh_cli_login(agent: &ureq::Agent, refresh: &FileRefresh) -> Result<Renew
         "Claude login renewal returned no access token"
     );
     let now = Utc::now().timestamp_millis();
+    let expires_at = renewal_expiry(now, renewed.expires_in)?;
+    let refresh_expires_at = renewed
+        .refresh_token_expires_in
+        .map(|seconds| renewal_expiry(now, seconds))
+        .transpose()?;
     let mut file = read_credential_file(&refresh.path)?;
     if oauth_refresh_token(&file) != Some(refresh.refresh_token.as_str()) {
         crate::logger::info("Claude Code renewed the login first; keeping its tokens");
@@ -839,15 +854,9 @@ fn refresh_cli_login(agent: &ureq::Agent, refresh: &FileRefresh) -> Result<Renew
     {
         oauth.insert("refreshToken".into(), token.into());
     }
-    oauth.insert(
-        "expiresAt".into(),
-        (now + renewed.expires_in.saturating_mul(1000)).into(),
-    );
-    if let Some(seconds) = renewed.refresh_token_expires_in {
-        oauth.insert(
-            "refreshTokenExpiresAt".into(),
-            (now + seconds.saturating_mul(1000)).into(),
-        );
+    oauth.insert("expiresAt".into(), expires_at.into());
+    if let Some(expires_at) = refresh_expires_at {
+        oauth.insert("refreshTokenExpiresAt".into(), expires_at.into());
     }
     if let Some(scope) = renewed.scope.filter(|scope| !scope.trim().is_empty()) {
         oauth.insert(
@@ -1252,7 +1261,9 @@ fn load_cli_credentials_at(path: &Path) -> Result<Credentials> {
         .refresh_expires_at_millis
         .and_then(DateTime::from_timestamp_millis)
         .filter(|login| {
-            expires_at.is_none_or(|access| access <= *login + chrono::Duration::days(3))
+            expires_at.is_none_or(|access| {
+                access.signed_duration_since(*login) <= chrono::Duration::days(3)
+            })
         });
     Ok(Credentials {
         access_token,
@@ -1997,6 +2008,39 @@ mod tests {
         )
         .unwrap();
         assert!(load_cli_credentials_at(&path).is_err());
+    }
+
+    #[test]
+    fn renewal_rejects_unrepresentable_expiry() {
+        for seconds in [i64::MAX, i64::MAX / 1000, -1, 0] {
+            let response: TokenResponse = serde_json::from_value(serde_json::json!({
+                "access_token": "token", "expires_in": seconds
+            }))
+            .unwrap();
+            assert!(renewal_expiry(Utc::now().timestamp_millis(), response.expires_in).is_err());
+        }
+        assert_eq!(renewal_expiry(1000, 60).unwrap(), 61000);
+    }
+
+    #[test]
+    fn cli_credentials_accept_refresh_deadline_near_datetime_maximum() {
+        let folder = tempfile::tempdir().unwrap();
+        let path = folder.path().join(".credentials.json");
+        let max = DateTime::<Utc>::MAX_UTC.timestamp_millis();
+        fs::write(
+            &path,
+            serde_json::json!({"claudeAiOauth": {
+                "accessToken": "a", "expiresAt": max, "refreshTokenExpiresAt": max
+            }})
+            .to_string(),
+        )
+        .unwrap();
+        assert!(
+            load_cli_credentials_at(&path)
+                .unwrap()
+                .login_expires_at
+                .is_some()
+        );
     }
 
     #[test]
