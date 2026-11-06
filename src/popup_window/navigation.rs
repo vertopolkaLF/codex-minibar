@@ -21,10 +21,6 @@ impl PopupView {
         enabled && matches!(self, Self::Home | Self::Usage)
     }
 
-    pub(super) const fn from_provider(provider: ProviderId) -> Self {
-        Self::Provider(provider)
-    }
-
     pub(super) const fn provider(self) -> Option<ProviderId> {
         match self {
             Self::Provider(provider) => Some(provider),

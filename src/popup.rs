@@ -32,8 +32,6 @@ pub const CARD_CORNER_RADIUS_DIP: i32 = 10;
 pub const WINDOW_CORNER_RADIUS_DIP: i32 = PopupCornerRadius::Small.dip();
 /// Gap between the capsule and the monitor/taskbar edges, in physical pixels.
 pub const EDGE_MARGIN_PX: i32 = 20;
-/// Popup height as a share of the monitor it is opened on.
-pub const POPUP_SCREEN_HEIGHT_FRACTION: f64 = 1.0;
 /// Ignore outside presses briefly after open so the tray click that showed us
 /// cannot immediately dismiss.
 const SHOW_GRACE_MS: i64 = 200;
@@ -51,8 +49,6 @@ static BOTTOM_BAR_SIZE: AtomicU8 = AtomicU8::new(BottomBarSize::Comfortable.inde
 static CORNER_RADIUS_DIP: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
 static POPUP_BACKGROUND_MATERIAL: AtomicU8 =
     AtomicU8::new(PopupBackgroundMaterial::Acrylic.index() as u8);
-/// Width of the visible capsule (DIP); tracked for helpers outside GPUI.
-static CLIENT_WIDTH_DIP: AtomicI32 = AtomicI32::new(POPUP_WIDTH);
 /// Visible capsule bounds in screen pixels, published by the GPUI thread on
 /// every geometry change. Outside-click detection must use the capsule and
 /// not the transparent technical host around it.
@@ -124,14 +120,6 @@ pub(crate) fn publish_surface_bounds(left: i32, top: i32, right: i32, bottom: i3
     SURFACE_TOP.store(top, Ordering::SeqCst);
     SURFACE_RIGHT.store(right, Ordering::SeqCst);
     SURFACE_BOTTOM.store(bottom, Ordering::SeqCst);
-}
-
-pub(crate) fn set_client_width_dip(width: i32) {
-    CLIENT_WIDTH_DIP.store(width, Ordering::SeqCst);
-}
-
-pub fn client_width_dip() -> i32 {
-    CLIENT_WIDTH_DIP.load(Ordering::SeqCst)
 }
 
 pub fn bottom_bar_size() -> BottomBarSize {
@@ -241,10 +229,6 @@ pub fn system_animations_enabled() -> bool {
 #[cfg(not(windows))]
 pub fn system_animations_enabled() -> bool {
     true
-}
-
-pub fn animations_enabled() -> bool {
-    crate::theme::animations_enabled()
 }
 
 /// Dispatch messages for the thread that owns the tray icon.

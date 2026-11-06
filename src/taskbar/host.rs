@@ -730,7 +730,7 @@ impl Host {
     }
 
     fn animate(&self) -> bool {
-        crate::popup::animations_enabled() && crate::popup::system_animations_enabled()
+        crate::theme::animations_enabled()
     }
 
     /// Brings the strip, its slots and the window in line with the config.

@@ -693,7 +693,7 @@ impl PopupRoot {
                         cx,
                     ))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                        this.select_view(PopupView::from_provider(provider), cx);
+                        this.select_view(PopupView::Provider(provider), cx);
                     }))
                     .child(components::error_badge(16.0, &palette)),
             );
@@ -731,7 +731,7 @@ impl PopupRoot {
                 .min_w_0()
                 .on_hover(self.hover_listener(link_id, None, cx))
                 .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
-                    this.select_view(PopupView::from_provider(provider), cx);
+                    this.select_view(PopupView::Provider(provider), cx);
                 }))
                 .child(title)
                 .into_any_element()

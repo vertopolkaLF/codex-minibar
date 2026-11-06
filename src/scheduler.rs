@@ -181,18 +181,13 @@ pub enum Decision {
 impl ActivationState {
     /// Activate only when the primary reset timestamp changed since the last
     /// observation. Seconds and fractional-second jitter are ignored; the
-    /// first normal sample only establishes a baseline. A Codex response that
-    /// resembles its synthetic 5h placeholder is confirmed separately across
-    /// two or three neighboring samples.
-    pub fn decide(&self, primary: &LimitWindow) -> Decision {
-        self.decide_with_unactivated(primary, false, Utc::now())
-    }
-
-    /// Variant of [`Self::decide`] for a provider that identified a possible
-    /// Codex synthetic 5h response. Two identical reset timestamps confirm an
+    /// first normal sample only establishes a baseline.
+    ///
+    /// `is_unactivated_candidate` marks a response that resembles Codex's
+    /// synthetic 5h placeholder. Two identical reset timestamps confirm an
     /// active window; activation requires three timestamps that each move
     /// forward inside one five-minute observation series.
-    pub fn decide_with_unactivated(
+    pub fn decide(
         &self,
         primary: &LimitWindow,
         is_unactivated_candidate: bool,
@@ -259,14 +254,10 @@ impl ActivationState {
     }
 
     /// Remember the latest primary reset time so the next poll can detect a
-    /// real new window rather than endpoint timestamp jitter.
-    pub fn observe(&mut self, primary: &LimitWindow) {
-        self.observe_with_unactivated(primary, false, Utc::now());
-    }
-
-    /// Variant of [`Self::observe`] that tracks neighboring Codex reset samples
-    /// until the deadline is either stable twice or moving three times.
-    pub fn observe_with_unactivated(
+    /// real new window rather than endpoint timestamp jitter. Codex
+    /// placeholder candidates are tracked across neighboring samples until the
+    /// deadline is either stable twice or moving three times.
+    pub fn observe(
         &mut self,
         primary: &LimitWindow,
         is_unactivated_candidate: bool,
@@ -435,14 +426,20 @@ mod tests {
     #[test]
     fn first_observation_only_baselines() {
         let state = ActivationState::default();
-        assert_eq!(state.decide(&window_at(at(15, 0))), Decision::Skip);
+        assert_eq!(
+            state.decide(&window_at(at(15, 0)), false, Utc::now()),
+            Decision::Skip
+        );
     }
 
     #[test]
     fn activates_when_reset_moves_to_a_new_window() {
         let mut state = ActivationState::default();
-        state.observe(&window_at(at(15, 0)));
-        assert_eq!(state.decide(&window_at(at(15, 5))), Decision::ActivateNow);
+        state.observe(&window_at(at(15, 0)), false, Utc::now());
+        assert_eq!(
+            state.decide(&window_at(at(15, 5)), false, Utc::now()),
+            Decision::ActivateNow
+        );
     }
 
     #[test]
@@ -455,11 +452,8 @@ mod tests {
         };
         let mut state = ActivationState::default();
 
-        assert_eq!(
-            state.decide_with_unactivated(&primary, true, sampled_at),
-            Decision::Skip
-        );
-        state.observe_with_unactivated(&primary, true, sampled_at);
+        assert_eq!(state.decide(&primary, true, sampled_at), Decision::Skip);
+        state.observe(&primary, true, sampled_at);
         assert!(state.awaits_unactivated_confirmation());
     }
 
@@ -471,12 +465,9 @@ mod tests {
         let primary = window_at(fixed_reset);
         let mut state = ActivationState::default();
 
-        state.observe_with_unactivated(&primary, true, first_sample);
-        assert_eq!(
-            state.decide_with_unactivated(&primary, true, second_sample),
-            Decision::Skip
-        );
-        state.observe_with_unactivated(&primary, true, second_sample);
+        state.observe(&primary, true, first_sample);
+        assert_eq!(state.decide(&primary, true, second_sample), Decision::Skip);
+        state.observe(&primary, true, second_sample);
 
         assert!(!state.awaits_unactivated_confirmation());
         assert_eq!(state.stable_unactivated_candidate_reset, Some(fixed_reset));
@@ -489,19 +480,19 @@ mod tests {
         let third_sample = second_sample + Duration::seconds(30);
         let mut state = ActivationState::default();
 
-        state.observe_with_unactivated(
+        state.observe(
             &window_at(first_sample + Duration::hours(5)),
             true,
             first_sample,
         );
-        state.observe_with_unactivated(
+        state.observe(
             &window_at(second_sample + Duration::hours(5)),
             true,
             second_sample,
         );
 
         assert_eq!(
-            state.decide_with_unactivated(
+            state.decide(
                 &window_at(third_sample + Duration::hours(5)),
                 true,
                 third_sample,
@@ -516,10 +507,10 @@ mod tests {
         let sampled_at = previous_reset + Duration::minutes(1);
         let fresh_reset = sampled_at + Duration::hours(5);
         let mut state = ActivationState::default();
-        state.observe(&window_at(previous_reset));
+        state.observe(&window_at(previous_reset), false, Utc::now());
 
         assert_eq!(
-            state.decide_with_unactivated(&window_at(fresh_reset), true, sampled_at),
+            state.decide(&window_at(fresh_reset), true, sampled_at),
             Decision::ActivateNow
         );
     }
@@ -531,19 +522,19 @@ mod tests {
         let third_sample = second_sample + Duration::minutes(3);
         let mut state = ActivationState::default();
 
-        state.observe_with_unactivated(
+        state.observe(
             &window_at(first_sample + Duration::hours(5)),
             true,
             first_sample,
         );
-        state.observe_with_unactivated(
+        state.observe(
             &window_at(second_sample + Duration::hours(5)),
             true,
             second_sample,
         );
 
         assert_eq!(
-            state.decide_with_unactivated(
+            state.decide(
                 &window_at(third_sample + Duration::hours(5)),
                 true,
                 third_sample,
@@ -581,7 +572,7 @@ mod tests {
     fn recent_attempt_blocks_another_codex_exec() {
         let sampled_at = at(15, 0);
         let mut state = ActivationState::default();
-        state.observe_with_unactivated(
+        state.observe(
             &window_at(sampled_at + Duration::hours(5)),
             true,
             sampled_at,
@@ -614,10 +605,7 @@ mod tests {
         };
         let state = ActivationState::default();
 
-        assert_eq!(
-            state.decide_with_unactivated(&primary, false, sampled_at),
-            Decision::Skip
-        );
+        assert_eq!(state.decide(&primary, false, sampled_at), Decision::Skip);
     }
 
     #[test]
@@ -633,32 +621,44 @@ mod tests {
             .unwrap()
             .with_nanosecond(965_796_000)
             .unwrap();
-        state.observe(&window_at(initial));
-        assert_eq!(state.decide(&window_at(jittered)), Decision::Skip);
+        state.observe(&window_at(initial), false, Utc::now());
+        assert_eq!(
+            state.decide(&window_at(jittered), false, Utc::now()),
+            Decision::Skip
+        );
     }
 
     #[test]
     fn skips_a_one_minute_rounding_boundary() {
         let mut state = ActivationState::default();
-        state.observe(&window_at(at(15, 0)));
-        assert_eq!(state.decide(&window_at(at(15, 1))), Decision::Skip);
+        state.observe(&window_at(at(15, 0)), false, Utc::now());
+        assert_eq!(
+            state.decide(&window_at(at(15, 1)), false, Utc::now()),
+            Decision::Skip
+        );
     }
 
     #[test]
     fn skips_when_resets_at_is_unchanged() {
         let mut state = ActivationState::default();
-        state.observe(&window_at(at(15, 0)));
-        assert_eq!(state.decide(&window_at(at(15, 0))), Decision::Skip);
+        state.observe(&window_at(at(15, 0)), false, Utc::now());
+        assert_eq!(
+            state.decide(&window_at(at(15, 0)), false, Utc::now()),
+            Decision::Skip
+        );
     }
 
     #[test]
     fn reset_appearing_after_activation_attempt_is_confirmation() {
         let mut state = ActivationState::default();
-        state.observe(&window_at(at(15, 0)));
+        state.observe(&window_at(at(15, 0)), false, Utc::now());
         state.record_attempt(at(15, 1));
 
-        assert_eq!(state.decide(&window_at(at(20, 0))), Decision::Skip);
-        state.observe(&window_at(at(20, 0)));
+        assert_eq!(
+            state.decide(&window_at(at(20, 0)), false, Utc::now()),
+            Decision::Skip
+        );
+        state.observe(&window_at(at(20, 0)), false, Utc::now());
         assert_eq!(state.last_seen_resets_at, Some(at(20, 0)));
         assert!(!state.attempted_without_active_window);
     }
@@ -669,10 +669,16 @@ mod tests {
             last_seen_resets_at: Some(at(15, 0)),
             ..ActivationState::default()
         };
-        assert_eq!(state.decide(&LimitWindow::default()), Decision::Skip);
+        assert_eq!(
+            state.decide(&LimitWindow::default(), false, Utc::now()),
+            Decision::Skip
+        );
         state.record_attempt(at(10, 0));
-        assert_eq!(state.decide(&LimitWindow::default()), Decision::Skip);
-        state.observe(&LimitWindow::default());
+        assert_eq!(
+            state.decide(&LimitWindow::default(), false, Utc::now()),
+            Decision::Skip
+        );
+        state.observe(&LimitWindow::default(), false, Utc::now());
         assert_eq!(state.last_seen_resets_at, Some(at(15, 0)));
     }
 
@@ -695,7 +701,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("activation.toml");
         let mut state = ActivationState::default();
-        state.observe(&window_at(at(15, 0)));
+        state.observe(&window_at(at(15, 0)), false, Utc::now());
         state.record_attempt(at(10, 0));
         state.save(&path).unwrap();
         let restored = ActivationState::load_or_default(&path).unwrap();
@@ -715,7 +721,7 @@ mod tests {
         let sampled_at = at(15, 0);
         let primary = window_at(sampled_at + Duration::hours(5));
         let mut state = ActivationState::default();
-        state.observe_with_unactivated(&primary, true, sampled_at);
+        state.observe(&primary, true, sampled_at);
 
         state.save(&path).unwrap();
         let restored = ActivationState::load_or_default(&path).unwrap();

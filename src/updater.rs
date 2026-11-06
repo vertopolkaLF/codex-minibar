@@ -139,7 +139,7 @@ pub fn apply_pending_update() -> Result<()> {
 }
 
 fn report_update_failure(error: anyhow::Error) -> anyhow::Error {
-    eprintln!("failed to apply update: {error:#}");
+    crate::logger::info(format!("failed to apply update: {error:#}"));
     notifications::show_update_failed(&error);
     error
 }
@@ -507,10 +507,6 @@ impl UpdateController {
             .expect("update controller lock")
             .phase
             .clone()
-    }
-
-    pub fn is_update_available(&self) -> bool {
-        matches!(self.snapshot(), UpdatePhase::Available(_))
     }
 
     pub fn available_update(&self) -> Option<AvailableUpdate> {

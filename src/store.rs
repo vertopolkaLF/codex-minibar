@@ -436,7 +436,8 @@ impl ProviderStore {
             .context("load cached pricing catalog")
     }
 
-    #[allow(dead_code)]
+    // Only the non-test pricing download persists catalogs.
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn save_pricing_catalog(
         &self,
         source: &str,
@@ -751,7 +752,7 @@ impl ProviderStore {
         days: &[DailyTokenUsage],
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        self.replace_usage_daily_in_transaction(provider, days)?;
+        self.replace_usage_daily_bounded(provider, days, None)?;
         tx.commit()?;
         Ok(())
     }
@@ -769,14 +770,6 @@ impl ProviderStore {
         self.replace_usage_daily_bounded(provider, days, Some(since))?;
         tx.commit()?;
         Ok(())
-    }
-
-    fn replace_usage_daily_in_transaction(
-        &self,
-        provider: ProviderId,
-        days: &[DailyTokenUsage],
-    ) -> Result<()> {
-        self.replace_usage_daily_bounded(provider, days, None)
     }
 
     fn replace_usage_daily_bounded(
@@ -1507,7 +1500,7 @@ impl ProviderStore {
         at: DateTime<Utc>,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        self.replace_usage_daily_in_transaction(provider, daily)?;
+        self.replace_usage_daily_bounded(provider, daily, None)?;
         self.replace_usage_model_daily_in_transaction(provider, models)?;
         self.set_meta(&openrouter_analytics_key(provider), cache)?;
         self.set_usage_fetched_at(provider, at)?;
@@ -1971,7 +1964,7 @@ impl ProviderStore {
         self.replace_usage_daily(ProviderId::primary(ProviderKind::Claude), &stats.daily)?;
         self.replace_usage_model_daily(
             ProviderId::primary(ProviderKind::Claude),
-            &aggregate_claude_model_daily(&cache),
+            &crate::usage::aggregate_claude_model_daily(&cache),
         )?;
         Ok(true)
     }
@@ -2127,13 +2120,6 @@ fn aggregate_codex_model_daily(cache: &UsageCache) -> Vec<(String, NaiveDate, To
     merged
         .into_iter()
         .map(|((model, date), usage)| (model, date, usage))
-        .collect()
-}
-
-fn aggregate_claude_model_daily(cache: &ClaudeUsageCache) -> Vec<(String, NaiveDate, TokenUsage)> {
-    crate::usage::aggregate_claude_model_daily(cache)
-        .into_iter()
-        .map(|(date, model, usage)| (model, date, usage))
         .collect()
 }
 

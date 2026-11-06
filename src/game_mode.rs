@@ -113,7 +113,9 @@ fn mode() -> GameMode {
 
 /// Lets "Not a game" on the card persist its choice. Called once at startup.
 pub fn set_settings_writer(settings_tx: Sender<Settings>) {
-    let _ = SETTINGS_TX.set(settings_tx);
+    if SETTINGS_TX.set(settings_tx).is_err() {
+        crate::logger::info("game mode settings writer was already installed");
+    }
 }
 
 /// Applies the settings immediately; called on startup and every commit.

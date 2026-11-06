@@ -25,8 +25,6 @@ pub(crate) struct CardOptions<'a> {
     pub(crate) show_account_name: bool,
     /// Home widgets carry a reorder handle on their first heading.
     pub(crate) drag_handle: bool,
-    /// OpenRouter expired keys expose a remove action.
-    pub(crate) openrouter_actions: bool,
     pub(crate) provider_error: Option<&'a str>,
     /// Retain the card to report an in-flight/finished redemption, including
     /// after its last credit has been spent.
@@ -296,8 +294,7 @@ pub(crate) fn provider_cards<'a>(
                             has_live_usage: api_key.has_live_usage,
                             expired,
                             expires_at: api_key.expires_at,
-                            delete: (expired && options.openrouter_actions)
-                                .then(|| (account.id.clone(), api_key.id.clone())),
+                            delete: expired.then(|| (account.id.clone(), api_key.id.clone())),
                         });
                     }
                     if usage_visible {

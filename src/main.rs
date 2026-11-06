@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
-    app::AppState,
     notifications,
-    provider::start_enabled_workers_with_limits,
+    popup_window::AppState,
+    provider::start_enabled_workers,
     provider_status, reset_feed,
     scheduler::ActivationState,
     settings::Settings,
@@ -55,9 +55,13 @@ fn run() -> Result<()> {
     });
     let activation_path = path.with_file_name("activation.toml");
     let last_activation_at: Option<DateTime<Utc>> =
-        ActivationState::load_or_default(&activation_path)
-            .ok()
-            .and_then(|state| state.last_attempt_at);
+        match ActivationState::load_or_default(&activation_path) {
+            Ok(state) => state.last_attempt_at,
+            Err(error) => {
+                codex_minibar::logger::info(format!("failed to load activation state: {error:#}"));
+                None
+            }
+        };
 
     let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
     let reset_feed_worker = reset_feed::start_worker(
@@ -85,12 +89,8 @@ fn run() -> Result<()> {
             eprintln!("failed to hydrate provider store: {error:#}");
             Default::default()
         });
-    let (workers, startup_provider_errors) = start_enabled_workers_with_limits(
-        &settings,
-        activation_path.clone(),
-        worker_events_tx.clone(),
-        &hydrated_limits,
-    );
+    let (workers, startup_provider_errors) =
+        start_enabled_workers(&settings, activation_path.clone(), worker_events_tx.clone());
     let commands = workers
         .iter()
         .map(|(provider, worker)| (*provider, worker.commands.clone()))
@@ -129,7 +129,7 @@ fn run() -> Result<()> {
     });
 
     // Initializes the tray accent before any popup can be shown.
-    codex_minibar::theme::apply_appearance(state.settings.theme, state.settings.accent_color);
+    codex_minibar::theme::apply_appearance(state.settings.accent_color);
     codex_minibar::popup_window::start(Arc::clone(&state));
     codex_minibar::whats_new::start(&state.settings, just_updated);
     if onboarding_needed {

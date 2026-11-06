@@ -72,13 +72,6 @@ impl TokenUsage {
             .cache_savings_microusd
             .saturating_add(other.cache_savings_microusd);
     }
-
-    /// Aggregates externally sourced usage that follows the same token shape
-    /// as local logs (Cursor's dashboard CSV, for example).
-    #[allow(dead_code)]
-    pub(crate) fn add_public(&mut self, other: &Self) {
-        self.add(other);
-    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -107,14 +100,6 @@ pub struct DailyTokenUsage {
 impl UsageStatistics {
     pub fn has_data(&self) -> bool {
         self.history.requests > 0
-    }
-
-    pub fn tokens_on(&self, date: NaiveDate) -> u64 {
-        self.daily
-            .iter()
-            .find(|entry| entry.date == date)
-            .map(|entry| entry.usage.total_tokens())
-            .unwrap_or(0)
     }
 }
 
@@ -858,10 +843,7 @@ pub fn refresh_claude_usage_statistics(
         .map(|(_, entry)| entry)
         .collect::<Vec<_>>();
     let stats = claude_statistics(&entries, history_days);
-    let model_daily = claude_model_daily(&entries)
-        .into_iter()
-        .map(|(date, model, usage)| (model, date, usage))
-        .collect::<Vec<_>>();
+    let model_daily = claude_model_daily(&entries);
     drop(entries);
     store::with_store(|store| {
         store.save_claude_cache(provider, &cache)?;
@@ -940,7 +922,7 @@ pub(crate) fn statistics_from_claude_cache(
 
 pub(crate) fn aggregate_claude_model_daily(
     cache: &ClaudeUsageCache,
-) -> Vec<(NaiveDate, String, TokenUsage)> {
+) -> Vec<(String, NaiveDate, TokenUsage)> {
     claude_model_daily(&deduplicate_claude_entries(cache))
 }
 
@@ -1007,7 +989,7 @@ fn claude_statistics(entries: &[&CachedClaudeUsageEntry], history_days: u16) -> 
     statistics_from_daily(&days, history_days)
 }
 
-fn claude_model_daily(entries: &[&CachedClaudeUsageEntry]) -> Vec<(NaiveDate, String, TokenUsage)> {
+fn claude_model_daily(entries: &[&CachedClaudeUsageEntry]) -> Vec<(String, NaiveDate, TokenUsage)> {
     let mut merged = BTreeMap::<(&str, NaiveDate), TokenUsage>::new();
     for entry in entries {
         let model = entry.model.as_deref().unwrap_or("unknown");
@@ -1016,7 +998,7 @@ fn claude_model_daily(entries: &[&CachedClaudeUsageEntry]) -> Vec<(NaiveDate, St
     }
     merged
         .into_iter()
-        .map(|((model, date), usage)| (date, model.to_owned(), usage))
+        .map(|((model, date), usage)| (model.to_owned(), date, usage))
         .collect()
 }
 

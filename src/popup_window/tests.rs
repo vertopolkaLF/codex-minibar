@@ -58,7 +58,6 @@ fn test_cards<'a>(
             include_usage_stats,
             show_account_name,
             drag_handle: false,
-            openrouter_actions: false,
             provider_error: None,
             provider_status: None,
             now: Utc::now(),
@@ -312,7 +311,6 @@ fn reset_card_keeps_instance_identity_and_last_credit_result_surface() {
                     include_usage_stats: true,
                     show_account_name: false,
                     drag_handle: false,
-                    openrouter_actions: false,
                     provider_error: None,
                     provider_status: None,
                     keep_reset_card: true,
@@ -998,7 +996,7 @@ fn two_columns_only_widen_home_and_usage_for_every_provider() {
         assert_eq!(PopupView::Home.uses_two_columns(enabled), enabled);
         assert_eq!(PopupView::Usage.uses_two_columns(enabled), enabled);
         for provider in ProviderKind::ALL {
-            assert!(!PopupView::from_provider(provider.into()).uses_two_columns(enabled));
+            assert!(!PopupView::Provider(provider.into()).uses_two_columns(enabled));
             assert!(!PopupView::Group(provider).uses_two_columns(enabled));
         }
     }
@@ -1011,7 +1009,7 @@ fn pager_slides_clear_both_pages_for_every_compact_and_wide_view_pair() {
         .chain(
             ProviderKind::ALL
                 .into_iter()
-                .map(|provider| PopupView::from_provider(provider.into())),
+                .map(|provider| PopupView::Provider(provider.into())),
         )
         .chain(ProviderKind::ALL.into_iter().map(PopupView::Group))
         .collect::<Vec<_>>();

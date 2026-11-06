@@ -247,18 +247,22 @@ impl OpenCodeClient {
             daily
                 .entry(timestamp.with_timezone(&Local).date_naive())
                 .or_default()
-                .add_public(&usage);
+                .add(&usage);
             if timestamp >= hourly_since {
                 hourly
                     .entry(crate::usage::truncate_local_hour(
                         timestamp.with_timezone(&Local),
                     ))
                     .or_default()
-                    .add_public(&usage);
+                    .add(&usage);
             }
         }
         let hourly_rows = hourly.into_iter().collect::<Vec<_>>();
-        let _ = store::with_store(|store| store.replace_usage_hourly(self.provider, &hourly_rows));
+        if let Err(error) =
+            store::with_store(|store| store.replace_usage_hourly(self.provider, &hourly_rows))
+        {
+            crate::logger::info(format!("failed to store OpenCode hourly usage: {error:#}"));
+        }
         let days = daily
             .into_iter()
             .map(|(date, usage)| DailyTokenUsage { date, usage })

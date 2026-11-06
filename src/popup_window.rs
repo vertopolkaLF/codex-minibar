@@ -28,9 +28,9 @@ use crate::{
         resets_brick_id, spending_brick_id, usage_brick_id,
     },
     settings::{
-        AccentColor, AppTheme, HomeCardLayout, HomeWidgetId, NotificationSettings,
-        PopupBackgroundMaterial, PopupSurface, PopupTabMode, PopupTheme, PopupVisibility,
-        ProviderKind, Settings, TimeFormat, TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
+        AccentColor, AppTheme, HomeCardLayout, HomeWidgetId, NotificationSettings, PopupSurface,
+        PopupTabMode, PopupTheme, PopupVisibility, ProviderKind, Settings, TimeFormat,
+        TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
     },
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},
@@ -124,7 +124,8 @@ pub(crate) fn send_command(command: PopupCommand) {
     let _ = COMMANDS.0.unbounded_send(command);
 }
 
-/// Publish the latest view state to the renderer.
+/// Publish the latest view state to the renderer. Hidden popups only store
+/// it; the renderer repaints when it is shown, so background polls stay cheap.
 pub(crate) fn publish_ui(ui: &UiState) {
     send_command(PopupCommand::Publish(Box::new(ui.clone())));
 }
@@ -162,7 +163,7 @@ fn request_view(view: PendingPopupView) {
         send_command(match view {
             PendingPopupView::Home => PopupCommand::SelectView(PopupView::Home),
             PendingPopupView::Provider(provider) => {
-                PopupCommand::SelectView(PopupView::from_provider(provider))
+                PopupCommand::SelectView(PopupView::Provider(provider))
             }
             PendingPopupView::Nearest(provider) => PopupCommand::SelectNearest(provider),
         });

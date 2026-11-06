@@ -50,7 +50,7 @@ fn remember_accent((red, green, blue): (u8, u8, u8)) {
 /// Record the configured accent for surfaces painted outside GPUI (the tray
 /// glyphs). The GPUI windows resolve theme and accent from settings on every
 /// frame, so nothing else has to be pushed anywhere.
-pub fn apply_appearance(_theme: crate::settings::AppTheme, accent: crate::settings::AccentColor) {
+pub fn apply_appearance(accent: crate::settings::AccentColor) {
     remember_accent(accent_ramp(accent).base);
 }
 

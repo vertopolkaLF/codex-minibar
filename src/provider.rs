@@ -21,30 +21,10 @@ pub fn start_enabled_workers(
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
 ) -> (ProviderWorkers, Vec<(ProviderId, String)>) {
-    start_enabled_workers_with_limits(
-        settings,
-        activation_path,
-        events,
-        &crate::limits::ProviderLimits::default(),
-    )
-}
-
-pub fn start_enabled_workers_with_limits(
-    settings: &Settings,
-    activation_path: PathBuf,
-    events: Sender<WorkerEvent>,
-    cached_limits: &crate::limits::ProviderLimits,
-) -> (ProviderWorkers, Vec<(ProviderId, String)>) {
     let mut workers = ProviderWorkers::new();
     let mut errors = Vec::new();
     for provider in settings.enabled_providers() {
-        match start_provider_worker_with_limits(
-            provider,
-            settings,
-            activation_path.clone(),
-            events.clone(),
-            Some(cached_limits.get(provider)),
-        ) {
+        match start_provider_worker(provider, settings, activation_path.clone(), events.clone()) {
             Ok(worker) => {
                 workers.insert(provider, worker);
             }
@@ -60,15 +40,6 @@ pub fn start_enabled_workers_with_limits(
     (workers, errors)
 }
 
-pub fn start_provider_worker(
-    provider: ProviderId,
-    settings: &Settings,
-    activation_path: PathBuf,
-    events: Sender<WorkerEvent>,
-) -> Result<WorkerHandle> {
-    start_provider_worker_with_limits(provider, settings, activation_path, events, None)
-}
-
 /// Settings shared by every worker regardless of driver.
 struct WorkerOptions {
     activation_path: PathBuf,
@@ -81,12 +52,11 @@ struct WorkerOptions {
     limit_refresh_interval: Duration,
 }
 
-pub(crate) fn start_provider_worker_with_limits(
+pub fn start_provider_worker(
     provider: ProviderId,
     settings: &Settings,
     activation_path: PathBuf,
     events: Sender<WorkerEvent>,
-    _cached_limits: Option<&crate::limits::RateLimits>,
 ) -> Result<WorkerHandle> {
     let instance = settings
         .instance(provider)

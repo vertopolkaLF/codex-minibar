@@ -313,82 +313,6 @@ pub fn start_worker(
 ) -> WorkerHandle {
     let (command_sender, command_receiver) = mpsc::channel();
     let (event_sender, event_receiver) = mpsc::channel();
-    let mut handle = start_worker_with_channels(
-        provider,
-        usage_provider,
-        activator,
-        state_path,
-        automatic_activation,
-        scheduled_activations,
-        auto_activation_pauses,
-        history_retention_days,
-        usage_refresh_interval,
-        usage_collection_enabled,
-        poll_interval,
-        command_sender,
-        command_receiver,
-        event_sender,
-        true,
-    );
-    handle.events = Some(event_receiver);
-    handle
-}
-
-/// Starts a worker which publishes to an existing event stream. This lets the
-/// selected provider change without recreating the UI's event bridge.
-#[allow(clippy::too_many_arguments)]
-pub fn start_worker_with_event_sender(
-    provider: impl LimitProvider,
-    usage_provider: impl UsageProvider,
-    activator: impl Activator,
-    state_path: PathBuf,
-    automatic_activation: bool,
-    scheduled_activations: Vec<ScheduledActivation>,
-    auto_activation_pauses: Vec<AutoActivationPause>,
-    history_retention_days: u16,
-    usage_refresh_interval: Duration,
-    usage_collection_enabled: bool,
-    poll_interval: Duration,
-    event_sender: Sender<WorkerEvent>,
-) -> WorkerHandle {
-    let (command_sender, command_receiver) = mpsc::channel();
-    start_worker_with_channels(
-        provider,
-        usage_provider,
-        activator,
-        state_path,
-        automatic_activation,
-        scheduled_activations,
-        auto_activation_pauses,
-        history_retention_days,
-        usage_refresh_interval,
-        usage_collection_enabled,
-        poll_interval,
-        command_sender,
-        command_receiver,
-        event_sender,
-        false,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn start_worker_with_channels(
-    provider: impl LimitProvider,
-    usage_provider: impl UsageProvider,
-    activator: impl Activator,
-    state_path: PathBuf,
-    automatic_activation: bool,
-    scheduled_activations: Vec<ScheduledActivation>,
-    auto_activation_pauses: Vec<AutoActivationPause>,
-    history_retention_days: u16,
-    usage_refresh_interval: Duration,
-    usage_collection_enabled: bool,
-    poll_interval: Duration,
-    command_sender: Sender<WorkerCommand>,
-    command_receiver: Receiver<WorkerCommand>,
-    event_sender: Sender<WorkerEvent>,
-    publish_stopped: bool,
-) -> WorkerHandle {
     let cancelled = Arc::new(AtomicBool::new(false));
     let mut usage_provider = usage_provider;
     usage_provider.set_cancellation(Arc::clone(&cancelled));
@@ -487,14 +411,12 @@ fn start_worker_with_channels(
         let _ = usage_commands.send(WorkerCommand::Shutdown);
         let _ = limit_join.join();
         let _ = usage_join.join();
-        if publish_stopped {
-            let _ = event_sender.send(WorkerEvent::Stopped);
-        }
+        let _ = event_sender.send(WorkerEvent::Stopped);
     });
 
     WorkerHandle {
         commands: command_sender,
-        events: None,
+        events: Some(event_receiver),
         join: Some(join),
         retired: Arc::new(AtomicBool::new(false)),
     }
@@ -561,7 +483,9 @@ fn run_limit_task(
                 &auto_activation_pauses,
             ) {
                 Ok(worker_events) => {
-                    let _ = state.save(&state_path);
+                    if let Err(error) = state.save(&state_path) {
+                        crate::logger::info(format!("failed to save activation state: {error:#}"));
+                    }
                     for event in worker_events {
                         let is_limits_update = matches!(event, WorkerEvent::LimitsUpdated(_));
                         let _ = events.send(event);
@@ -809,7 +733,9 @@ fn run_usage_task_with_rate_limit(
             let _ = events.send(WorkerEvent::RequestStarted(RequestKind::Usage));
             #[cfg(not(test))]
             {
-                let _ = crate::pricing::refresh_if_stale();
+                if let Err(error) = crate::pricing::refresh_if_stale() {
+                    crate::logger::info(format!("failed to refresh pricing catalog: {error:#}"));
+                }
                 // A new catalog (or the startup one) may price rows scanned
                 // while their model was unknown. Heal them before this scan so
                 // its snapshot already carries the corrected costs.
@@ -973,7 +899,7 @@ fn tick(
         )
         && !state.recently_attempted(now)
         && activation.is_some_and(|sample| {
-            state.decide_with_unactivated(
+            state.decide(
                 &sample.primary,
                 sample.primary_window_is_unactivated,
                 sample.sampled_at,
@@ -998,7 +924,7 @@ fn tick(
                     // Treat the window as established so the next poll cannot
                     // spend another exec against the same 5-hour session.
                     if let Some(sample) = activation_limits(&limits) {
-                        state.observe_with_unactivated(&sample.primary, false, sample.sampled_at);
+                        state.observe(&sample.primary, false, sample.sampled_at);
                     }
                     if let Some((rule, occurrence)) = scheduled_due {
                         state.record_scheduled_activation(&rule.id, occurrence);
@@ -1006,7 +932,7 @@ fn tick(
                     events.push(WorkerEvent::ActivationSucceeded);
                 } else {
                     if let Some(sample) = activation_limits(&limits) {
-                        state.observe_with_unactivated(
+                        state.observe(
                             &sample.primary,
                             sample.primary_window_is_unactivated,
                             sample.sampled_at,
@@ -1020,7 +946,7 @@ fn tick(
             Err(error) => events.push(WorkerEvent::ActivationFailed(error.to_string())),
         }
     } else if let Some(sample) = activation_limits(&limits) {
-        state.observe_with_unactivated(
+        state.observe(
             &sample.primary,
             sample.primary_window_is_unactivated,
             sample.sampled_at,
@@ -1165,8 +1091,7 @@ mod tests {
         }
         let directory = tempfile::tempdir().unwrap();
         let release = Arc::new(AtomicBool::new(false));
-        let (events_tx, events_rx) = mpsc::channel();
-        let worker = start_worker_with_event_sender(
+        let mut worker = start_worker(
             ScriptedProvider::new(vec![limits_at(15, 0)]),
             BlockedScan(Arc::clone(&release)),
             CountingActivator(0),
@@ -1178,8 +1103,8 @@ mod tests {
             Duration::from_secs(300),
             true,
             Duration::from_secs(300),
-            events_tx,
         );
+        let events_rx = worker.events.take().unwrap();
         let retired = worker.retired_flag();
         loop {
             match events_rx.recv_timeout(Duration::from_secs(5)).unwrap() {
@@ -1297,7 +1222,7 @@ mod tests {
             duration_minutes: Some(300),
         };
         let mut state = ActivationState::default();
-        state.observe_with_unactivated(&primary, true, sampled_at);
+        state.observe(&primary, true, sampled_at);
         let configured = Duration::from_secs(15 * 60);
 
         assert_eq!(

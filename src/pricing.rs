@@ -73,7 +73,8 @@ fn install_catalog(catalog: PricingCatalog) {
 
 #[derive(Clone, Debug)]
 struct PricingCatalog {
-    #[allow(dead_code)]
+    // Only the non-test refresh path checks staleness.
+    #[cfg_attr(test, allow(dead_code))]
     fetched_at: DateTime<Utc>,
     rates: HashMap<String, ModelRate>,
 }
@@ -116,51 +117,43 @@ pub fn initialize() -> Result<()> {
 /// off (15 min doubling up to 4 h) so an offline machine does not retry a slow
 /// request on every usage refresh, and a worker that finds another provider's
 /// download in flight skips instead of queueing behind it.
-#[allow(dead_code)]
+#[cfg(not(test))]
 pub(crate) fn refresh_if_stale() -> Result<bool> {
-    #[cfg(test)]
+    let Ok(_refresh_guard) = REFRESH_LOCK.get_or_init(|| Mutex::new(())).try_lock() else {
+        return Ok(false);
+    };
+    let stale = catalog_slot()
+        .read()
+        .expect("pricing catalog lock poisoned")
+        .as_ref()
+        .is_none_or(|catalog| Utc::now() - catalog.fetched_at >= RATES_TTL);
+    if !stale {
+        return Ok(false);
+    }
+    if REFRESH_BACKOFF
+        .lock()
+        .expect("pricing backoff lock poisoned")
+        .1
+        .is_some_and(|not_before| std::time::Instant::now() < not_before)
     {
-        Ok(false)
+        return Ok(false);
     }
 
-    #[cfg(not(test))]
-    {
-        let Ok(_refresh_guard) = REFRESH_LOCK.get_or_init(|| Mutex::new(())).try_lock() else {
-            return Ok(false);
-        };
-        let stale = catalog_slot()
-            .read()
-            .expect("pricing catalog lock poisoned")
-            .as_ref()
-            .is_none_or(|catalog| Utc::now() - catalog.fetched_at >= RATES_TTL);
-        if !stale {
-            return Ok(false);
+    let result = download_catalog();
+    let mut backoff = REFRESH_BACKOFF
+        .lock()
+        .expect("pricing backoff lock poisoned");
+    match &result {
+        Ok(()) => *backoff = (0, None),
+        Err(_) => {
+            let failures = backoff.0.saturating_add(1);
+            *backoff = (
+                failures,
+                Some(std::time::Instant::now() + retry_delay(failures)),
+            );
         }
-        if REFRESH_BACKOFF
-            .lock()
-            .expect("pricing backoff lock poisoned")
-            .1
-            .is_some_and(|not_before| std::time::Instant::now() < not_before)
-        {
-            return Ok(false);
-        }
-
-        let result = download_catalog();
-        let mut backoff = REFRESH_BACKOFF
-            .lock()
-            .expect("pricing backoff lock poisoned");
-        match &result {
-            Ok(()) => *backoff = (0, None),
-            Err(_) => {
-                let failures = backoff.0.saturating_add(1);
-                *backoff = (
-                    failures,
-                    Some(std::time::Instant::now() + retry_delay(failures)),
-                );
-            }
-        }
-        result.map(|()| true)
     }
+    result.map(|()| true)
 }
 
 #[cfg(not(test))]

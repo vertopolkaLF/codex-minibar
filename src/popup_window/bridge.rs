@@ -285,7 +285,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             update_available_from_phase(&update_phase),
         ) {
             ui.set_popup_error(error.to_string());
-            flush_popup_ui(&ui);
+            publish_ui(&ui);
         }
 
         crate::taskbar::register_bridge_thread();
@@ -295,7 +295,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
 
         // First frame: the renderer seeds itself from settings, then takes
         // this complete snapshot (errors, activation text, update state).
-        publish_popup_ui(&ui);
+        publish_ui(&ui);
 
         let apply_settings = |ui: &mut UiState,
                               notification_settings: &mut NotificationSettings,
@@ -329,9 +329,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 ui.observe_limits_update();
                 crate::settings_window::publish_openrouter_snapshot(&state.current_limits());
             }
-            if ui.theme != settings.theme || ui.accent_color != settings.accent_color {
-                crate::theme::apply_appearance(settings.theme, settings.accent_color);
-            }
+            crate::theme::apply_appearance(settings.accent_color);
             ui.apply_settings(&settings);
             *notification_settings = settings.notifications.clone();
             state.sync_reset_feed(&settings);
@@ -364,7 +362,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             // Presentation settings must visibly apply before any background
             // work. In particular, changing provider icons must never wait on
             // a worker lock, network request, or provider lifecycle change.
-            flush_popup_ui(ui);
+            publish_ui(ui);
             if providers_changed || !restart.is_empty() {
                 let provider_errors = state.sync_provider_workers(&settings, &restart);
                 for (provider, error) in provider_errors {
@@ -409,7 +407,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 ));
             }
             *live_settings = settings;
-            flush_popup_ui(ui);
+            publish_ui(ui);
         };
 
         let drain_settings = |ui: &mut UiState,
@@ -473,7 +471,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         .collect::<Vec<_>>();
                     state.clear_usage_snapshot();
                     ui.observe_usage_update();
-                    publish_popup_ui(ui);
+                    publish_ui(ui);
 
                     // The wipe itself runs once, off this thread, after the
                     // barrier completes (immediately when nobody can ack).
@@ -501,7 +499,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             ) {
                 ui.set_popup_error(error.to_string());
             }
-            publish_popup_ui(ui);
+            publish_ui(ui);
         };
 
         let drain_streamdeck = |ui: &UiState| {
@@ -526,7 +524,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             Some(provider) => crate::popup_window::request_provider_view(provider),
                             None => crate::popup_window::request_home_view(),
                         }
-                        flush_popup_ui(ui);
+                        publish_ui(ui);
                         popup::show_on_primary();
                     }
                     crate::streamdeck::Command::OpenCommandPaletteSettings => {
@@ -537,7 +535,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
         };
 
         let Some(events) = events else {
-            publish_popup_ui(&ui);
+            publish_ui(&ui);
             loop {
                 popup::pump_messages();
                 drain_streamdeck(&ui);
@@ -548,7 +546,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 );
                 if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
                     ui.set_popup_error(error.to_string());
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 drain_settings(
                     &mut ui,
@@ -563,7 +561,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
                 pump_popup_hotkey(&mut hotkey, &live_settings, &mut ui);
                 let exit = pump_taskbar_actions(&settings_tx, &mut ui);
-                if exit || pump_tray_and_dismiss(&tray, &settings_tx, &state, &mut ui) {
+                if exit || pump_tray_and_dismiss(&tray, &mut ui) {
                     drop(tray);
                     AppState::flush_limits_persistence();
                     state.shutdown_worker();
@@ -585,7 +583,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             );
             if let Err(error) = tray.refresh_system_theme(&widgets, &state.current_limits()) {
                 ui.set_popup_error(error.to_string());
-                publish_popup_ui(&ui);
+                publish_ui(&ui);
             }
             drain_settings(
                 &mut ui,
@@ -606,7 +604,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             }
             pump_popup_hotkey(&mut hotkey, &live_settings, &mut ui);
             let exit = pump_taskbar_actions(&settings_tx, &mut ui);
-            if exit || pump_tray_and_dismiss(&tray, &settings_tx, &state, &mut ui) {
+            if exit || pump_tray_and_dismiss(&tray, &mut ui) {
                 drop(tray);
                 AppState::flush_limits_persistence();
                 state.shutdown_worker();
@@ -648,7 +646,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         &notification_settings,
                         &state,
                     );
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderStatusUpdated(snapshot)) => {
                     incident_notified_ids.extend(snapshot.notified_ids);
@@ -665,7 +663,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     );
                     state.replace_provider_statuses(statuses);
                     ui.observe_provider_status_update();
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ForcedResetsRefreshFailed(error)) => {
                     crate::logger::info(format!("Codex reset feed refresh failed: {error}"));
@@ -675,14 +673,14 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         continue;
                     }
                     ui.request_started(provider, kind);
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderRequestFinished(provider, worker_revision, kind)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
                         continue;
                     }
                     ui.request_finished(provider, kind);
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderLimitsUpdated(provider, worker_revision, limits)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -720,7 +718,9 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         crate::settings_window::persist_update(
                             settings_tx.clone(),
                             move |settings| {
-                                settings.absorb_discovered_popup_bricks(&limits_for_settings);
+                                settings
+                                    .popup_visibility
+                                    .absorb_discovered_bricks(&limits_for_settings);
                             },
                         );
                     }
@@ -770,7 +770,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             format_last_activation(limits.get(provider), fallback_attempt);
                     }
                     ui.observe_limits_update();
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderUsageUpdated(provider, worker_revision, usage)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -801,7 +801,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         ui.clear_usage_error(provider);
                     }
                     ui.observe_usage_update();
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderUsageLoadedFromCache(provider, worker_revision, usage)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -817,7 +817,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     // Cached account.error values are historical diagnostics,
                     // not proof that the provider is failing now.
                     ui.observe_usage_update();
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, worker_revision, error)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision)
@@ -834,7 +834,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     // source separate so a successful quota poll does not
                     // clear an active analytics error.
                     ui.set_usage_error(provider, error);
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderUsageDataCleared(provider, generation)) => {
                     let completed = pending_usage_clear.as_mut().is_some_and(
@@ -853,7 +853,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         // it, then wipe the store exactly once off-thread.
                         state.clear_usage_snapshot();
                         ui.observe_usage_update();
-                        publish_popup_ui(&ui);
+                        publish_ui(&ui);
                         spawn_usage_wipe(state.worker_events_tx.clone(), generation);
                     }
                 }
@@ -868,7 +868,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                                 "could-not-clear-usage-data-error",
                                 &[("error", error)],
                             ));
-                            publish_popup_ui(&ui);
+                            publish_ui(&ui);
                         }
                         for (_, commands) in state.worker_commands() {
                             let _ = commands.send(WorkerCommand::ResumeUsageRefresh(generation));
@@ -905,7 +905,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     } else if notification_settings.activation_success {
                         notifications::show_activation_succeeded(provider, None);
                     }
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderActivationFailed(provider, worker_revision, error)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -924,7 +924,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             ("error", error.to_string()),
                         ],
                     );
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 Ok(WorkerEvent::ProviderPollFailed(provider, worker_revision, error)) => {
                     if !provider_worker_event_is_current(&ui, provider, worker_revision) {
@@ -935,7 +935,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         provider.display_name()
                     ));
                     ui.set_provider_error(provider, error);
-                    publish_popup_ui(&ui);
+                    publish_ui(&ui);
                 }
                 // All live provider workers are forwarded as scoped events.
                 Ok(
@@ -982,7 +982,7 @@ fn pump_popup_hotkey(
             popup::hide();
         }
     } else {
-        flush_popup_ui(ui);
+        publish_ui(ui);
         popup::show_near_cursor();
     }
 }
@@ -1013,7 +1013,7 @@ fn pump_taskbar_actions(settings_tx: &Sender<Settings>, ui: &mut UiState) -> boo
                         }
                         _ => crate::popup_window::request_home_view(),
                     }
-                    flush_popup_ui(ui);
+                    publish_ui(ui);
                     popup::show_beside(anchor.0, anchor.1);
                 }
             }
@@ -1047,19 +1047,14 @@ fn pump_taskbar_actions(settings_tx: &Sender<Settings>, ui: &mut UiState) -> boo
 /// Settings opened from a widget keep the popup up as a live preview, like
 /// Settings opened from the tray menu.
 fn show_settings_preview(ui: &mut UiState) {
-    flush_popup_ui(ui);
+    publish_ui(ui);
     if !popup::is_visible() || popup::is_closing() {
         popup::show_near_cursor();
     }
 }
 
 #[cfg(windows)]
-pub(super) fn pump_tray_and_dismiss(
-    tray: &TrayManager,
-    _settings_tx: &Sender<Settings>,
-    _state: &AppState,
-    ui: &mut UiState,
-) -> bool {
+pub(super) fn pump_tray_and_dismiss(tray: &TrayManager, ui: &mut UiState) -> bool {
     use tray_icon::{MouseButton, MouseButtonState, TrayIconEvent};
 
     while let Ok(event) = TrayIconEvent::receiver().try_recv() {
@@ -1083,7 +1078,7 @@ pub(super) fn pump_tray_and_dismiss(
             } else {
                 // Flush suppressed background state so the first frame sees
                 // the latest limits/error/activation text.
-                flush_popup_ui(ui);
+                publish_ui(ui);
                 popup::show_near(position.x as i32, position.y as i32);
             }
         }
@@ -1096,7 +1091,7 @@ pub(super) fn pump_tray_and_dismiss(
                 let _ = crate::updater::apply_pending_update();
             }
             TrayMenuAction::Settings => {
-                flush_popup_ui(ui);
+                publish_ui(ui);
                 // Opening Settings from the tray menu provides the same
                 // always-visible live preview as opening it from the footer.
                 if !popup::is_visible() || popup::is_closing() {
@@ -1121,12 +1116,7 @@ pub(super) fn pump_tray_and_dismiss(
 }
 
 #[cfg(not(windows))]
-pub(super) fn pump_tray_and_dismiss(
-    _tray: &TrayManager,
-    _settings_tx: &Sender<Settings>,
-    _state: &AppState,
-    _ui: &mut UiState,
-) -> bool {
+pub(super) fn pump_tray_and_dismiss(_tray: &TrayManager, _ui: &mut UiState) -> bool {
     false
 }
 

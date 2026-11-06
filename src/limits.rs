@@ -389,18 +389,6 @@ impl RateLimits {
             .is_some_and(|plan| plan.trim().eq_ignore_ascii_case("free"))
     }
 
-    /// Window used by tray widgets that target the 5h/primary source.
-    pub fn effective_primary(&self) -> &LimitWindow {
-        if let Some(reserve) = self.codex_luna_reserve_override() {
-            return &reserve.window;
-        }
-        if self.five_hour_disabled() {
-            &self.secondary
-        } else {
-            &self.primary
-        }
-    }
-
     pub fn available_reset_count(&self) -> u32 {
         self.reset_credits
             .as_ref()
@@ -589,7 +577,6 @@ mod tests {
                 .map(|limit| limit.window.used_percent),
             Some(Some(12))
         );
-        assert_eq!(limits.effective_primary().used_percent, Some(12));
     }
 
     #[test]

@@ -169,8 +169,7 @@ pub(crate) fn host_rect(monitor: Monitor, placement: Placement) -> win32::Rect {
         crate::popup::POPUP_WIDTH
     };
     let width = (f64::from(width_dip) * scale).round() as i32 + margin;
-    let height = (f64::from(monitor.bounds.height()) * crate::popup::POPUP_SCREEN_HEIGHT_FRACTION)
-        .round() as i32;
+    let height = monitor.bounds.height();
     let work = monitor.work;
     let (left, right) = if placement.left {
         (work.left, work.left + width)
@@ -208,8 +207,7 @@ pub(crate) fn floating_host_rect(
         crate::popup::POPUP_WIDTH
     };
     let width = (f64::from(width_dip) * monitor.scale()).round() as i32 + margin;
-    let height = (f64::from(monitor.bounds.height()) * crate::popup::POPUP_SCREEN_HEIGHT_FRACTION)
-        .round() as i32;
+    let height = monitor.bounds.height();
     let left = x.saturating_sub(margin);
     win32::Rect {
         left,

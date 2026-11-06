@@ -9,7 +9,7 @@ use fontdue::{
 
 use crate::{
     instances::ProviderId,
-    limits::{LimitWindow, ProviderLimits, RateLimits},
+    limits::{LimitWindow, ProviderLimits},
     provider_registry,
     settings::{
         LimitValue, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget, TrayWidgetKind,
@@ -17,37 +17,6 @@ use crate::{
 };
 
 const ICON_SIZE: usize = 32;
-
-pub fn tooltip(limits: &RateLimits) -> String {
-    let five_hour = if limits.five_hour_disabled() {
-        crate::i18n::tr("disabled").to_string()
-    } else {
-        format_remaining(&limits.primary)
-    };
-    let five_hour_reset = if limits.five_hour_disabled() {
-        "—".to_string()
-    } else {
-        format_reset(limits.primary.resets_at)
-    };
-    let mut rows = vec![crate::i18n::format(
-        "msg-5h-7d",
-        &[
-            ("v0", five_hour.to_string()),
-            ("v1", five_hour_reset.to_string()),
-            ("v2", (format_remaining(&limits.secondary)).to_string()),
-            ("v3", (format_reset(limits.secondary.resets_at)).to_string()),
-        ],
-    )];
-    rows.extend(limits.additional_limits.iter().map(|limit| {
-        format!(
-            "{}  |  {}  |  {}",
-            limit.title,
-            format_remaining(&limit.window),
-            format_reset(limit.window.resets_at),
-        )
-    }));
-    rows.join("\n")
-}
 
 fn truncate_tooltip(value: &str) -> String {
     const MAX_UNITS: usize = 127;
@@ -111,26 +80,6 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
     )
 }
 
-fn format_remaining(window: &LimitWindow) -> String {
-    window
-        .remaining_percent()
-        .map(|value| format!("{value}%"))
-        .unwrap_or_else(|| "?".into())
-}
-
-fn format_reset(reset: Option<DateTime<Utc>>) -> String {
-    reset
-        .map(|value| {
-            let local = value.with_timezone(&Local);
-            format!(
-                "{} {}",
-                TimeFormat::current().format_hm(local),
-                local.format("%d.%m")
-            )
-        })
-        .unwrap_or_else(|| "?".into())
-}
-
 fn percent(window: &LimitWindow, value: LimitValue) -> Option<u8> {
     match value {
         LimitValue::Remaining => window.remaining_percent(),
@@ -153,32 +102,6 @@ fn stacked_reset_label(reset: Option<DateTime<Utc>>, countdown: bool) -> String 
     reset
         .map(|value| TimeFormat::current().format_stacked_hm(value.with_timezone(&Local)))
         .unwrap_or_else(|| "?\n?".into())
-}
-
-#[cfg(test)]
-fn icon_color(value: Option<u8>, limit_value: LimitValue) -> [u8; 3] {
-    icon_color_for_theme(value, limit_value, system_uses_light_theme())
-}
-
-#[cfg(test)]
-fn icon_color_for_theme(
-    value: Option<u8>,
-    limit_value: LimitValue,
-    uses_light_theme: bool,
-) -> [u8; 3] {
-    // Remaining: low is bad. Used: high is bad — color against remaining-equivalent.
-    let severity = match limit_value {
-        LimitValue::Used => value.map(|used| 100u8.saturating_sub(used.min(100))),
-        LimitValue::Remaining => value,
-    };
-    match severity {
-        Some(0..=15) => [230, 74, 72],
-        Some(16..=50) => [245, 158, 11],
-        Some(_) => [49, 196, 141],
-        // Unavailable values are text, not an inactive control: keep them
-        // readable against the system tray in either Windows theme.
-        None => tray_text_color(uses_light_theme),
-    }
 }
 
 fn tray_text_color(uses_light_theme: bool) -> [u8; 3] {
@@ -884,7 +807,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::settings::ProviderKind;
+    use crate::{limits::RateLimits, settings::ProviderKind};
 
     #[test]
     fn tray_instances_resolve_independently_and_missing_instances_keep_their_slot() {
@@ -960,47 +883,6 @@ mod tests {
     }
 
     #[test]
-    fn tooltip_contains_both_windows() {
-        let value = tooltip(&limits());
-        assert!(value.contains("5h  |  73%"));
-        assert!(value.contains("7d  |  39%"));
-    }
-
-    #[test]
-    fn tooltip_marks_disabled_five_hour_window() {
-        let limits = RateLimits {
-            primary: LimitWindow::default(),
-            secondary: LimitWindow {
-                used_percent: Some(40),
-                resets_at: Some(Utc.timestamp_opt(1_700_475_600, 0).unwrap()),
-                duration_minutes: Some(10_080),
-            },
-            sampled_at: Utc::now(),
-            ..RateLimits::default()
-        };
-        let value = tooltip(&limits);
-        assert!(value.contains("5h  |  Disabled  |  —"));
-        assert!(value.contains("7d  |  60%"));
-    }
-
-    #[test]
-    fn tooltip_includes_additional_claude_limits() {
-        let mut limits = RateLimits::default();
-        limits
-            .additional_limits
-            .push(crate::limits::AdditionalLimit {
-                id: "seven_day_fable".into(),
-                title: "Fable".into(),
-                window: LimitWindow {
-                    used_percent: Some(12),
-                    ..Default::default()
-                },
-            });
-
-        assert!(tooltip(&limits).contains("Fable  |  88%  |  ?"));
-    }
-
-    #[test]
     fn primary_tray_falls_back_to_weekly_when_five_hour_disabled() {
         let limits = RateLimits {
             primary: LimitWindow::default(),
@@ -1012,7 +894,6 @@ mod tests {
             sampled_at: Utc::now(),
             ..RateLimits::default()
         };
-        assert_eq!(limits.effective_primary().remaining_percent(), Some(60));
         let mut widget = TrayWidget::custom_for_provider(crate::instances::ProviderId::from(
             ProviderKind::Codex,
         ));
@@ -1028,14 +909,25 @@ mod tests {
     fn tray_text_uses_the_system_theme_and_percentage_icons_stay_colored() {
         assert_eq!(tray_text_color(true), [0, 0, 0]);
         assert_eq!(tray_text_color(false), [255, 255, 255]);
+        let codex = crate::instances::ProviderId::from(ProviderKind::Codex);
+        let indicator = crate::settings::TrayIndicator::new(codex, "codex.session");
+        let accent = [0, 120, 212];
         assert_eq!(
-            icon_color_for_theme(None, LimitValue::Remaining, true),
-            [0, 0, 0]
+            indicator_color(&indicator, codex, None, accent),
+            tray_text_color(system_uses_light_theme())
         );
-        assert_eq!(icon_color(Some(80), LimitValue::Remaining), [49, 196, 141]);
-        // Used inverts severity: low used is healthy, high used is critical.
-        assert_eq!(icon_color(Some(1), LimitValue::Used), [49, 196, 141]);
-        assert_eq!(icon_color(Some(99), LimitValue::Used), [230, 74, 72]);
+        assert_eq!(
+            indicator_color(&indicator, codex, Some(80), accent),
+            [49, 196, 141]
+        );
+        assert_eq!(
+            indicator_color(&indicator, codex, Some(30), accent),
+            [245, 158, 11]
+        );
+        assert_eq!(
+            indicator_color(&indicator, codex, Some(1), accent),
+            [230, 74, 72]
+        );
     }
 
     #[test]

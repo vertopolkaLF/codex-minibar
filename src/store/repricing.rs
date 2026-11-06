@@ -73,13 +73,6 @@ pub(crate) fn reprice_for_current_catalog(seen: &mut u64) -> Result<bool> {
     Ok(changed)
 }
 
-fn is_kind(provider: &str, kind: ProviderKind) -> bool {
-    provider == kind.id()
-        || provider
-            .strip_prefix(kind.id())
-            .is_some_and(|rest| rest.starts_with('-'))
-}
-
 type ClaudeKey = (DateTime<Utc>, Option<String>, Option<String>, u64);
 
 impl ProviderStore {
@@ -166,7 +159,9 @@ impl ProviderStore {
                  WHERE provider=?1 AND path=?2 AND date=?3 AND model=?4 AND priced_requests=0",
             )?;
             for (provider, path, date, model, input, cached, output) in rows {
-                if !is_kind(&provider, ProviderKind::Codex) || !can_price(&model) {
+                if ProviderId::lookup(&provider).is_none_or(|id| id.kind() != ProviderKind::Codex)
+                    || !can_price(&model)
+                {
                     continue;
                 }
                 let uncached = input.saturating_sub(cached);
@@ -266,7 +261,8 @@ impl ProviderStore {
                 let Ok(ts) = DateTime::parse_from_rfc3339(&ts) else {
                     continue;
                 };
-                if !is_kind(&provider, ProviderKind::Claude) {
+                if ProviderId::lookup(&provider).is_none_or(|id| id.kind() != ProviderKind::Claude)
+                {
                     continue;
                 }
                 // Only models the catalog can price are worth re-reading logs for.
@@ -349,12 +345,11 @@ impl ProviderStore {
                 .unwrap_or_else(|| ProviderId::new(ProviderKind::Claude, provider));
             let cache = self.load_claude_cache(id)?;
             let stats = usage::statistics_from_claude_cache(&cache, 365);
-            let model_daily = usage::aggregate_claude_model_daily(&cache)
-                .into_iter()
-                .map(|(date, model, usage)| (model, date, usage))
-                .collect::<Vec<_>>();
-            self.replace_usage_daily_in_transaction(id, &stats.daily)?;
-            self.replace_usage_model_daily_in_transaction(id, &model_daily)?;
+            self.replace_usage_daily_bounded(id, &stats.daily, None)?;
+            self.replace_usage_model_daily_in_transaction(
+                id,
+                &usage::aggregate_claude_model_daily(&cache),
+            )?;
             self.replace_usage_project_daily_in_transaction(
                 id,
                 &usage::aggregate_claude_project_daily(&cache),

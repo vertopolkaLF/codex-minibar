@@ -1,5 +1,4 @@
 pub mod antigravity;
-pub mod app;
 pub mod banked_reset;
 pub mod claude;
 pub mod claude_desktop;

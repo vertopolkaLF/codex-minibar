@@ -8,18 +8,6 @@ pub(super) fn refresh_all_workers(commands: &[(ProviderId, Sender<WorkerCommand>
     requested
 }
 
-/// Publish view state to the GPUI popup. Hidden popups only store it; the
-/// renderer repaints when it is shown, so background polls stay cheap.
-pub(super) fn publish_popup_ui(ui: &UiState) {
-    super::publish_ui(ui);
-}
-
-/// Same as [`publish_popup_ui`]; kept separate to mark paths that must reach
-/// the renderer before the next show.
-pub(super) fn flush_popup_ui(ui: &UiState) {
-    super::publish_ui(ui);
-}
-
 /// Flatten provider usage errors, including per-account errors exposed by
 /// OpenRouter, into the provider-scoped presentation used by the popup.
 pub(super) fn usage_error_message(statistics: &crate::usage::UsageStatistics) -> Option<String> {
@@ -339,13 +327,11 @@ impl AppState {
             {
                 continue;
             }
-            let cached_limits = self.current_limits();
-            match crate::provider::start_provider_worker_with_limits(
+            match crate::provider::start_provider_worker(
                 provider,
                 settings,
                 self.activation_path.clone(),
                 self.worker_events_tx.clone(),
-                Some(cached_limits.get(provider)),
             ) {
                 Ok(worker) => {
                     if let Ok(mut commands) = self.commands.lock() {
@@ -389,7 +375,6 @@ pub(crate) struct UiState {
     pub(super) accent_color: AccentColor,
     pub(super) font_family: Option<String>,
     pub(super) animations_enabled: bool,
-    pub(super) popup_background_material: PopupBackgroundMaterial,
     pub(super) popup_theme: PopupTheme,
     pub(super) popup_vscode_theme: Option<String>,
     pub(super) popup_vscode_contrast: u16,
@@ -456,7 +441,6 @@ impl Default for UiState {
             accent_color: AccentColor::Windows,
             font_family: None,
             animations_enabled: true,
-            popup_background_material: PopupBackgroundMaterial::Mica,
             popup_theme: PopupTheme::Fluent,
             popup_vscode_theme: None,
             popup_vscode_contrast: crate::settings::POPUP_VSCODE_CONTRAST_DEFAULT,
@@ -535,7 +519,6 @@ impl UiState {
         self.accent_color = settings.accent_color;
         self.font_family = settings.font_family.clone();
         self.animations_enabled = settings.animations_enabled;
-        self.popup_background_material = settings.popup_background_material;
         self.popup_theme = settings.popup_theme;
         self.popup_vscode_theme = settings.popup_vscode_theme.clone();
         self.popup_vscode_contrast = settings.popup_vscode_contrast;

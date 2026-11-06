@@ -232,8 +232,7 @@ impl Host {
             }
             #[cfg(not(windows))]
             {
-                (f64::from(monitor.bounds.height()) / monitor.scale()
-                    * crate::popup::POPUP_SCREEN_HEIGHT_FRACTION) as f32
+                (f64::from(monitor.bounds.height()) / monitor.scale()) as f32
             }
         })
     }
@@ -1376,7 +1375,6 @@ impl PopupRoot {
             }
         };
         self.host.offset = offset;
-        crate::popup::set_client_width_dip(width.round() as i32);
         (width, height, offset)
     }
 
@@ -2680,7 +2678,6 @@ impl PopupRoot {
                 include_usage_stats: ui.usage_stats_provider_enabled(provider),
                 show_account_name: ui.show_account_name,
                 drag_handle: false,
-                openrouter_actions: provider.kind() == ProviderKind::OpenRouter,
                 provider_error: error_message.as_deref(),
                 provider_status: provider_statuses
                     .iter()

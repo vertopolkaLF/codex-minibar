@@ -15,7 +15,6 @@ use super::{
     theme::{HslaExt, Palette},
 };
 use crate::popup_window::{model::*, *};
-use crate::usage_overview::OverviewSnapshot;
 
 pub(super) const COLUMN_GAP: f32 = 20.0;
 const HEADING_TOP: f32 = 8.0;
@@ -161,7 +160,6 @@ impl PopupRoot {
                         include_usage_stats: ui.usage_stats_provider_enabled(provider),
                         show_account_name: ui.show_account_name,
                         drag_handle: can_reorder,
-                        openrouter_actions: provider.kind() == ProviderKind::OpenRouter,
                         provider_error: ui.provider_error(provider),
                         provider_status: provider_statuses
                             .iter()
@@ -1245,9 +1243,6 @@ pub(super) fn format_thousands(value: u64) -> String {
     }
     grouped.chars().rev().collect()
 }
-
-#[allow(dead_code)]
-fn _unused(_: &OverviewSnapshot) {}
 
 #[cfg(test)]
 mod money_tests {

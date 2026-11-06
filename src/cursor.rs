@@ -417,12 +417,12 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         model_daily
             .entry((model_key, date))
             .or_default()
-            .add_public(&row_usage);
+            .add(&row_usage);
         if let Some(timestamp) = timestamp {
             hourly
                 .entry(crate::usage::truncate_local_hour(timestamp))
                 .or_default()
-                .add_public(&row_usage);
+                .add(&row_usage);
         }
     }
 

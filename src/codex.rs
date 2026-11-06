@@ -1073,7 +1073,6 @@ mod tests {
         assert_eq!(parsed.secondary.used_percent, Some(14));
         assert_eq!(parsed.secondary.duration_minutes, Some(10_080));
         assert!(!parsed.primary_window_is_unactivated);
-        assert_eq!(parsed.effective_primary().used_percent, Some(14));
     }
 
     #[test]

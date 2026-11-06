@@ -416,7 +416,11 @@ pub(super) fn finish_instance_migration(settings: &mut Settings) -> bool {
         settings,
         |name| crate::secrets::load(name).ok().flatten(),
         |name| {
-            let _ = crate::secrets::save(name, None);
+            if let Err(error) = crate::secrets::save(name, None) {
+                crate::logger::info(format!(
+                    "failed to remove migrated secret {name}: {error:#}"
+                ));
+            }
         },
         crate::openrouter::key_is_configured(),
         |instance| crate::instances::managed_folder(&instance.id),

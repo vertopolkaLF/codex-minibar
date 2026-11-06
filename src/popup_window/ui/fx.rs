@@ -526,7 +526,6 @@ mod tests {
                     include_usage_stats: false,
                     show_account_name: true,
                     drag_handle: false,
-                    openrouter_actions: false,
                     provider_error: None,
                     provider_status: None,
                     now: chrono::Utc::now(),

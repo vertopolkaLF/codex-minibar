@@ -1024,10 +1024,6 @@ impl ProviderKind {
             Self::CommandCode => "Command Code",
         }
     }
-
-    pub fn default_order() -> Vec<Self> {
-        Self::ALL.to_vec()
-    }
 }
 
 /// A weekly local-time rule for starting a provider's 5-hour limit window.
@@ -2417,7 +2413,9 @@ impl Settings {
         if original_version < migration::INSTANCES_VERSION {
             // Instances rewrite provider settings wholesale and older builds
             // cannot read the result. Keep the original next to it.
-            let _ = backup_before_migration(path, original_version);
+            if let Err(error) = backup_before_migration(path, original_version) {
+                crate::logger::info(format!("failed to back up settings: {error:#}"));
+            }
         }
         let (mut settings, dirty) = match Self::decode_raw(&raw) {
             Ok((settings, dirty)) => (settings, dirty),
@@ -2426,14 +2424,18 @@ impl Settings {
                     "settings at {} could not be decoded ({error:#}); recreating usable defaults",
                     path.display()
                 );
-                let _ = backup_corrupt_settings(path);
+                if let Err(error) = backup_corrupt_settings(path) {
+                    crate::logger::info(format!("failed to back up corrupt settings: {error:#}"));
+                }
                 let mut settings = Self::salvage_raw(&raw).unwrap_or_else(Self::default);
                 settings.version = SETTINGS_VERSION;
                 // An existing install with a broken file should not be forced
                 // back through first-run onboarding.
                 settings.onboarding_completed = true;
                 settings.repair_inplace();
-                let _ = settings.save(path);
+                if let Err(error) = settings.save(path) {
+                    crate::logger::info(format!("failed to save recovered settings: {error:#}"));
+                }
                 return Ok(settings);
             }
         };
@@ -2781,23 +2783,6 @@ impl Settings {
             .is_some_and(|instance| instance.enabled)
     }
 
-    /// Enabled instances of one driver, in display order.
-    pub fn enabled_instances_of(&self, driver: ProviderKind) -> Vec<ProviderId> {
-        self.instances
-            .iter()
-            .filter(|instance| instance.enabled && instance.driver == driver)
-            .map(ProviderInstance::provider_id)
-            .collect()
-    }
-
-    /// The single enabled instance, when there is exactly one usable choice.
-    pub fn single_enabled_provider(&self) -> Option<ProviderId> {
-        match self.enabled_providers().as_slice() {
-            [provider] => Some(*provider),
-            _ => None,
-        }
-    }
-
     pub fn set_enabled(&mut self, provider: ProviderId, enabled: bool) {
         if let Some(instance) = self.instance_mut(provider) {
             instance.enabled = enabled;
@@ -2858,13 +2843,6 @@ impl Settings {
         if let Some(instance) = self.instance_mut(provider) {
             instance.usage_stats = enabled;
         }
-    }
-
-    pub fn absorb_discovered_popup_bricks(
-        &mut self,
-        limits: &crate::limits::ProviderLimits,
-    ) -> bool {
-        self.popup_visibility.absorb_discovered_bricks(limits)
     }
 
     /// A new instance of `driver`. It takes the driver's legacy id while that
@@ -2997,29 +2975,6 @@ impl Settings {
                 .iter()
                 .map(|i| i.id.clone())
                 .collect::<Vec<_>>()
-    }
-
-    /// Moves an instance one slot earlier or later.
-    pub fn move_provider(&mut self, provider: ProviderId, earlier: bool) -> bool {
-        let Some(index) = self
-            .instances
-            .iter()
-            .position(|instance| instance.id == provider.id())
-        else {
-            return false;
-        };
-        let swap_index = if earlier {
-            index.checked_sub(1)
-        } else if index + 1 < self.instances.len() {
-            Some(index + 1)
-        } else {
-            None
-        };
-        let Some(swap_index) = swap_index else {
-            return false;
-        };
-        self.instances.swap(index, swap_index);
-        true
     }
 
     /// Keeps persisted widget identities and cardinality valid without
@@ -4271,13 +4226,13 @@ show_usage_stats = false
                 ..Default::default()
             },
         )]);
-        assert!(settings.absorb_discovered_popup_bricks(&limits));
+        assert!(settings.popup_visibility.absorb_discovered_bricks(&limits));
         assert!(
             settings
                 .popup_visibility
                 .is_visible(&brick_id, PopupSurface::HomeTab, true)
         );
-        assert!(!settings.absorb_discovered_popup_bricks(&limits));
+        assert!(!settings.popup_visibility.absorb_discovered_bricks(&limits));
     }
 
     #[test]
@@ -4607,16 +4562,14 @@ enabled = ["codex", "claude"]
     }
 
     #[test]
-    fn instances_reorder_and_move_within_the_shared_order() {
+    fn instances_reorder_within_the_shared_order() {
         let mut settings = Settings::default();
         let (codex, cursor) = (id(ProviderKind::Codex), id(ProviderKind::Cursor));
         settings.set_enabled(codex, true);
         settings.set_enabled(cursor, true);
         assert_eq!(settings.enabled_providers(), vec![codex, cursor]);
-        assert!(settings.move_provider(cursor, true));
-        assert!(settings.move_provider(cursor, true));
+        assert!(settings.reorder_providers(cursor, codex, &[codex, cursor]));
         assert_eq!(settings.enabled_providers(), vec![cursor, codex]);
-        assert!(!settings.move_provider(cursor, true));
         assert!(settings.reorder_providers(cursor, codex, &[codex, cursor]));
         assert_eq!(settings.enabled_providers(), vec![codex, cursor]);
         let ids = settings
