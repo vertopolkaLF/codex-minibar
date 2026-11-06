@@ -1081,4 +1081,32 @@ mod tests {
             .contains("language = \"korean\"")
         );
     }
+
+    #[test]
+    fn every_locale_directory_has_the_complete_english_key_set() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("locales");
+        let english = catalog_parameters(EN);
+        let expected = english.keys().collect::<BTreeSet<_>>();
+        let mut count = 0;
+        for entry in std::fs::read_dir(root).unwrap() {
+            let entry = entry.unwrap();
+            if !entry.file_type().unwrap().is_dir() {
+                continue;
+            }
+            let path = entry.path().join("app.ftl");
+            let source = std::fs::read_to_string(&path).unwrap();
+            let messages = catalog_parameters(&source);
+            assert_eq!(
+                messages.keys().collect::<BTreeSet<_>>(),
+                expected,
+                "{}",
+                path.display()
+            );
+            count += 1;
+        }
+        assert!(
+            count > Language::SUPPORTED.len(),
+            "include English and the template"
+        );
+    }
 }
