@@ -537,7 +537,7 @@ impl SettingsWindow {
                     .iter()
                     .find(|instance| instance.id == provider.id())
                     .is_some_and(|instance| {
-                        matches!(instance.driver, ProviderKind::Claude | ProviderKind::Codex)
+                        crate::provider_registry::descriptor(instance.driver).config_folder
                             && !instance.uses_manual_credential()
                     });
                 fields.push(kit::caption(

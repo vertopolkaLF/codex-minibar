@@ -2112,12 +2112,6 @@ exit = Quitter
 update-available-67fd3a = Mise à jour disponible
 
 # application
-monthly-credits-976559 = Crédits mensuels
-
-# application
-msg-5h-session-de7ce8 = Session de 5 h
-
-# application
 name-weekly = { $name } hebdomadaire
 
 # application
@@ -2286,10 +2280,6 @@ this-provider-does-not-use-a-config-folder = Ce fournisseur n'utilise pas de dos
 
 # application
 could-not-save-provider-settings-error-restoring-its-previous-cre = Impossible d'enregistrer les paramètres du fournisseur ({ $error }) ; la restauration de ses informations d'identification précédentes a également échoué ({ $rollback_error }).
-
-# application
-msg-5h-7d = 5h |  { $v0 } |  { $v1 }
-    7j |  { $v2 } |  { $v3 }
 
 # API key count in the provider header.
 api-key-count = { $v0 ->

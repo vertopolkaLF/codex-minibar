@@ -2128,12 +2128,6 @@ exit = Выйти
 update-available-67fd3a = Доступно обновление
 
 # application
-monthly-credits-976559 = Кредиты за месяц
-
-# application
-msg-5h-session-de7ce8 = Сессия 5 ч
-
-# application
 name-weekly = { $name }: неделя
 
 # application
@@ -2302,10 +2296,6 @@ this-provider-does-not-use-a-config-folder = Этот провайдер не и
 
 # application
 could-not-save-provider-settings-error-restoring-its-previous-cre = Не удалось сохранить настройки провайдера ({ $error }) и восстановить прежнюю авторизацию ({ $rollback_error }).
-
-# application
-msg-5h-7d = 5 ч  |  { $v0 }  |  { $v1 }
-    7 д  |  { $v2 }  |  { $v3 }
 
 # API key count in the provider header.
 api-key-count = { $v0 ->

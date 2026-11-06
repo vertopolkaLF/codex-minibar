@@ -422,7 +422,7 @@ impl ClaudeClient {
     pub fn new() -> Self {
         Self {
             timeout: Duration::from_secs(15),
-            provider: ProviderId::primary(crate::settings::ProviderKind::Claude),
+            provider: ProviderId::primary(crate::provider_registry::ProviderKind::Claude),
             login: ClaudeLogin::Ambient,
             account_cache: ClaudeAccountCache::default(),
             last_refresh: None,
@@ -1405,7 +1405,7 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
     let secondary = parse_window(response.seven_day, Some(7 * 24 * 60));
     let cloud_session_credits = response
         .additional_windows
-        .get("iguana_necktie")
+        .get(crate::provider_registry::CLAUDE_CLOUD_SESSION_CREDITS_LIMIT_ID)
         .and_then(parse_cloud_session_credits);
     let mut additional_limits = response
         .additional_windows
@@ -1413,7 +1413,7 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
         .filter_map(|(id, value)| {
             let window = serde_json::from_value::<OAuthUsageWindow>(value).ok()?;
             let mut window = parse_window(Some(window), inferred_duration_minutes(&id));
-            if id == "iguana_necktie"
+            if id == crate::provider_registry::CLAUDE_CLOUD_SESSION_CREDITS_LIMIT_ID
                 && let Some(credits) = &cloud_session_credits
             {
                 window.used_percent = Some(
@@ -1743,7 +1743,7 @@ fn inferred_duration_minutes(id: &str) -> Option<u32> {
 }
 
 fn additional_limit_title(id: &str) -> String {
-    if id == "iguana_necktie" {
+    if id == crate::provider_registry::CLAUDE_CLOUD_SESSION_CREDITS_LIMIT_ID {
         return "Cloud session credits".into();
     }
     let name = id

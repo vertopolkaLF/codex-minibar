@@ -18,6 +18,21 @@ use super::{
 /// First settings version that stores provider instances.
 pub(super) const INSTANCES_VERSION: u32 = 39;
 
+/// Drivers the historical migrations enumerate. Frozen so adding a provider
+/// never changes what migrating an old settings file produces.
+pub(super) const MIGRATED_DRIVERS: [ProviderKind; 10] = [
+    ProviderKind::Codex,
+    ProviderKind::Claude,
+    ProviderKind::Cursor,
+    ProviderKind::OpenCodeZen,
+    ProviderKind::OpenCodeGo,
+    ProviderKind::OpenRouter,
+    ProviderKind::Antigravity,
+    ProviderKind::Grok,
+    ProviderKind::Kiro,
+    ProviderKind::CommandCode,
+];
+
 /// The built-in profile that followed this PC's login.
 const DEFAULT_PROFILE_ID: &str = "default";
 
@@ -193,7 +208,7 @@ fn instances_from_legacy(legacy: &LegacyV38) -> Migrated {
         .iter()
         .filter_map(|kind| widget_driver(kind))
         .collect::<Vec<_>>();
-    for driver in ProviderKind::ALL {
+    for driver in MIGRATED_DRIVERS {
         if !drivers.contains(&driver) {
             drivers.push(driver);
         }
@@ -591,7 +606,7 @@ enabled = false
             .map(|instance| instance.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(&ids[..5], ["claude", "work", "old", "codex", "cursor"]);
-        assert_eq!(ids.len(), ProviderKind::ALL.len() + 2);
+        assert_eq!(ids.len(), MIGRATED_DRIVERS.len() + 2);
         let claude = settings.instance_by_id("claude").unwrap();
         assert_eq!(claude.name, "Personal");
         assert!(claude.enabled && claude.auto_activation && claude.show_on_home);

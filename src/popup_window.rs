@@ -24,13 +24,13 @@ use crate::{
     notifications::LimitNotificationTracker,
     popup,
     provider_registry::{
-        LimitSectionKind, additional_limit_brick_id, credits_brick_id, limit_section_brick_id,
-        resets_brick_id, spending_brick_id, usage_brick_id,
+        LimitSectionKind, ProviderKind, UsageStats, additional_limit_brick_id, credits_brick_id,
+        limit_section_brick_id, resets_brick_id, spending_brick_id, usage_brick_id,
     },
     settings::{
         AccentColor, AppTheme, HomeCardLayout, HomeWidgetId, NotificationSettings, PopupSurface,
-        PopupTabMode, PopupTheme, PopupVisibility, ProviderKind, Settings, TimeFormat,
-        TotalSpendPeriod, TotalSpendPresentation, TrayWidget,
+        PopupTabMode, PopupTheme, PopupVisibility, Settings, TimeFormat, TotalSpendPeriod,
+        TotalSpendPresentation, TrayWidget,
     },
     tray::{TrayManager, TrayMenuAction},
     updater::{UpdateController, UpdatePhase},

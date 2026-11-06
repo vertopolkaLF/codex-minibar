@@ -10,8 +10,9 @@ use gpui::{
 use super::kit::{self, Button, Kit, Row, eid};
 use super::window::SettingsWindow;
 use crate::popup_window::ui::theme::rgb8;
+use crate::provider_registry::ProviderKind;
 use crate::settings::{
-    LimitValue, ProviderId, ProviderKind, TimeFormat, TrayColorMode, TrayFixedColor, TrayIndicator,
+    LimitValue, ProviderId, TimeFormat, TrayColorMode, TrayFixedColor, TrayIndicator,
     TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 

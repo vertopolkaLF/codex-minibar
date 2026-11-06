@@ -1,12 +1,69 @@
-use crate::{
-    limits::{LimitWindow, RateLimits},
-    settings::ProviderKind,
-};
+use crate::limits::{AdditionalLimit, LimitWindow, RateLimits};
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// When false (the default), Codex uses the ChatGPT mark. Settings flips this
 /// so every surface that calls [`icon`] updates together.
 static REPLACE_CHATGPT_LOGO_WITH_CODEX: AtomicBool = AtomicBool::new(false);
+
+#[derive(
+    Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderKind {
+    #[default]
+    Codex,
+    Claude,
+    Cursor,
+    OpenCodeZen,
+    OpenCodeGo,
+    #[serde(rename = "openrouter")]
+    OpenRouter,
+    Antigravity,
+    Grok,
+    Kiro,
+    CommandCode,
+}
+
+impl ProviderKind {
+    pub const ALL: [Self; 10] = [
+        Self::Codex,
+        Self::Claude,
+        Self::Cursor,
+        Self::OpenCodeZen,
+        Self::OpenCodeGo,
+        Self::OpenRouter,
+        Self::Antigravity,
+        Self::Grok,
+        Self::Kiro,
+        Self::CommandCode,
+    ];
+
+    pub const fn id(self) -> &'static str {
+        descriptor(self).id
+    }
+
+    pub fn from_id(id: &str) -> Option<Self> {
+        PROVIDERS
+            .iter()
+            .find(|descriptor| descriptor.id == id)
+            .map(|descriptor| descriptor.kind)
+    }
+
+    pub const fn display_name(self) -> &'static str {
+        descriptor(self).display_name
+    }
+}
+
+// Additional-limit ids reported by provider APIs. Provider clients emit them
+// and the metric tables below map them onto stable widget metrics.
+pub const CURSOR_API_LIMIT_ID: &str = "cursor-api";
+pub const CURSOR_ALL_MODELS_LIMIT_ID: &str = "cursor-all-models";
+pub const CURSOR_GROK_BOT_LIMIT_ID: &str = "cursor-grok-bot";
+pub const OPENCODE_GO_MONTHLY_LIMIT_ID: &str = "monthly";
+pub const COMMAND_CODE_MONTHLY_LIMIT_ID: &str = "monthly";
+/// Claude's additional window that carries cloud-session credit dollars.
+pub const CLAUDE_CLOUD_SESSION_CREDITS_LIMIT_ID: &str = "iguana_necktie";
 
 /// Provider-independent identity for a quota window exposed to popup, tray,
 /// settings, and future provider surfaces.
@@ -23,9 +80,26 @@ pub struct MetricDescriptor {
     pub label: &'static str,
     pub label_key: &'static str,
     pub source: MetricSource,
+    /// Whether a fresh install shows the metric's popup brick.
+    pub visible_by_default: bool,
 }
 
 impl MetricDescriptor {
+    const fn new(
+        id: &'static str,
+        label: &'static str,
+        label_key: &'static str,
+        source: MetricSource,
+    ) -> Self {
+        Self {
+            id,
+            label,
+            label_key,
+            source,
+            visible_by_default: true,
+        }
+    }
+
     pub fn localized_label(&self) -> &'static str {
         crate::i18n::tr(self.label_key)
     }
@@ -41,13 +115,142 @@ impl MetricDescriptor {
     }
 }
 
+pub type Rgb = (u8, u8, u8);
+
+/// A color for light and for dark surfaces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ThemedRgb {
+    pub light: Rgb,
+    pub dark: Rgb,
+}
+
+impl ThemedRgb {
+    const fn same(rgb: Rgb) -> Self {
+        Self {
+            light: rgb,
+            dark: rgb,
+        }
+    }
+
+    pub const fn pick(self, dark: bool) -> Rgb {
+        if dark { self.dark } else { self.light }
+    }
+}
+
+/// How the popup's banked-reset card can redeem a credit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BankedResets {
+    Unsupported,
+    /// The provider picks the credit; a positive count is enough.
+    ByCount,
+    /// Redemption needs at least one credit listed as available.
+    ByListedCredit,
+}
+
+/// What the provider's credits balance counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Credits {
+    Unsupported,
+    /// A plain number, shown rounded with grouped digits.
+    Count,
+    /// Shown exactly as the provider reports it (it may carry a currency).
+    AsReported,
+}
+
+/// Where Usage Stats come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageStats {
+    Unsupported,
+    /// Scanned from the provider's local session history.
+    Local,
+    /// Downloaded from an export that may lag behind; the card stays visible
+    /// while the export is still empty.
+    RemoteExport,
+    /// Read from the provider's API with a management key.
+    ManagementKey,
+}
+
+impl UsageStats {
+    pub const fn is_supported(self) -> bool {
+        !matches!(self, Self::Unsupported)
+    }
+}
+
+/// How the usage card values a period.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsageValue {
+    /// Tokens, priced from the public catalog as an approximation.
+    EstimatedTokens,
+    /// Tokens with the cost the provider billed.
+    BilledTokens,
+    /// Billed per request: spend and request count lead.
+    Spend,
+}
+
+/// i18n keys of the popup's monthly, 5-hour and secondary quota card titles.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LimitTitles {
+    pub monthly: &'static str,
+    pub five_hour: &'static str,
+    pub secondary: &'static str,
+}
+
+impl LimitTitles {
+    const STANDARD: Self = Self::all("monthly", "msg-5h-session", "weekly");
+
+    const fn all(monthly: &'static str, five_hour: &'static str, secondary: &'static str) -> Self {
+        Self {
+            monthly,
+            five_hour,
+            secondary,
+        }
+    }
+
+    const fn single(key: &'static str) -> Self {
+        Self::all(key, key, key)
+    }
+}
+
+/// A provider's public status page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatusPage {
+    pub page_url: &'static str,
+    pub api: StatusApi,
+    pub relevance: StatusRelevance,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusApi {
+    /// Atlassian Statuspage `api/v2/summary.json`.
+    Statuspage(&'static str),
+    /// incident.io's public page proxy. Its Statuspage-compatible endpoint
+    /// omits component groups, which is where OpenAI keeps Codex.
+    IncidentIo(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatusRelevance {
+    /// Component (or its group) names containing one of these, ignoring case.
+    Matching(&'static [&'static str]),
+    /// Every component except these exact names.
+    Except(&'static [&'static str]),
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ProviderDescriptor {
     pub kind: ProviderKind,
     pub id: &'static str,
     pub display_name: &'static str,
     pub icon: &'static str,
-    pub brand_rgb: (u8, u8, u8),
+    /// Source brand color for charts, the tray and external widgets.
+    pub brand_rgb: Rgb,
+    /// Small provider marks on popup cards and Settings rows, tuned to stay
+    /// visible on each surface (monochrome marks turn white on dark).
+    pub icon_rgb: ThemedRgb,
+    /// Share-bar / donut / legend color on combined spend surfaces.
+    pub spend_rgb: ThemedRgb,
+    /// Area-chart series color on the Usage tab.
+    pub series_rgb: ThemedRgb,
     /// Whether the provider exposes a real operation that starts a fresh
     /// session limit window.
     pub supports_activation: bool,
@@ -56,6 +259,26 @@ pub struct ProviderDescriptor {
     /// Whether more than one instance can be configured. Only drivers with an
     /// isolating parameter (config folder or API key) qualify.
     pub supports_multiple_instances: bool,
+    /// Whether instances read a CLI login folder (sign-in, folder settings,
+    /// folder conflicts).
+    pub config_folder: bool,
+    pub banked_resets: BankedResets,
+    pub credits: Credits,
+    pub usage_stats: UsageStats,
+    pub usage_value: UsageValue,
+    /// Whether the popup shows per-key spending strips.
+    pub spending_strips: bool,
+    /// Whether glanceable surfaces show the account balance instead of quota.
+    pub balance_only: bool,
+    /// Whether the quota is a single monthly window on every plan.
+    pub monthly_only: bool,
+    pub limit_titles: LimitTitles,
+    pub default_refresh_seconds: u64,
+    /// File name of the primary instance's activation state.
+    pub activation_state_file: &'static str,
+    /// Catalog namespaces tried, in order, to price a bare model name.
+    pub pricing_prefixes: &'static [&'static str],
+    pub status_page: Option<StatusPage>,
     /// Stable metrics shown before runtime-discovered provider-specific lanes.
     pub metrics: &'static [MetricDescriptor],
     /// Ordered metrics used by onboarding and the provider preset.
@@ -63,66 +286,59 @@ pub struct ProviderDescriptor {
 }
 
 const CODEX_METRICS: &[MetricDescriptor] = &[
-    MetricDescriptor {
-        id: "codex.session",
-        label: "5h session",
-        label_key: "msg-5h-session",
-        source: MetricSource::Primary,
-    },
-    MetricDescriptor {
-        id: "codex.weekly",
-        label: "Weekly",
-        label_key: "weekly",
-        source: MetricSource::Secondary,
-    },
-    MetricDescriptor {
-        id: "codex.lunaReserve",
-        label: "Luna Reserve",
-        label_key: "luna-reserve",
-        source: MetricSource::Additional("gpt-reserve"),
-    },
+    MetricDescriptor::new(
+        "codex.session",
+        "5h session",
+        "msg-5h-session",
+        MetricSource::Primary,
+    ),
+    MetricDescriptor::new("codex.weekly", "Weekly", "weekly", MetricSource::Secondary),
+    MetricDescriptor::new(
+        "codex.lunaReserve",
+        "Luna Reserve",
+        "luna-reserve",
+        MetricSource::Additional(crate::limits::GPT_RESERVE_LIMIT_ID),
+    ),
 ];
 
 const CLAUDE_METRICS: &[MetricDescriptor] = &[
-    MetricDescriptor {
-        id: "claude.session",
-        label: "5h session",
-        label_key: "msg-5h-session",
-        source: MetricSource::Primary,
-    },
-    MetricDescriptor {
-        id: "claude.weekly",
-        label: "Weekly",
-        label_key: "weekly",
-        source: MetricSource::Secondary,
-    },
+    MetricDescriptor::new(
+        "claude.session",
+        "5h session",
+        "msg-5h-session",
+        MetricSource::Primary,
+    ),
+    MetricDescriptor::new("claude.weekly", "Weekly", "weekly", MetricSource::Secondary),
 ];
 
 const CURSOR_METRICS: &[MetricDescriptor] = &[
+    MetricDescriptor::new(
+        "cursor.auto",
+        "Cursor Models",
+        "cursor-models",
+        MetricSource::Secondary,
+    ),
+    MetricDescriptor::new(
+        "cursor.api",
+        "Other Models",
+        "other-models",
+        MetricSource::Additional(CURSOR_API_LIMIT_ID),
+    ),
     MetricDescriptor {
-        id: "cursor.auto",
-        label: "Cursor Models",
-        label_key: "cursor-models",
-        source: MetricSource::Secondary,
+        visible_by_default: false,
+        ..MetricDescriptor::new(
+            "cursor.allModels",
+            "All Models",
+            "all-models",
+            MetricSource::Additional(CURSOR_ALL_MODELS_LIMIT_ID),
+        )
     },
-    MetricDescriptor {
-        id: "cursor.api",
-        label: "Other Models",
-        label_key: "other-models",
-        source: MetricSource::Additional("cursor-api"),
-    },
-    MetricDescriptor {
-        id: "cursor.allModels",
-        label: "All Models",
-        label_key: "all-models",
-        source: MetricSource::Additional("cursor-all-models"),
-    },
-    MetricDescriptor {
-        id: "cursor.grokBot",
-        label: "Grok Bot",
-        label_key: "grok-bot",
-        source: MetricSource::Additional("cursor-grok-bot"),
-    },
+    MetricDescriptor::new(
+        "cursor.grokBot",
+        "Grok Bot",
+        "grok-bot",
+        MetricSource::Additional(CURSOR_GROK_BOT_LIMIT_ID),
+    ),
 ];
 
 // Zen has no authoritative percentage/reset windows exposed by its API.
@@ -131,85 +347,88 @@ const CURSOR_METRICS: &[MetricDescriptor] = &[
 const OPENCODE_ZEN_METRICS: &[MetricDescriptor] = &[];
 
 const OPENCODE_GO_METRICS: &[MetricDescriptor] = &[
-    MetricDescriptor {
-        id: "opencode-go.session",
-        label: "5h session",
-        label_key: "msg-5h-session",
-        source: MetricSource::Primary,
-    },
-    MetricDescriptor {
-        id: "opencode-go.weekly",
-        label: "Weekly",
-        label_key: "weekly",
-        source: MetricSource::Secondary,
-    },
-    MetricDescriptor {
-        id: "opencode-go.monthly",
-        label: "Monthly",
-        label_key: "monthly",
-        source: MetricSource::Additional("monthly"),
-    },
+    MetricDescriptor::new(
+        "opencode-go.session",
+        "5h session",
+        "msg-5h-session",
+        MetricSource::Primary,
+    ),
+    MetricDescriptor::new(
+        "opencode-go.weekly",
+        "Weekly",
+        "weekly",
+        MetricSource::Secondary,
+    ),
+    MetricDescriptor::new(
+        "opencode-go.monthly",
+        "Monthly",
+        "monthly",
+        MetricSource::Additional(OPENCODE_GO_MONTHLY_LIMIT_ID),
+    ),
 ];
 
-const OPENROUTER_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
-    id: "openrouter.limit",
-    label: "Spending limit",
-    label_key: "spending-limit",
-    source: MetricSource::Primary,
-}];
+const OPENROUTER_METRICS: &[MetricDescriptor] = &[MetricDescriptor::new(
+    "openrouter.limit",
+    "Spending limit",
+    "spending-limit",
+    MetricSource::Primary,
+)];
 
 const ANTIGRAVITY_METRICS: &[MetricDescriptor] = &[
-    MetricDescriptor {
-        id: "antigravity.gemini",
-        label: "Gemini",
-        label_key: "gemini",
-        source: MetricSource::Primary,
-    },
-    MetricDescriptor {
-        id: "antigravity.thirdParty",
-        label: "Claude + GPT",
-        label_key: "claude-gpt",
-        source: MetricSource::Secondary,
-    },
+    MetricDescriptor::new(
+        "antigravity.gemini",
+        "Gemini",
+        "gemini",
+        MetricSource::Primary,
+    ),
+    MetricDescriptor::new(
+        "antigravity.thirdParty",
+        "Claude + GPT",
+        "claude-gpt",
+        MetricSource::Secondary,
+    ),
 ];
 
-const GROK_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
-    id: "grok.credits",
-    label: "Credits",
-    label_key: "credits",
-    source: MetricSource::Primary,
-}];
+const GROK_METRICS: &[MetricDescriptor] = &[MetricDescriptor::new(
+    "grok.credits",
+    "Credits",
+    "credits",
+    MetricSource::Primary,
+)];
 
-const KIRO_METRICS: &[MetricDescriptor] = &[MetricDescriptor {
-    // Keep the original Kiro metric id so existing tray and popup visibility
-    // settings survive the switch from an extra lane to the primary monthly quota.
-    id: "kiro.additional.credits",
-    label: "Monthly credits",
-    label_key: "monthly-credits",
-    source: MetricSource::Secondary,
-}];
+// Keep the original Kiro metric id so existing tray and popup visibility
+// settings survive the switch from an extra lane to the primary monthly quota.
+const KIRO_METRICS: &[MetricDescriptor] = &[MetricDescriptor::new(
+    "kiro.additional.credits",
+    "Monthly credits",
+    "monthly-credits",
+    MetricSource::Secondary,
+)];
 
 const COMMAND_CODE_METRICS: &[MetricDescriptor] = &[
-    MetricDescriptor {
-        id: "command-code.session",
-        label: "5h session",
-        label_key: "msg-5h-session",
-        source: MetricSource::Primary,
-    },
-    MetricDescriptor {
-        id: "command-code.weekly",
-        label: "Weekly",
-        label_key: "weekly",
-        source: MetricSource::Secondary,
-    },
-    MetricDescriptor {
-        id: "command-code.monthly",
-        label: "Monthly",
-        label_key: "monthly",
-        source: MetricSource::Additional(crate::commandcode::MONTHLY_LIMIT_ID),
-    },
+    MetricDescriptor::new(
+        "command-code.session",
+        "5h session",
+        "msg-5h-session",
+        MetricSource::Primary,
+    ),
+    MetricDescriptor::new(
+        "command-code.weekly",
+        "Weekly",
+        "weekly",
+        MetricSource::Secondary,
+    ),
+    MetricDescriptor::new(
+        "command-code.monthly",
+        "Monthly",
+        "monthly",
+        MetricSource::Additional(COMMAND_CODE_MONTHLY_LIMIT_ID),
+    ),
 ];
 
+const WHITE: Rgb = (255, 255, 255);
+
+/// Indexed by `ProviderKind as usize`.
 pub const PROVIDERS: &[ProviderDescriptor] = &[
     ProviderDescriptor {
         kind: ProviderKind::Codex,
@@ -217,9 +436,34 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Codex",
         icon: "codex",
         brand_rgb: (128, 159, 255),
+        icon_rgb: ThemedRgb {
+            light: (107, 132, 244),
+            dark: (128, 159, 255),
+        },
+        spend_rgb: ThemedRgb::same((128, 159, 255)),
+        series_rgb: ThemedRgb::same((128, 159, 255)),
         supports_activation: true,
         include_in_total_spend: true,
         supports_multiple_instances: true,
+        config_folder: true,
+        banked_resets: BankedResets::ByCount,
+        credits: Credits::Count,
+        usage_stats: UsageStats::Local,
+        usage_value: UsageValue::EstimatedTokens,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::STANDARD,
+        default_refresh_seconds: 60,
+        // The file Codex used before other providers existed, so existing
+        // installs keep their activation baseline.
+        activation_state_file: "activation.toml",
+        pricing_prefixes: &["openai"],
+        status_page: Some(StatusPage {
+            page_url: "https://status.openai.com",
+            api: StatusApi::IncidentIo("https://status.openai.com/proxy/status.openai.com"),
+            relevance: StatusRelevance::Matching(&["codex"]),
+        }),
         metrics: CODEX_METRICS,
         default_tray_metrics: &["codex.session", "codex.weekly"],
     },
@@ -229,9 +473,30 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Claude",
         icon: "claude",
         brand_rgb: (217, 119, 87),
+        icon_rgb: ThemedRgb::same((217, 119, 87)),
+        spend_rgb: ThemedRgb::same((217, 119, 87)),
+        series_rgb: ThemedRgb::same((217, 119, 87)),
         supports_activation: true,
         include_in_total_spend: true,
         supports_multiple_instances: true,
+        config_folder: true,
+        banked_resets: BankedResets::ByListedCredit,
+        credits: Credits::AsReported,
+        usage_stats: UsageStats::Local,
+        usage_value: UsageValue::EstimatedTokens,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::STANDARD,
+        // Claude answers frequent quota reads with HTTP 429.
+        default_refresh_seconds: 2 * 60,
+        activation_state_file: "activation-claude.toml",
+        pricing_prefixes: &["anthropic"],
+        status_page: Some(StatusPage {
+            page_url: "https://status.claude.com",
+            api: StatusApi::Statuspage("https://status.claude.com/api/v2/summary.json"),
+            relevance: StatusRelevance::Matching(&["claude code", "claude api", "claude.ai"]),
+        }),
         metrics: CLAUDE_METRICS,
         default_tray_metrics: &["claude.session", "claude.weekly"],
     },
@@ -241,9 +506,38 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Cursor",
         icon: "cursor",
         brand_rgb: (145, 151, 164),
+        icon_rgb: ThemedRgb {
+            light: (51, 51, 51),
+            dark: WHITE,
+        },
+        spend_rgb: ThemedRgb {
+            light: (18, 18, 18),
+            dark: WHITE,
+        },
+        series_rgb: ThemedRgb {
+            light: (28, 28, 28),
+            dark: WHITE,
+        },
         supports_activation: false,
         include_in_total_spend: true,
         supports_multiple_instances: false,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::AsReported,
+        usage_stats: UsageStats::RemoteExport,
+        usage_value: UsageValue::EstimatedTokens,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::single("cursor-models"),
+        default_refresh_seconds: 60,
+        activation_state_file: "activation-cursor.toml",
+        pricing_prefixes: &["cursor", "openai", "anthropic", "google", "xai", "x-ai"],
+        status_page: Some(StatusPage {
+            page_url: "https://status.cursor.com",
+            api: StatusApi::Statuspage("https://status.cursor.com/api/v2/summary.json"),
+            relevance: StatusRelevance::Except(&["Grok Bot"]),
+        }),
         metrics: CURSOR_METRICS,
         default_tray_metrics: &["cursor.auto", "cursor.api"],
     },
@@ -253,9 +547,34 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "OpenCode Zen",
         icon: "opencode",
         brand_rgb: (128, 128, 128),
+        icon_rgb: ThemedRgb {
+            light: (77, 77, 77),
+            dark: (128, 128, 128),
+        },
+        spend_rgb: ThemedRgb {
+            light: (75, 75, 75),
+            dark: (205, 205, 205),
+        },
+        series_rgb: ThemedRgb {
+            light: (72, 72, 72),
+            dark: (210, 210, 210),
+        },
         supports_activation: false,
         include_in_total_spend: true,
         supports_multiple_instances: true,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::AsReported,
+        usage_stats: UsageStats::Local,
+        usage_value: UsageValue::Spend,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::STANDARD,
+        default_refresh_seconds: 60,
+        activation_state_file: "activation-opencode-zen.toml",
+        pricing_prefixes: &[],
+        status_page: None,
         metrics: OPENCODE_ZEN_METRICS,
         default_tray_metrics: &[],
     },
@@ -265,9 +584,34 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "OpenCode Go",
         icon: "opencode",
         brand_rgb: (128, 128, 128),
+        icon_rgb: ThemedRgb {
+            light: (77, 77, 77),
+            dark: (128, 128, 128),
+        },
+        spend_rgb: ThemedRgb {
+            light: (75, 75, 75),
+            dark: (205, 205, 205),
+        },
+        series_rgb: ThemedRgb {
+            light: (72, 72, 72),
+            dark: (210, 210, 210),
+        },
         supports_activation: false,
         include_in_total_spend: true,
         supports_multiple_instances: true,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::AsReported,
+        usage_stats: UsageStats::Local,
+        usage_value: UsageValue::Spend,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::STANDARD,
+        default_refresh_seconds: 60,
+        activation_state_file: "activation-opencode-go.toml",
+        pricing_prefixes: &[],
+        status_page: None,
         metrics: OPENCODE_GO_METRICS,
         default_tray_metrics: &[
             "opencode-go.session",
@@ -281,9 +625,29 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "OpenRouter",
         icon: "openrouter",
         brand_rgb: (200, 255, 0),
+        icon_rgb: ThemedRgb {
+            light: (118, 36, 244),
+            dark: (200, 255, 0),
+        },
+        spend_rgb: ThemedRgb::same((200, 255, 0)),
+        series_rgb: ThemedRgb::same((200, 255, 0)),
         supports_activation: false,
         include_in_total_spend: true,
         supports_multiple_instances: true,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::Unsupported,
+        usage_stats: UsageStats::ManagementKey,
+        usage_value: UsageValue::BilledTokens,
+        spending_strips: true,
+        balance_only: true,
+        monthly_only: false,
+        limit_titles: LimitTitles::single("spending"),
+        // Credits rarely move.
+        default_refresh_seconds: 10 * 60,
+        activation_state_file: "activation-openrouter.toml",
+        pricing_prefixes: &[],
+        status_page: None,
         metrics: OPENROUTER_METRICS,
         default_tray_metrics: &["openrouter.limit"],
     },
@@ -293,9 +657,28 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Antigravity",
         icon: "antigravity",
         brand_rgb: (66, 133, 244),
+        icon_rgb: ThemedRgb {
+            light: (32, 96, 205),
+            dark: (66, 133, 244),
+        },
+        spend_rgb: ThemedRgb::same((66, 133, 244)),
+        series_rgb: ThemedRgb::same((66, 133, 244)),
         supports_activation: false,
         include_in_total_spend: false,
         supports_multiple_instances: false,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::Unsupported,
+        usage_stats: UsageStats::Unsupported,
+        usage_value: UsageValue::EstimatedTokens,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::all("gemini", "gemini", "claude-gpt"),
+        default_refresh_seconds: 60,
+        activation_state_file: "activation-antigravity.toml",
+        pricing_prefixes: &[],
+        status_page: None,
         metrics: ANTIGRAVITY_METRICS,
         default_tray_metrics: &["antigravity.gemini", "antigravity.thirdParty"],
     },
@@ -305,9 +688,31 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Grok",
         icon: "grok",
         brand_rgb: (92, 92, 92),
+        icon_rgb: ThemedRgb {
+            light: (51, 51, 51),
+            dark: WHITE,
+        },
+        spend_rgb: ThemedRgb {
+            light: (51, 51, 51),
+            dark: WHITE,
+        },
+        series_rgb: ThemedRgb::same((92, 92, 92)),
         supports_activation: false,
         include_in_total_spend: false,
         supports_multiple_instances: false,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::Unsupported,
+        usage_stats: UsageStats::Unsupported,
+        usage_value: UsageValue::EstimatedTokens,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::single("credits"),
+        default_refresh_seconds: 60,
+        activation_state_file: "activation-grok.toml",
+        pricing_prefixes: &[],
+        status_page: None,
         metrics: GROK_METRICS,
         default_tray_metrics: &["grok.credits"],
     },
@@ -317,9 +722,28 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Kiro",
         icon: "kiro",
         brand_rgb: (151, 125, 255),
+        icon_rgb: ThemedRgb {
+            light: (105, 78, 198),
+            dark: (151, 125, 255),
+        },
+        spend_rgb: ThemedRgb::same((151, 125, 255)),
+        series_rgb: ThemedRgb::same((151, 125, 255)),
         supports_activation: false,
         include_in_total_spend: false,
         supports_multiple_instances: false,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::Unsupported,
+        usage_stats: UsageStats::Unsupported,
+        usage_value: UsageValue::EstimatedTokens,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: true,
+        limit_titles: LimitTitles::all("monthly-credits", "credits", "credits"),
+        default_refresh_seconds: 60,
+        activation_state_file: "activation-kiro.toml",
+        pricing_prefixes: &[],
+        status_page: None,
         metrics: KIRO_METRICS,
         default_tray_metrics: &["kiro.additional.credits"],
     },
@@ -329,19 +753,38 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         display_name: "Command Code",
         icon: "commandcode",
         brand_rgb: (92, 92, 92),
+        icon_rgb: ThemedRgb {
+            light: (51, 51, 51),
+            dark: WHITE,
+        },
+        spend_rgb: ThemedRgb {
+            light: (51, 51, 51),
+            dark: WHITE,
+        },
+        series_rgb: ThemedRgb::same((92, 92, 92)),
         supports_activation: false,
         include_in_total_spend: true,
         supports_multiple_instances: false,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::AsReported,
+        usage_stats: UsageStats::Local,
+        usage_value: UsageValue::Spend,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::STANDARD,
+        default_refresh_seconds: 60,
+        activation_state_file: "activation-command-code.toml",
+        pricing_prefixes: &[],
+        status_page: None,
         metrics: COMMAND_CODE_METRICS,
         default_tray_metrics: &["command-code.session", "command-code.weekly"],
     },
 ];
 
-pub fn descriptor(provider: ProviderKind) -> &'static ProviderDescriptor {
-    PROVIDERS
-        .iter()
-        .find(|descriptor| descriptor.kind == provider)
-        .expect("every ProviderKind must have a registry descriptor")
+pub const fn descriptor(provider: ProviderKind) -> &'static ProviderDescriptor {
+    &PROVIDERS[provider as usize]
 }
 
 /// Install live logo overrides from settings. Call this from
@@ -359,36 +802,6 @@ pub fn icon(provider: ProviderKind) -> &'static str {
             "chatgpt"
         }
         _ => descriptor(provider).icon,
-    }
-}
-
-/// Brand colors used by small provider icons on the light popup cards.
-///
-/// The source brand colors remain on [`ProviderDescriptor`] for charts and
-/// other surfaces where they are useful as-is. These icon-specific values keep
-/// the requested provider identity visible against the light card surface.
-pub fn light_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
-    match provider {
-        ProviderKind::Codex => (107, 132, 244),
-        ProviderKind::Claude => (217, 119, 87),
-        ProviderKind::Cursor => (51, 51, 51),
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => (77, 77, 77),
-        ProviderKind::OpenRouter => (118, 36, 244),
-        ProviderKind::Antigravity => (32, 96, 205),
-        ProviderKind::Grok => (51, 51, 51),
-        ProviderKind::Kiro => (105, 78, 198),
-        ProviderKind::CommandCode => (51, 51, 51),
-    }
-}
-
-/// Brand colors used by small provider icons on the dark popup cards.
-///
-/// Cursor and Grok marks are monochrome: full white on dark chrome, near-black
-/// on light cards via [`light_surface_brand_rgb`].
-pub fn dark_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
-    match provider {
-        ProviderKind::Cursor | ProviderKind::Grok | ProviderKind::CommandCode => (255, 255, 255),
-        _ => descriptor(provider).brand_rgb,
     }
 }
 
@@ -433,60 +846,24 @@ pub fn spending_brick_id(provider: ProviderKind) -> String {
     format!("{}.spending", descriptor(provider).id)
 }
 
-/// Whether this provider can expose banked reset credits in the popup.
-pub fn supports_banked_resets(provider: ProviderKind) -> bool {
-    !matches!(
-        provider,
-        ProviderKind::Cursor
-            | ProviderKind::OpenRouter
-            | ProviderKind::Antigravity
-            | ProviderKind::Grok
-            | ProviderKind::Kiro
-            | ProviderKind::CommandCode
-    )
-}
-
-/// Whether this provider can expose a credits card in the popup.
-pub fn supports_credits(provider: ProviderKind) -> bool {
-    !matches!(
-        provider,
-        ProviderKind::OpenRouter
-            | ProviderKind::Antigravity
-            | ProviderKind::Grok
-            | ProviderKind::Kiro
-    )
-}
-
-/// Whether this provider can expose local usage statistics in the popup.
-pub fn supports_usage_stats(provider: ProviderKind) -> bool {
-    !matches!(
-        provider,
-        ProviderKind::Antigravity | ProviderKind::Grok | ProviderKind::Kiro
-    )
-}
-
-/// Whether this provider exposes OpenRouter-style spending strips.
-pub fn supports_spending_strips(provider: ProviderKind) -> bool {
-    provider == ProviderKind::OpenRouter
-}
-
 /// Stable popup brick ids declared for a provider before runtime discovery.
 pub fn catalog_brick_ids(provider: ProviderKind) -> Vec<String> {
-    let mut ids = descriptor(provider)
+    let descriptor = descriptor(provider);
+    let mut ids = descriptor
         .metrics
         .iter()
         .map(|metric| metric.id.to_string())
         .collect::<Vec<_>>();
-    if supports_banked_resets(provider) {
+    if descriptor.banked_resets != BankedResets::Unsupported {
         ids.push(resets_brick_id(provider));
     }
-    if supports_credits(provider) {
+    if descriptor.credits != Credits::Unsupported {
         ids.push(credits_brick_id(provider));
     }
-    if supports_usage_stats(provider) {
+    if descriptor.usage_stats.is_supported() {
         ids.push(usage_brick_id(provider));
     }
-    if supports_spending_strips(provider) {
+    if descriptor.spending_strips {
         ids.push(spending_brick_id(provider));
     }
     ids
@@ -627,7 +1004,7 @@ pub enum LimitSectionKind {
 }
 
 pub fn metric_label(provider: ProviderKind, limits: &RateLimits, id: &str) -> String {
-    if uses_codex_luna_reserve_override(provider, limits, id) {
+    if luna_reserve_override(provider, limits, id).is_some() {
         return crate::i18n::tr("luna-reserve").into();
     }
     if let Some(metric) = metric(provider, id) {
@@ -643,7 +1020,7 @@ pub fn metric_label(provider: ProviderKind, limits: &RateLimits, id: &str) -> St
 
 /// Localize application-owned lane names by their stable API identity. Model
 /// names and unknown provider-supplied titles remain provider data.
-pub fn additional_label(limit: &crate::limits::AdditionalLimit) -> String {
+pub fn additional_label(limit: &AdditionalLimit) -> String {
     if limit.id == crate::limits::GPT_RESERVE_LIMIT_ID {
         crate::i18n::tr("luna-reserve").into()
     } else {
@@ -656,13 +1033,11 @@ pub fn metric_window<'a>(
     limits: &'a RateLimits,
     id: &str,
 ) -> Option<&'a LimitWindow> {
+    if let Some(reserve) = luna_reserve_override(provider, limits, id) {
+        return Some(&reserve.window);
+    }
     if let Some(metric) = metric(provider, id) {
         return match metric.source {
-            MetricSource::Primary | MetricSource::Secondary
-                if uses_codex_luna_reserve_override(provider, limits, id) =>
-            {
-                limits.luna_reserve().map(|limit| &limit.window)
-            }
             MetricSource::Primary => Some(&limits.primary),
             MetricSource::Secondary => Some(&limits.secondary),
             MetricSource::Additional(source_id) => limits
@@ -679,14 +1054,22 @@ pub fn metric_window<'a>(
         .map(|limit| &limit.window)
 }
 
-fn uses_codex_luna_reserve_override(provider: ProviderKind, limits: &RateLimits, id: &str) -> bool {
-    if provider != ProviderKind::Codex || limits.codex_luna_reserve_override().is_none() {
-        return false;
+/// The Luna Reserve window that stands in for a Codex session or weekly
+/// metric while the weekly quota is exhausted.
+pub fn luna_reserve_override<'a>(
+    provider: ProviderKind,
+    limits: &'a RateLimits,
+    id: &str,
+) -> Option<&'a AdditionalLimit> {
+    if provider != ProviderKind::Codex
+        || !matches!(
+            metric(provider, id).map(|metric| metric.source),
+            Some(MetricSource::Primary | MetricSource::Secondary)
+        )
+    {
+        return None;
     }
-    matches!(
-        metric(provider, id).map(|metric| metric.source),
-        Some(MetricSource::Primary | MetricSource::Secondary)
-    )
+    limits.codex_luna_reserve_override()
 }
 
 /// Resolves the configured metric, temporarily falling back to the first live
@@ -799,17 +1182,19 @@ mod tests {
     }
 
     #[test]
-    fn registry_covers_every_provider_exactly_once() {
+    fn registry_covers_every_provider_exactly_once_and_ids_round_trip() {
         assert_eq!(PROVIDERS.len(), ProviderKind::ALL.len());
-        for provider in ProviderKind::ALL {
+        for (index, provider) in ProviderKind::ALL.into_iter().enumerate() {
+            assert_eq!(provider as usize, index);
+            assert_eq!(PROVIDERS[index].kind, provider);
+            assert_eq!(ProviderKind::from_id(provider.id()), Some(provider));
+            let json = serde_json::to_string(&provider).unwrap();
             assert_eq!(
-                PROVIDERS
-                    .iter()
-                    .filter(|descriptor| descriptor.kind == provider)
-                    .count(),
-                1
+                serde_json::from_str::<ProviderKind>(&json).unwrap(),
+                provider
             );
         }
+        assert_eq!(ProviderKind::from_id("unknown"), None);
     }
 
     #[test]

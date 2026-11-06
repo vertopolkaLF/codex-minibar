@@ -768,7 +768,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::{limits::RateLimits, settings::ProviderKind};
+    use crate::{limits::RateLimits, provider_registry::ProviderKind};
 
     #[test]
     fn tray_instances_resolve_independently_and_missing_instances_keep_their_slot() {

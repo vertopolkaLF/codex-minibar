@@ -2111,12 +2111,6 @@ exit = Beenden
 update-available-67fd3a = Update verfügbar
 
 # application
-monthly-credits-976559 = Monatliche Credits
-
-# application
-msg-5h-session-de7ce8 = 5-Stunden-Sitzung
-
-# application
 name-weekly = { $name } wöchentlich
 
 # application
@@ -2280,10 +2274,6 @@ this-provider-does-not-use-a-config-folder = Dieser Anbieter verwendet keinen Ko
 
 # application
 could-not-save-provider-settings-error-restoring-its-previous-cre = Anbietereinstellungen konnten nicht gespeichert werden ({ $error }); Das Wiederherstellen der vorherigen Anmeldeinformationen ist ebenfalls fehlgeschlagen ({ $rollback_error }).
-
-# application
-msg-5h-7d = 5h |  { $v0 } |  { $v1 }
-    7d |  { $v2 } |  { $v3 }
 
 # API key count in the provider header.
 api-key-count = { $v0 ->

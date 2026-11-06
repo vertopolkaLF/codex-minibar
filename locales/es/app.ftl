@@ -1434,10 +1434,6 @@ exit = Salir
 
 update-available-67fd3a = Actualización disponible
 
-monthly-credits-976559 = Créditos mensuales
-
-msg-5h-session-de7ce8 = Sesión de 5h
-
 name-weekly = { $name } semanal
 
 tokens-94e0b9 = { $v0 }: { $v1 } tokens
@@ -1556,9 +1552,6 @@ this-provider-has-no-session-window-to-start = Este proveedor no tiene una venta
 this-provider-does-not-use-a-config-folder = Este proveedor no usa una carpeta de configuración.
 
 could-not-save-provider-settings-error-restoring-its-previous-cre = No se pudo guardar la configuración del proveedor ({ $error }); también falló la restauración de su credencial anterior ({ $rollback_error }).
-
-msg-5h-7d = 5h  ·  { $v0 }  ·  { $v1 }
-    7d  ·  { $v2 }  ·  { $v3 }
 
 api-key-count = { $v0 ->
     [one] { $v0 } clave de API

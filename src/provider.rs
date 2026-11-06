@@ -8,7 +8,8 @@ use crate::{
     cursor::{CursorActivator, CursorClient},
     instances::{Capabilities, ProviderId, ProviderInstance},
     openrouter::OpenRouterClient,
-    settings::{ProviderKind, Settings},
+    provider_registry::ProviderKind,
+    settings::Settings,
     worker::{self, WorkerEvent, WorkerHandle},
 };
 
@@ -372,22 +373,8 @@ fn provider_activation_path(provider: ProviderId, base_path: PathBuf) -> PathBuf
             .collect::<String>();
         return base_path.with_file_name(format!("activation-{id}.toml"));
     }
-    match provider.kind() {
-        // Preserve the existing Codex state file so current users retain their
-        // established activation baseline after updating.
-        ProviderKind::Codex => base_path,
-        // Claude has an independent five-hour clock; sharing Codex's baseline
-        // would suppress or duplicate an activation whenever both are enabled.
-        ProviderKind::Claude => base_path.with_file_name("activation-claude.toml"),
-        ProviderKind::Cursor => base_path.with_file_name("activation-cursor.toml"),
-        ProviderKind::OpenCodeZen => base_path.with_file_name("activation-opencode-zen.toml"),
-        ProviderKind::OpenCodeGo => base_path.with_file_name("activation-opencode-go.toml"),
-        ProviderKind::OpenRouter => base_path.with_file_name("activation-openrouter.toml"),
-        ProviderKind::Antigravity => base_path.with_file_name("activation-antigravity.toml"),
-        ProviderKind::Grok => base_path.with_file_name("activation-grok.toml"),
-        ProviderKind::Kiro => base_path.with_file_name("activation-kiro.toml"),
-        ProviderKind::CommandCode => base_path.with_file_name("activation-command-code.toml"),
-    }
+    base_path
+        .with_file_name(crate::provider_registry::descriptor(provider.kind()).activation_state_file)
 }
 
 #[cfg(test)]

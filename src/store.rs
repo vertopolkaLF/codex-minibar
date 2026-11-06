@@ -22,7 +22,7 @@ use crate::usage::{
     CachedClaudeSessionFile, CachedClaudeUsageEntry, CachedSessionFile, ClaudeUsageCache,
     DailyTokenUsage, TokenUsage, UsageCache, UsageStatistics, statistics_from_daily,
 };
-use crate::{instances::ProviderId, settings::ProviderKind};
+use crate::{instances::ProviderId, provider_registry::ProviderKind};
 
 pub(crate) mod codex_accounts;
 pub(crate) mod repricing;

@@ -1431,10 +1431,6 @@ exit = 退出
 
 update-available-67fd3a = 有可用更新
 
-monthly-credits-976559 = 每月积分
-
-msg-5h-session-de7ce8 = 5 小时会话
-
 name-weekly = { $name } 每周
 
 tokens-94e0b9 = { $v0 }：{ $v1 } 个 token
@@ -1538,9 +1534,6 @@ this-provider-has-no-session-window-to-start = 此提供商没有可开启的会
 this-provider-does-not-use-a-config-folder = 此提供商不使用配置文件夹。
 
 could-not-save-provider-settings-error-restoring-its-previous-cre = 无法保存提供商设置（{ $error }）；恢复先前凭据也失败（{ $rollback_error }）。
-
-msg-5h-7d = 5小时  ·  { $v0 }  ·  { $v1 }
-    7天  ·  { $v2 }  ·  { $v3 }
 
 api-key-count = { $v0 } 个 API 密钥
 

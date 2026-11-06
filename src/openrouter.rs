@@ -1312,7 +1312,7 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::settings::ProviderKind;
+    use crate::provider_registry::ProviderKind;
 
     #[test]
     fn secret_hint_errors_are_retried_and_never_cached_as_missing() {

@@ -23,7 +23,7 @@ use crate::{
     instances::ProviderId,
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     pricing,
-    settings::ProviderKind,
+    provider_registry::ProviderKind,
     store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
     worker::{Activator, LimitProvider, UsageProvider},
@@ -633,14 +633,14 @@ fn map_usage(
     let mut additional_limits = Vec::new();
     if let Some(percent) = api_percent {
         additional_limits.push(AdditionalLimit {
-            id: "cursor-api".into(),
+            id: crate::provider_registry::CURSOR_API_LIMIT_ID.into(),
             title: "Other Models".into(),
             window: make_window(percent),
         });
     }
     if let Some(percent) = all_models_percent {
         additional_limits.push(AdditionalLimit {
-            id: "cursor-all-models".into(),
+            id: crate::provider_registry::CURSOR_ALL_MODELS_LIMIT_ID.into(),
             title: "All Models".into(),
             window: make_window(percent),
         });
@@ -727,7 +727,7 @@ fn grok_bot_limit(sand: Option<&Value>) -> Option<AdditionalLimit> {
         _ => Some(7 * 24 * 60),
     };
     Some(AdditionalLimit {
-        id: "cursor-grok-bot".into(),
+        id: crate::provider_registry::CURSOR_GROK_BOT_LIMIT_ID.into(),
         title: "Grok Bot".into(),
         window: LimitWindow {
             used_percent: Some(percent.round().clamp(0.0, 100.0) as u8),

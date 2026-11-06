@@ -5,7 +5,6 @@
 //! through [`super::PopupCommand`].
 
 mod activity;
-pub(crate) use activity::is_cost_provider;
 pub(crate) mod assets;
 mod cards;
 pub(crate) mod components;

@@ -2124,12 +2124,6 @@ exit = Çıkış
 update-available-67fd3a = Güncelleme Mevcut
 
 # application
-monthly-credits-976559 = Aylık Krediler
-
-# application
-msg-5h-session-de7ce8 = 5 Sa. Oturum
-
-# application
 name-weekly = { $name } haftalık
 
 # application
@@ -2278,10 +2272,6 @@ this-provider-does-not-use-a-config-folder = Bu sağlayıcı yapılandırma klas
 
 # application
 could-not-save-provider-settings-error-restoring-its-previous-cre = Sağlayıcı ayarları kaydedilemedi ({ $error }); önceki kimlik bilgisini geri yükleme de başarısız oldu ({ $rollback_error }).
-
-# application
-msg-5h-7d = 5sa | { $v0 } | { $v1 }
-    7g  | { $v2 } | { $v3 }
 
 # API key count in the provider header.
 api-key-count = { $v0 } API anahtarı

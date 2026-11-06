@@ -59,11 +59,9 @@ impl Appearance {
     }
 
     fn provider_tint(self, provider: ProviderId) -> Rgb {
-        let (red, green, blue) = if self.light {
-            crate::provider_registry::light_surface_brand_rgb(provider.kind())
-        } else {
-            crate::provider_registry::dark_surface_brand_rgb(provider.kind())
-        };
+        let (red, green, blue) = crate::provider_registry::descriptor(provider.kind())
+            .icon_rgb
+            .pick(!self.light);
         [red, green, blue]
     }
 }
@@ -393,7 +391,9 @@ fn today_usage(provider: ProviderId, usage: &crate::usage::UsageStatistics) -> O
         return None;
     }
     let today = &usage.today;
-    if crate::popup_window::ui::is_cost_provider(provider.kind()) {
+    if crate::provider_registry::descriptor(provider.kind()).usage_value
+        == crate::provider_registry::UsageValue::Spend
+    {
         return Some(format!(
             "{} \u{00b7} {}",
             crate::format::format_micro_usd(today.estimated_cost_microusd),
@@ -442,7 +442,7 @@ mod tests {
     use super::*;
     use crate::{
         limits::{LimitWindow, RateLimits},
-        settings::ProviderKind,
+        provider_registry::ProviderKind,
     };
 
     fn appearance(light: bool) -> Appearance {

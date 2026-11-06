@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::local_time::{HOURLY_WINDOW_HOURS, RETENTION_DAYS, hourly_window_start, truncate_hour};
-use crate::{instances::ProviderId, pricing, settings::ProviderKind, store};
+use crate::{instances::ProviderId, pricing, provider_registry::ProviderKind, store};
 
 // Version 9 upgrades attributed event identity to include the record offset.
 // Version 8 rebuilt event source links after the account-source migration.

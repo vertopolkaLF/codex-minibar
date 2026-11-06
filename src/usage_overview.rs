@@ -8,7 +8,8 @@ use crate::{
     instances::ProviderId,
     limits::ProviderLimits,
     provider_registry,
-    settings::{ProviderKind, TotalSpendPeriod},
+    provider_registry::ProviderKind,
+    settings::TotalSpendPeriod,
     store::{self},
     usage::{DailyTokenUsage, TokenUsage},
 };

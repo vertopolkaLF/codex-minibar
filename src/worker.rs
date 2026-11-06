@@ -1382,7 +1382,7 @@ mod tests {
         let weekday = Local::now().weekday().num_days_from_monday() as u8;
         let pause = AutoActivationPause {
             id: "current-day".into(),
-            provider_id: crate::settings::ProviderKind::Claude.id().into(),
+            provider_id: crate::provider_registry::ProviderKind::Claude.id().into(),
             weekdays: vec![weekday],
             start_time_minutes: 0,
             end_time_minutes: 23 * 60 + 59,
@@ -1420,7 +1420,7 @@ mod tests {
         let weekday = local_now.weekday().num_days_from_monday() as u8;
         let schedule = ScheduledActivation {
             id: "scheduled-now".into(),
-            provider_id: crate::settings::ProviderKind::Claude.id().into(),
+            provider_id: crate::provider_registry::ProviderKind::Claude.id().into(),
             weekday,
             weekdays: vec![weekday],
             time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,
@@ -1428,7 +1428,7 @@ mod tests {
         };
         let pause = AutoActivationPause {
             id: "all-day".into(),
-            provider_id: crate::settings::ProviderKind::Claude.id().into(),
+            provider_id: crate::provider_registry::ProviderKind::Claude.id().into(),
             weekdays: vec![weekday],
             start_time_minutes: 0,
             end_time_minutes: 23 * 60 + 59,
@@ -1515,7 +1515,7 @@ mod tests {
         let local_now = Local::now();
         let schedule = ScheduledActivation {
             id: "due-now".into(),
-            provider_id: crate::settings::ProviderKind::Codex.id().into(),
+            provider_id: crate::provider_registry::ProviderKind::Codex.id().into(),
             weekday: local_now.weekday().num_days_from_monday() as u8,
             weekdays: vec![local_now.weekday().num_days_from_monday() as u8],
             time_minutes: (local_now.hour() * 60 + local_now.minute()) as u16,

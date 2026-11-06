@@ -16,9 +16,8 @@ use serde_json::Value;
 use crate::{
     instances::ProviderId,
     limits::{AdditionalLimit, LimitWindow, RateLimits},
-    secrets,
-    settings::ProviderKind,
-    store,
+    provider_registry::ProviderKind,
+    secrets, store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
     worker::{Activator, LimitProvider, UsageProvider},
 };
@@ -436,7 +435,7 @@ fn parse_go_usage(body: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
     );
     let additional_limits = monthly
         .map(|window| AdditionalLimit {
-            id: "monthly".into(),
+            id: crate::provider_registry::OPENCODE_GO_MONTHLY_LIMIT_ID.into(),
             title: "Monthly".into(),
             window,
         })

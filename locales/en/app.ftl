@@ -2127,12 +2127,6 @@ exit = Exit
 update-available-67fd3a = Update Available
 
 # application
-monthly-credits-976559 = Monthly Credits
-
-# application
-msg-5h-session-de7ce8 = 5h Session
-
-# application
 name-weekly = { $name } weekly
 
 # application
@@ -2296,10 +2290,6 @@ this-provider-does-not-use-a-config-folder = This provider does not use a config
 
 # application
 could-not-save-provider-settings-error-restoring-its-previous-cre = Could not save provider settings ({ $error }); restoring its previous credential also failed ({ $rollback_error }).
-
-# application
-msg-5h-7d = 5h  |  { $v0 }  |  { $v1 }
-    7d  |  { $v2 }  |  { $v3 }
 
 # API key count in the provider header.
 api-key-count = { $v0 ->

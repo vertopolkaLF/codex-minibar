@@ -5,9 +5,9 @@ use std::{path::PathBuf, sync::mpsc::Sender};
 
 use super::persistence::try_persist_update_fallible;
 use crate::limits::{OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, SpendingSummary};
+use crate::provider_registry::ProviderKind;
 use crate::settings::{
-    BadgeColor, InstanceSource, OpenRouterAccount, ProviderId, ProviderInstance, ProviderKind,
-    Settings,
+    BadgeColor, InstanceSource, OpenRouterAccount, ProviderId, ProviderInstance, Settings,
 };
 
 mod dialog;

@@ -7,7 +7,7 @@ use gpui::{
 
 use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
-use crate::settings::{ProviderKind, ResetAnnouncementRefreshInterval, UsageRefreshInterval};
+use crate::settings::{ResetAnnouncementRefreshInterval, UsageRefreshInterval};
 
 pub(super) fn usage_refresh_labels() -> [&'static str; 7] {
     [
@@ -325,7 +325,10 @@ impl SettingsWindow {
             .instances
             .iter()
             .filter(|instance| {
-                instance.enabled && crate::provider_registry::supports_usage_stats(instance.driver)
+                instance.enabled
+                    && crate::provider_registry::descriptor(instance.driver)
+                        .usage_stats
+                        .is_supported()
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -343,9 +346,8 @@ impl SettingsWindow {
                 crate::instances::Capability::UsageStats,
             )
             .or_else(|| {
-                (instance.driver == ProviderKind::OpenRouter
-                    && !crate::openrouter::has_management_key(instance.openrouter.as_slice()))
-                .then_some(crate::i18n::tr("add-a-management-key"))
+                (!instance.has_usage_stats_credential())
+                    .then_some(crate::i18n::tr("add-a-management-key"))
             })
             .or_else(|| {
                 (!instance.usage_stats).then_some(crate::i18n::tr(

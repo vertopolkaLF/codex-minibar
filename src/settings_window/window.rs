@@ -28,7 +28,8 @@ use super::{
 };
 use crate::popup_window::AppState;
 use crate::popup_window::ui::fx;
-use crate::settings::{ProviderId, ProviderInstance, ProviderKind, Settings, TrayWidget};
+use crate::provider_registry::ProviderKind;
+use crate::settings::{ProviderId, ProviderInstance, Settings, TrayWidget};
 use crate::updater::UpdatePhase;
 
 const SIDEBAR_WIDTH: f32 = 264.0;

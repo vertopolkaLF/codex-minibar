@@ -1334,14 +1334,21 @@ impl PopupRoot {
                 ),
             );
         }
-        // Claude redemption re-reads the inventory for the server-selected
-        // grant, so a cached snapshot without `next_credit_id` still qualifies.
+        // Redemption that needs a listed credit re-reads the inventory for the
+        // server-selected grant, so a cached snapshot without `next_credit_id`
+        // still qualifies.
         let busy = self.reset_busy.contains(&provider);
         let confirming = self.reset_confirm == Some(provider);
         let can_use = count > 0
             && self.ui.instance(provider).is_some_and(|instance| {
                 !instance.uses_manual_credential()
-                    && (provider.kind() == ProviderKind::Codex || !available.is_empty())
+                    && match crate::provider_registry::descriptor(provider.kind()).banked_resets {
+                        crate::provider_registry::BankedResets::Unsupported => false,
+                        crate::provider_registry::BankedResets::ByCount => true,
+                        crate::provider_registry::BankedResets::ByListedCredit => {
+                            !available.is_empty()
+                        }
+                    }
             });
         let header_content = if can_use || busy {
             // The action sits on the trailing edge. When the full label does
@@ -1918,11 +1925,11 @@ impl PopupRoot {
             element = element.child(layer);
         }
         let element = element.child(content);
-        // An announcement that arrives while the Codex section is on screen
-        // grows in instead of pushing the cards below it down at once.
+        // An announcement that arrives while its provider section is on
+        // screen grows in instead of pushing the cards below it down at once.
         let reveal = self.fx.appear_in(
             fx::key(("forced-reset-reveal", reset.id.as_str())),
-            fx::key(("provider-section", ProviderKind::Codex)),
+            fx::key(("provider-section", row.provider.kind())),
             fx::NORMAL,
         );
         if reveal >= 1.0 {

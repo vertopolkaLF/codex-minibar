@@ -145,10 +145,8 @@ impl SettingsWindow {
         let candidates = instances
             .iter()
             .filter(|instance| {
-                matches!(
-                    instance.driver,
-                    crate::settings::ProviderKind::Codex | crate::settings::ProviderKind::Claude
-                )
+                crate::provider_registry::descriptor(instance.driver).banked_resets
+                    != crate::provider_registry::BankedResets::Unsupported
             })
             .collect::<Vec<_>>();
         let mut rows = vec![kit::section_header(

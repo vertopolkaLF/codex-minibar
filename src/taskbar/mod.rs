@@ -204,7 +204,8 @@ mod tests {
     use super::*;
     use crate::{
         limits::{LimitWindow, RateLimits},
-        settings::{ProviderKind, TaskbarWidget, TaskbarWidgetStyle},
+        provider_registry::ProviderKind,
+        settings::{TaskbarWidget, TaskbarWidgetStyle},
     };
 
     fn sample() -> (Vec<TaskbarWidget>, ProviderLimits) {

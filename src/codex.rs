@@ -188,7 +188,7 @@ impl CodexClient {
         Self {
             executable: executable.into(),
             timeout: StdDuration::from_secs(10),
-            provider: ProviderId::primary(crate::settings::ProviderKind::Codex),
+            provider: ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             home: None,
             rate_limited: false,
             oauth_agent: OnceLock::new(),

@@ -2124,12 +2124,6 @@ exit = 종료
 update-available-67fd3a = 업데이트 가능
 
 # application
-monthly-credits-976559 = 월간 크레딧
-
-# application
-msg-5h-session-de7ce8 = 5시간 세션
-
-# application
 name-weekly = { $name } 주간
 
 # application
@@ -2278,10 +2272,6 @@ this-provider-does-not-use-a-config-folder = 이 공급자는 구성 폴더를 �
 
 # application
 could-not-save-provider-settings-error-restoring-its-previous-cre = 공급자 설정({ $error })을 저장할 수 없습니다. 이전 자격 증명 복원도 실패했습니다({ $rollback_error }).
-
-# application
-msg-5h-7d = 5시간 |  { $v0 } |  { $v1 }
-    7일 |  { $v2 } |  { $v3 }
 
 # API key count in the provider header.
 api-key-count = API 키 { $v0 }개

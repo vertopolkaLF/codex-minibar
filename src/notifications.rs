@@ -377,7 +377,7 @@ pub fn show_game_mode_changed(active: bool, game: Option<(String, String)>) {
 
 /// A new incident on a provider's public status page.
 pub fn show_provider_incident(
-    kind: crate::settings::ProviderKind,
+    kind: crate::provider_registry::ProviderKind,
     incident: &crate::provider_status::StatusIncident,
 ) {
     let severity = if incident.impact == crate::provider_status::IncidentImpact::MajorOutage {
@@ -990,14 +990,14 @@ mod tests {
         tracker.observe_at(
             &initial,
             &settings,
-            ProviderId::primary(crate::settings::ProviderKind::Codex),
+            ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             reset - chrono::Duration::hours(5),
             false,
         );
         tracker.observe_at(
             &reset_metadata,
             &settings,
-            ProviderId::primary(crate::settings::ProviderKind::Codex),
+            ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             reset - chrono::Duration::hours(1),
             false,
         );
@@ -1042,14 +1042,14 @@ mod tests {
         tracker.observe_at(
             &initial,
             &settings,
-            ProviderId::primary(crate::settings::ProviderKind::Codex),
+            ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             previous_reset,
             false,
         );
         let result = tracker.observe_at(
             &updated,
             &settings,
-            ProviderId::primary(crate::settings::ProviderKind::Codex),
+            ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             previous_reset,
             true,
         );
@@ -1098,14 +1098,14 @@ mod tests {
         tracker.observe_at(
             &initial,
             &settings,
-            ProviderId::primary(crate::settings::ProviderKind::Codex),
+            ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             previous_reset,
             false,
         );
         let result = tracker.observe_at(
             &updated,
             &settings,
-            ProviderId::primary(crate::settings::ProviderKind::Codex),
+            ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             previous_reset,
             false,
         );

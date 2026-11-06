@@ -1,5 +1,6 @@
 use super::nav::*;
-use crate::settings::{ProviderInstance, ProviderKind, Settings};
+use crate::provider_registry::ProviderKind;
+use crate::settings::{ProviderInstance, Settings};
 
 #[test]
 fn tab_tags_are_unique() {

@@ -17,6 +17,7 @@ mod migration;
 pub(crate) mod unknown;
 
 pub use crate::instances::{BadgeColor, InstanceSource, ProviderId, ProviderInstance};
+use crate::provider_registry::ProviderKind;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -511,14 +512,12 @@ impl LimitRefreshInterval {
         Self::Hours5,
     ];
 
-    /// Claude answers frequent quota reads with HTTP 429, and OpenRouter
-    /// credits rarely move, so both poll slower than the rest.
-    pub const fn default_for(driver: ProviderKind) -> Self {
-        match driver {
-            ProviderKind::Claude => Self::Minutes2,
-            ProviderKind::OpenRouter => Self::Minutes10,
-            _ => Self::Minute1,
-        }
+    pub fn default_for(driver: ProviderKind) -> Self {
+        let seconds = crate::provider_registry::descriptor(driver).default_refresh_seconds;
+        Self::ALL
+            .into_iter()
+            .find(|interval| interval.seconds() == seconds)
+            .unwrap_or(Self::Minute1)
     }
 
     pub const fn seconds(self) -> u64 {
@@ -738,25 +737,6 @@ impl UsageRefreshInterval {
     }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    #[default]
-    Codex,
-    Claude,
-    Cursor,
-    OpenCodeZen,
-    OpenCodeGo,
-    #[serde(rename = "openrouter")]
-    OpenRouter,
-    Antigravity,
-    Grok,
-    Kiro,
-    CommandCode,
-}
-
 /// When the app backs off to leave CPU, GPU and network to a game.
 ///
 /// While active, provider polls and usage scans run less often, the process
@@ -927,67 +907,6 @@ fn new_id(prefix: &str) -> String {
         .unwrap_or_default();
     let sequence = NEXT_ID.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}-{timestamp:x}-{sequence:x}")
-}
-
-impl ProviderKind {
-    pub const ALL: [Self; 10] = [
-        Self::Codex,
-        Self::Claude,
-        Self::Cursor,
-        Self::OpenCodeZen,
-        Self::OpenCodeGo,
-        Self::OpenRouter,
-        Self::Antigravity,
-        Self::Grok,
-        Self::Kiro,
-        Self::CommandCode,
-    ];
-
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Claude => "claude",
-            Self::Cursor => "cursor",
-            Self::OpenCodeZen => "opencode",
-            Self::OpenCodeGo => "opencode-go",
-            Self::OpenRouter => "openrouter",
-            Self::Antigravity => "antigravity",
-            Self::Grok => "grok",
-            Self::Kiro => "kiro",
-            Self::CommandCode => "command-code",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "codex" => Some(Self::Codex),
-            "claude" => Some(Self::Claude),
-            "cursor" => Some(Self::Cursor),
-            "opencode" => Some(Self::OpenCodeZen),
-            "opencode-go" => Some(Self::OpenCodeGo),
-            "openrouter" => Some(Self::OpenRouter),
-            "antigravity" => Some(Self::Antigravity),
-            "grok" => Some(Self::Grok),
-            "kiro" => Some(Self::Kiro),
-            "command-code" => Some(Self::CommandCode),
-            _ => None,
-        }
-    }
-
-    pub const fn display_name(self) -> &'static str {
-        match self {
-            Self::Codex => "Codex",
-            Self::Claude => "Claude",
-            Self::Cursor => "Cursor",
-            Self::OpenCodeZen => "OpenCode Zen",
-            Self::OpenCodeGo => "OpenCode Go",
-            Self::OpenRouter => "OpenRouter",
-            Self::Antigravity => "Antigravity",
-            Self::Grok => "Grok",
-            Self::Kiro => "Kiro",
-            Self::CommandCode => "Command Code",
-        }
-    }
 }
 
 /// A weekly local-time rule for starting a provider's 5-hour limit window.
@@ -1209,7 +1128,10 @@ pub struct PopupVisibility {
 
 impl PopupVisibility {
     pub fn default_brick_visibility(brick_id: &str) -> PopupSurfaceVisibility {
-        if brick_id == "cursor.allModels" {
+        let hidden = crate::provider_registry::provider_for_metric(brick_id)
+            .and_then(|provider| crate::provider_registry::metric(provider, brick_id))
+            .is_some_and(|metric| !metric.visible_by_default);
+        if hidden {
             PopupSurfaceVisibility::both(false)
         } else if brick_id.ends_with(".usage") {
             PopupSurfaceVisibility::split(false, true)
@@ -2752,14 +2674,10 @@ impl Settings {
     }
 
     pub(crate) fn usage_stats_collection_enabled(&self, provider: ProviderId) -> bool {
-        let Some(instance) = self.instance(provider) else {
-            return false;
-        };
         self.usage_stats_enabled
-            && instance.usage_stats
-            && crate::instances::Capabilities::of(instance).usage_stats
-            && (provider.kind() != ProviderKind::OpenRouter
-                || crate::openrouter::has_management_key(instance.openrouter.as_slice()))
+            && self
+                .instance(provider)
+                .is_some_and(ProviderInstance::collects_usage_stats)
     }
 
     /// Instances whose usage statistics are collected, independent of the
@@ -2767,12 +2685,7 @@ impl Settings {
     pub fn usage_stats_providers(&self) -> Vec<ProviderId> {
         self.instances
             .iter()
-            .filter(|instance| {
-                instance.usage_stats
-                    && crate::instances::Capabilities::of(instance).usage_stats
-                    && (instance.driver != ProviderKind::OpenRouter
-                        || crate::openrouter::has_management_key(instance.openrouter.as_slice()))
-            })
+            .filter(|instance| instance.collects_usage_stats())
             .map(ProviderInstance::provider_id)
             .collect()
     }
@@ -3414,7 +3327,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .context("settings root must be a TOML table")?;
                 root.entry("provider_order").or_insert_with(|| {
                     toml::Value::Array(
-                        ProviderKind::ALL
+                        migration::MIGRATED_DRIVERS
                             .iter()
                             .map(|provider| toml::Value::String(provider.id().into()))
                             .collect(),
@@ -3433,7 +3346,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .remove("provider_order")
                     .and_then(|value| value.as_array().cloned())
                     .unwrap_or_else(|| {
-                        ProviderKind::ALL
+                        migration::MIGRATED_DRIVERS
                             .iter()
                             .map(|provider| toml::Value::String(provider.id().into()))
                             .collect()
@@ -3446,7 +3359,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                         popup_order.push(toml::Value::String(id.into()));
                     }
                 }
-                for provider in ProviderKind::ALL {
+                for provider in migration::MIGRATED_DRIVERS {
                     // Home widget ids of that era.
                     let id = match provider {
                         ProviderKind::OpenCodeZen => "open_code_zen",
@@ -3502,7 +3415,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                         enabled.push(toml::Value::String(id.into()));
                     }
                 }
-                for provider in ProviderKind::ALL {
+                for provider in migration::MIGRATED_DRIVERS {
                     let id = provider.id();
                     let flag = format!("{id}_enabled");
                     if provider_flags
@@ -3639,7 +3552,7 @@ fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
                     .and_then(toml::Value::as_bool)
                     .unwrap_or(true);
                 let mut bricks = toml::map::Map::new();
-                for provider in ProviderKind::ALL {
+                for provider in migration::MIGRATED_DRIVERS {
                     for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
                         let (all_tab, provider_tab) = if brick_id.ends_with(".usage") {
                             (false, show_usage_stats)

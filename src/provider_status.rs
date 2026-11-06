@@ -21,7 +21,8 @@ use serde::{Deserialize, Serialize};
 use ureq::Agent;
 
 use crate::{
-    settings::{ProviderKind, Settings},
+    provider_registry::{ProviderKind, StatusApi, StatusPage, StatusRelevance},
+    settings::Settings,
     worker::WorkerEvent,
 };
 
@@ -136,24 +137,7 @@ pub struct ProviderStatusSnapshot {
     pub notified_ids: Vec<String>,
 }
 
-#[derive(Clone, Copy, Debug)]
-enum Api {
-    /// Atlassian Statuspage `api/v2/summary.json`.
-    Statuspage(&'static str),
-    /// incident.io's public page proxy. Its Statuspage-compatible endpoint
-    /// omits component groups, which is where OpenAI keeps Codex.
-    IncidentIo(&'static str),
-}
-
-#[derive(Clone, Copy, Debug)]
-enum Relevance {
-    /// Component (or its group) names containing one of these, ignoring case.
-    Matching(&'static [&'static str]),
-    /// Every component except these exact names.
-    Except(&'static [&'static str]),
-}
-
-impl Relevance {
+impl StatusRelevance {
     fn matches(self, component: &str, group: Option<&str>) -> bool {
         match self {
             Self::Matching(needles) => [Some(component), group].into_iter().flatten().any(|name| {
@@ -176,35 +160,25 @@ impl Relevance {
 #[derive(Clone, Copy, Debug)]
 struct Source {
     kind: ProviderKind,
-    page_url: &'static str,
-    api: Api,
-    relevance: Relevance,
+    page: StatusPage,
 }
 
-const SOURCES: &[Source] = &[
-    Source {
-        kind: ProviderKind::Codex,
-        page_url: "https://status.openai.com",
-        api: Api::IncidentIo("https://status.openai.com/proxy/status.openai.com"),
-        relevance: Relevance::Matching(&["codex"]),
-    },
-    Source {
-        kind: ProviderKind::Claude,
-        page_url: "https://status.claude.com",
-        api: Api::Statuspage("https://status.claude.com/api/v2/summary.json"),
-        relevance: Relevance::Matching(&["claude code", "claude api", "claude.ai"]),
-    },
-    Source {
-        kind: ProviderKind::Cursor,
-        page_url: "https://status.cursor.com",
-        api: Api::Statuspage("https://status.cursor.com/api/v2/summary.json"),
-        relevance: Relevance::Except(&["Grok Bot"]),
-    },
-];
+fn sources() -> impl Iterator<Item = Source> {
+    crate::provider_registry::PROVIDERS
+        .iter()
+        .filter_map(|descriptor| {
+            descriptor.status_page.map(|page| Source {
+                kind: descriptor.kind,
+                page,
+            })
+        })
+}
 
 /// Drivers with a public status page.
 pub fn has_status_page(kind: ProviderKind) -> bool {
-    SOURCES.iter().any(|source| source.kind == kind)
+    crate::provider_registry::descriptor(kind)
+        .status_page
+        .is_some()
 }
 
 /// Drivers whose status pages are polled for these settings.
@@ -218,8 +192,7 @@ pub fn watched_kinds(settings: &Settings) -> Vec<ProviderKind> {
         .filter(|instance| instance.enabled)
         .map(|instance| instance.driver)
         .collect::<HashSet<_>>();
-    SOURCES
-        .iter()
+    sources()
         .map(|source| source.kind)
         .filter(|kind| enabled.contains(kind))
         .collect()
@@ -284,11 +257,8 @@ fn run(
 
     loop {
         if !watched.is_empty() && next_refresh <= Instant::now() {
-            for source in SOURCES
-                .iter()
-                .filter(|source| watched.contains(&source.kind))
-            {
-                match fetch(&agent, source) {
+            for source in sources().filter(|source| watched.contains(&source.kind)) {
+                match fetch(&agent, &source) {
                     Ok(status) => {
                         known.insert(
                             source.kind,
@@ -365,8 +335,7 @@ fn send_snapshot(
     known: &HashMap<ProviderKind, Known>,
     cache: &NotifiedCache,
 ) {
-    let statuses = SOURCES
-        .iter()
+    let statuses = sources()
         .filter(|source| watched.contains(&source.kind))
         .filter_map(|source| known.get(&source.kind))
         .map(|known| known.status.clone())
@@ -378,8 +347,8 @@ fn send_snapshot(
 }
 
 fn fetch(agent: &Agent, source: &Source) -> Result<ProviderStatus> {
-    let url = match source.api {
-        Api::Statuspage(url) | Api::IncidentIo(url) => url,
+    let url = match source.page.api {
+        StatusApi::Statuspage(url) | StatusApi::IncidentIo(url) => url,
     };
     let response = agent
         .get(url)
@@ -392,9 +361,9 @@ fn fetch(agent: &Agent, source: &Source) -> Result<ProviderStatus> {
     if status / 100 != 2 {
         bail!("status page returned {status}");
     }
-    let incidents = match source.api {
-        Api::Statuspage(_) => parse_statuspage(&body, source)?,
-        Api::IncidentIo(_) => parse_incident_io(&body, source)?,
+    let incidents = match source.page.api {
+        StatusApi::Statuspage(_) => parse_statuspage(&body, source)?,
+        StatusApi::IncidentIo(_) => parse_incident_io(&body, source)?,
     };
     crate::logger::info(format!(
         "{} status: incidents=[{}]",
@@ -407,7 +376,7 @@ fn fetch(agent: &Agent, source: &Source) -> Result<ProviderStatus> {
     ));
     Ok(ProviderStatus {
         kind: source.kind,
-        page_url: source.page_url,
+        page_url: source.page.page_url,
         incidents,
     })
 }
@@ -479,11 +448,11 @@ fn parse_statuspage(body: &str, source: &Source) -> Result<Vec<StatusIncident>> 
                     .group_id
                     .as_deref()
                     .and_then(|id| groups.get(id).copied());
-                source.relevance.matches(&component.name, group)
+                source.page.relevance.matches(&component.name, group)
             })
             .collect::<Vec<_>>();
         if relevant.is_empty()
-            && !(incident.components.is_empty() && source.relevance.covers_unattributed())
+            && !(incident.components.is_empty() && source.page.relevance.covers_unattributed())
         {
             continue;
         }
@@ -510,7 +479,7 @@ fn parse_statuspage(body: &str, source: &Source) -> Result<Vec<StatusIncident>> 
                 .iter()
                 .map(|component| component.name.clone())
                 .collect(),
-            url: format!("{}/incidents/{}", source.page_url, incident.id),
+            url: format!("{}/incidents/{}", source.page.page_url, incident.id),
         });
     }
     Ok(finish(incidents))
@@ -623,7 +592,7 @@ fn parse_incident_io(body: &str, source: &Source) -> Result<Vec<StatusIncident>>
                 continue;
             };
             let group = groups.get(affected.component_id.as_str()).copied();
-            if !source.relevance.matches(name, group) {
+            if !source.page.relevance.matches(name, group) {
                 continue;
             }
             components.push((*name).to_owned());
@@ -650,7 +619,7 @@ fn parse_incident_io(body: &str, source: &Source) -> Result<Vec<StatusIncident>>
             stage,
             started_at: incident.published_at,
             components,
-            url: format!("{}/incidents/{}", source.page_url, incident.id),
+            url: format!("{}/incidents/{}", source.page.page_url, incident.id),
         });
     }
     Ok(finish(incidents))
@@ -703,8 +672,8 @@ fn save_cache(path: &Path, cache: &NotifiedCache) -> Result<()> {
 mod tests {
     use super::*;
 
-    fn source(kind: ProviderKind) -> &'static Source {
-        SOURCES.iter().find(|source| source.kind == kind).unwrap()
+    fn source(kind: ProviderKind) -> Source {
+        sources().find(|source| source.kind == kind).unwrap()
     }
 
     #[test]
@@ -724,7 +693,7 @@ mod tests {
             ],
             "scheduled_maintenances": []
         }"#;
-        let incidents = parse_statuspage(body, source(ProviderKind::Claude)).unwrap();
+        let incidents = parse_statuspage(body, &source(ProviderKind::Claude)).unwrap();
         assert_eq!(incidents.len(), 1);
         let incident = &incidents[0];
         assert_eq!(incident.id, "Claude:code");
@@ -742,13 +711,13 @@ mod tests {
             ]
         }"#;
         assert_eq!(
-            parse_statuspage(body, source(ProviderKind::Cursor))
+            parse_statuspage(body, &source(ProviderKind::Cursor))
                 .unwrap()
                 .len(),
             1
         );
         assert!(
-            parse_statuspage(body, source(ProviderKind::Claude))
+            parse_statuspage(body, &source(ProviderKind::Claude))
                 .unwrap()
                 .is_empty()
         );
@@ -765,7 +734,7 @@ mod tests {
                  "components":[{"id":"i","name":"IDE","status":"operational"}]}
             ]
         }"#;
-        let incidents = parse_statuspage(body, source(ProviderKind::Cursor)).unwrap();
+        let incidents = parse_statuspage(body, &source(ProviderKind::Cursor)).unwrap();
         assert_eq!(incidents.len(), 1);
         assert!(incidents[0].is_maintenance());
         assert_eq!(incidents[0].impact, IncidentImpact::Maintenance);
@@ -792,7 +761,7 @@ mod tests {
                                         {"component_id":"desktop","status":"degraded_performance"}]}
             ]
         }}"#;
-        let incidents = parse_incident_io(body, source(ProviderKind::Codex)).unwrap();
+        let incidents = parse_incident_io(body, &source(ProviderKind::Codex)).unwrap();
         assert_eq!(incidents.len(), 1);
         assert_eq!(incidents[0].id, "Codex:i2");
         assert_eq!(incidents[0].impact, IncidentImpact::PartialOutage);

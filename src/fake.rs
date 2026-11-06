@@ -15,7 +15,8 @@ use chrono::{DateTime, Duration, Utc};
 
 use crate::banked_reset::Outcome;
 use crate::limits::{LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary, RateLimits};
-use crate::settings::{AutoResetLead, ProviderKind, Settings};
+use crate::provider_registry::ProviderKind;
+use crate::settings::{AutoResetLead, Settings};
 use crate::usage::UsageStatistics;
 
 static CODEX_SPENT: AtomicBool = AtomicBool::new(false);

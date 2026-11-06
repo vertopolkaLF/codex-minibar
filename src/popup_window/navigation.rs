@@ -327,7 +327,7 @@ pub(super) fn popup_sections(
     if has_error {
         sections.push(PopupSection::Error);
     }
-    if provider == ProviderKind::Kiro || limits.is_free_plan() {
+    if crate::provider_registry::descriptor(provider).monthly_only || limits.is_free_plan() {
         if !limits.secondary.is_empty() {
             sections.push(PopupSection::Monthly);
         }

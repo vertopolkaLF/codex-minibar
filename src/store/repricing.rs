@@ -32,7 +32,7 @@ use rusqlite::params;
 use serde_json::Value;
 
 use super::ProviderStore;
-use crate::{instances::ProviderId, pricing, settings::ProviderKind, usage};
+use crate::{instances::ProviderId, pricing, provider_registry::ProviderKind, usage};
 
 /// `(provider, model, cache creation, uncached input, cache read, output)` to
 /// `(cost, cache savings)`; `None` while the model has no rate.

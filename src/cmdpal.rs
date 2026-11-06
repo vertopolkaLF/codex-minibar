@@ -20,7 +20,7 @@ use serde::Serialize;
 use crate::{
     instances::ProviderId,
     limits::{ProviderLimits, RateLimits},
-    settings::{ProviderKind, Settings, TaskbarResetDisplay, TaskbarWidget},
+    settings::{Settings, TaskbarResetDisplay, TaskbarWidget},
     taskbar::model::{self, Appearance, Row, WidgetView},
 };
 
@@ -175,7 +175,7 @@ pub fn payload(limits: &ProviderLimits) -> Payload {
             let light = model::resolve(&widget, limits, appearance(true));
             let dark = model::resolve(&widget, limits, appearance(false));
             let icon = icons(&light, &dark);
-            if provider.kind() == ProviderKind::OpenRouter {
+            if crate::provider_registry::descriptor(provider.kind()).balance_only {
                 return Some(balance_summary(provider, limits.get(provider), icon));
             }
             summary(provider, &dark, icon)
@@ -204,8 +204,8 @@ pub(crate) fn band_name(widget: &TaskbarWidget) -> String {
     }
 }
 
-/// The Dock's title and subtitle for a band. OpenRouter has no quota worth a
-/// glance, so a band of only OpenRouter instances shows their balance.
+/// The Dock's title and subtitle for a band. A band of only balance-only
+/// instances shows their balance.
 pub(crate) fn band_lines(
     widget: &TaskbarWidget,
     view: &WidgetView,
@@ -219,7 +219,7 @@ pub(crate) fn band_lines(
     if providers.peek().is_none()
         || !providers
             .clone()
-            .all(|provider| provider.kind() == ProviderKind::OpenRouter)
+            .all(|provider| crate::provider_registry::descriptor(provider.kind()).balance_only)
     {
         return band_text(view);
     }
@@ -614,7 +614,7 @@ mod tests {
 
     fn row(label: &str, value: &str, reset: Option<&str>) -> Row {
         Row {
-            provider: ProviderId::primary(crate::settings::ProviderKind::Codex),
+            provider: ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             label: label.into(),
             full_label: label.into(),
             value: value.into(),

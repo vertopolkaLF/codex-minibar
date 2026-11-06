@@ -7,7 +7,7 @@ use gpui::{
 
 use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
-use crate::settings::ProviderKind;
+use crate::provider_registry::ProviderKind;
 
 impl SettingsWindow {
     pub(super) fn log_page(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {

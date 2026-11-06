@@ -443,12 +443,14 @@ impl SettingsWindow {
     ) -> Vec<AnyElement> {
         let provider = instance.provider_id();
         match instance.driver {
-            ProviderKind::Claude | ProviderKind::Codex => {}
             ProviderKind::OpenRouter => return self.openrouter_section(instance, k, cx),
             ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
                 return self.opencode_key_section(instance, k, cx);
             }
-            _ => return Vec::new(),
+            driver if !crate::provider_registry::descriptor(driver).config_folder => {
+                return Vec::new();
+            }
+            _ => {}
         }
         let identity = self.openrouter.identities.get(&instance.id).cloned();
         let open = |kind: ProviderDialogKind| {
@@ -639,7 +641,7 @@ impl SettingsWindow {
         if !cards.is_empty() {
             out.push(kit::card(k, cards));
         }
-        if matches!(driver, ProviderKind::Claude | ProviderKind::Codex) {
+        if crate::provider_registry::descriptor(driver).config_folder {
             out.extend(self.source_settings(instance, k, window, cx));
         }
         for config in folder_configs(driver) {
@@ -1001,8 +1003,9 @@ impl SettingsWindow {
                 }),
             ));
         }
-        // Only these drivers can redeem a banked reset.
-        if matches!(instance.driver, ProviderKind::Codex | ProviderKind::Claude) {
+        if crate::provider_registry::descriptor(instance.driver).banked_resets
+            != crate::provider_registry::BankedResets::Unsupported
+        {
             rows.push(kit::toggle_row_with(
                 k,
                 format!("provider-{}-auto-reset", provider.id()),

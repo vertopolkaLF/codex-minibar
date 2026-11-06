@@ -351,7 +351,7 @@ mod tests {
     use super::*;
     use crate::instances::InstanceSource;
     use crate::limits::{LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary};
-    use crate::settings::ProviderKind;
+    use crate::provider_registry::ProviderKind;
 
     fn limits(used: u8, expires_in: chrono::Duration, now: DateTime<Utc>) -> RateLimits {
         RateLimits {

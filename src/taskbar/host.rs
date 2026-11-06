@@ -1819,7 +1819,8 @@ mod tests {
     use super::*;
     use crate::{
         instances::ProviderId,
-        settings::{ProviderKind, TaskbarResetDisplay, TaskbarWidget, TaskbarWidgetStyle},
+        provider_registry::ProviderKind,
+        settings::{TaskbarResetDisplay, TaskbarWidget, TaskbarWidgetStyle},
     };
 
     fn bars(count: usize) -> Vec<WidgetView> {

@@ -21,7 +21,8 @@ use super::theme::{Fonts, Theme};
 use super::vscode_themes::{ThemeBrowser, ThemeBrowserUi, ThemeHost, end_theme_preview};
 use crate::popup_window::AppState;
 use crate::popup_window::ui::fx;
-use crate::settings::{ProviderInstance, ProviderKind, Settings, TrayWidget, UsageRefreshInterval};
+use crate::provider_registry::ProviderKind;
+use crate::settings::{ProviderInstance, Settings, TrayWidget, UsageRefreshInterval};
 
 const DRIVERS: usize = ProviderKind::ALL.len();
 

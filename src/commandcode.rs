@@ -50,7 +50,6 @@ const CLI_NAMES: &[&str] = &[
     "commandcode.cmd",
     "commandcode.ps1",
 ];
-pub(crate) const MONTHLY_LIMIT_ID: &str = "monthly";
 
 /// Monthly USD allowance per subscription plan, from
 /// https://commandcode.ai/pricing. The credits response reports only the
@@ -353,7 +352,7 @@ fn rate_limits(
         .map(|total| {
             let used = (total - credits.monthly_remaining).clamp(0.0, total);
             AdditionalLimit {
-                id: MONTHLY_LIMIT_ID.into(),
+                id: crate::provider_registry::COMMAND_CODE_MONTHLY_LIMIT_ID.into(),
                 title: "Monthly".into(),
                 window: LimitWindow {
                     used_percent: Some(percent(used, total)),
@@ -716,7 +715,10 @@ mod tests {
         assert_eq!(limits.plan_type.as_deref(), Some("Go"));
 
         let monthly = &limits.additional_limits[0];
-        assert_eq!(monthly.id, MONTHLY_LIMIT_ID);
+        assert_eq!(
+            monthly.id,
+            crate::provider_registry::COMMAND_CODE_MONTHLY_LIMIT_ID
+        );
         assert_eq!(monthly.window.used_percent, Some(25));
         assert_eq!(
             monthly.window.resets_at,

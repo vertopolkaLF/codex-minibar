@@ -2108,12 +2108,6 @@ exit = 終了
 update-available-67fd3a = 利用可能なアップデート
 
 # application
-monthly-credits-976559 = 毎月のクレジット
-
-# application
-msg-5h-session-de7ce8 = 5時間セッション
-
-# application
 name-weekly = 毎週 { $name }
 
 # application
@@ -2262,10 +2256,6 @@ this-provider-does-not-use-a-config-folder = このプロバイダーは構成�
 
 # application
 could-not-save-provider-settings-error-restoring-its-previous-cre = プロバイダー設定を保存できませんでした ({ $error })。以前の資格情報の復元も失敗しました ({ $rollback_error })。
-
-# application
-msg-5h-7d = 5時間 |  { $v0 } |  { $v1 }
-    7d |  { $v2 } |  { $v3 }
 
 # API key count in the provider header.
 api-key-count = { $v0 } 個の API キー

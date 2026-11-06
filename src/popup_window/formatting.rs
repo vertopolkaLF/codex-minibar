@@ -60,9 +60,9 @@ pub(super) fn credits_display_value(provider: ProviderKind, limits: &RateLimits)
     {
         None
     } else {
-        // Codex credits are counts, while other providers may report currency.
         // Format only at the display boundary to retain the original precision.
-        if provider == ProviderKind::Codex
+        if crate::provider_registry::descriptor(provider).credits
+            == crate::provider_registry::Credits::Count
             && let Ok(value) = balance.parse::<f64>()
             && value.is_finite()
         {

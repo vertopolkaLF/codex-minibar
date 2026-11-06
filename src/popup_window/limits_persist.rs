@@ -99,7 +99,7 @@ mod tests {
                     .push((provider, limits.primary.used_percent));
             })
         };
-        let codex = ProviderId::primary(crate::settings::ProviderKind::Codex);
+        let codex = ProviderId::primary(crate::provider_registry::ProviderKind::Codex);
         // The first save is picked up and blocks the writer on the gate; the
         // rest pile up behind it.
         persister.save(codex, limits(1));
@@ -124,7 +124,7 @@ mod tests {
             *counter.lock().unwrap() += 1;
         });
         persister.save(
-            ProviderId::primary(crate::settings::ProviderKind::Codex),
+            ProviderId::primary(crate::provider_registry::ProviderKind::Codex),
             limits(5),
         );
         persister.flush(Duration::from_secs(5));

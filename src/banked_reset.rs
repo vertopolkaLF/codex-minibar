@@ -27,13 +27,13 @@ pub(crate) fn consume(
 ) -> Result<(Outcome, Result<crate::limits::RateLimits>)> {
     match instance.driver {
         driver if crate::fake::serves(driver) => crate::fake::consume(driver),
-        crate::settings::ProviderKind::Codex => {
+        crate::provider_registry::ProviderKind::Codex => {
             let executable = crate::codex::first_available(instance.binary_path.as_deref())?;
             let client = crate::codex::CodexClient::for_instance(executable, instance);
             let outcome = client.consume_reset()?;
             Ok((outcome, client.read_rate_limits()))
         }
-        crate::settings::ProviderKind::Claude => {
+        crate::provider_registry::ProviderKind::Claude => {
             let mut client = crate::claude::ClaudeClient::for_instance(instance);
             let outcome = client.consume_reset()?;
             Ok((outcome, client.read_rate_limits()))

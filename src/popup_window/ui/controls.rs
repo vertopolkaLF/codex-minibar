@@ -25,7 +25,7 @@ impl PopupRoot {
         key: u64,
         members: Vec<crate::instances::ProviderId>,
         selected: Option<usize>,
-        driver: crate::settings::ProviderKind,
+        driver: crate::provider_registry::ProviderKind,
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {

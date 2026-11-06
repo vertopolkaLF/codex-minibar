@@ -152,38 +152,12 @@ impl Card<'_> {
 
 /// Titles of the monthly, 5-hour and secondary quota windows of a driver.
 pub(crate) fn limit_labels(kind: ProviderKind) -> (&'static str, &'static str, &'static str) {
-    match kind {
-        ProviderKind::Cursor => (
-            crate::i18n::tr("cursor-models"),
-            crate::i18n::tr("cursor-models"),
-            crate::i18n::tr("cursor-models"),
-        ),
-        ProviderKind::OpenRouter => (
-            crate::i18n::tr("spending"),
-            crate::i18n::tr("spending"),
-            crate::i18n::tr("spending"),
-        ),
-        ProviderKind::Antigravity => (
-            crate::i18n::tr("gemini"),
-            crate::i18n::tr("gemini"),
-            crate::i18n::tr("claude-gpt"),
-        ),
-        ProviderKind::Grok => (
-            crate::i18n::tr("credits"),
-            crate::i18n::tr("credits"),
-            crate::i18n::tr("credits"),
-        ),
-        ProviderKind::Kiro => (
-            crate::i18n::tr("monthly-credits-976559"),
-            crate::i18n::tr("credits"),
-            crate::i18n::tr("credits"),
-        ),
-        _ => (
-            crate::i18n::tr("monthly"),
-            crate::i18n::tr("msg-5h-session-de7ce8"),
-            crate::i18n::tr("weekly"),
-        ),
-    }
+    let titles = crate::provider_registry::descriptor(kind).limit_titles;
+    (
+        crate::i18n::tr(titles.monthly),
+        crate::i18n::tr(titles.five_hour),
+        crate::i18n::tr(titles.secondary),
+    )
 }
 
 pub(crate) fn provider_cards<'a>(
@@ -309,12 +283,12 @@ pub(crate) fn provider_cards<'a>(
         return cards;
     }
 
-    // Cursor usage is fetched from a remote CSV export rather than scanned
-    // from a local session log. Keep its card visible while that export is
-    // still empty or delayed, so the feature does not look like it vanished.
+    // A remote export can still be empty or delayed; keep its card visible
+    // so the feature does not look like it vanished.
     let has_usage_statistics = options.include_usage_stats
         && visible(&usage_brick_id(kind))
-        && (limits.usage.has_data() || kind == ProviderKind::Cursor);
+        && (limits.usage.has_data()
+            || crate::provider_registry::descriptor(kind).usage_stats == UsageStats::RemoteExport);
     for section in popup_sections(kind, limits, false) {
         if !matches!(
             section,
@@ -359,7 +333,9 @@ pub(crate) fn provider_cards<'a>(
         if !visible(&additional_limit_brick_id(kind, &limit.id)) {
             continue;
         }
-        if kind == ProviderKind::Claude && limit.id == CLOUD_SESSION_CREDITS_LIMIT_ID {
+        if kind == ProviderKind::Claude
+            && limit.id == crate::provider_registry::CLAUDE_CLOUD_SESSION_CREDITS_LIMIT_ID
+        {
             cards.push(Card::CloudCredits {
                 key: card_key(provider, &format!("additional-{}", limit.id)),
                 window: &limit.window,
@@ -468,6 +444,7 @@ pub(crate) enum AnnouncedResetPhase {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AnnouncedResetRow<'a> {
+    pub provider: ProviderId,
     pub reset: &'a crate::reset_feed::AnnouncedReset,
     pub phase: AnnouncedResetPhase,
 }
@@ -503,14 +480,15 @@ pub(crate) fn visible_announced_resets(
             } else {
                 return None;
             };
-            Some(AnnouncedResetRow { reset, phase })
+            Some(AnnouncedResetRow {
+                provider,
+                reset,
+                phase,
+            })
         })
         .take(MAX_ANNOUNCED_RESET_ROWS)
         .collect()
 }
-
-/// Claude's additional window that carries cloud-session credit dollars.
-pub(crate) const CLOUD_SESSION_CREDITS_LIMIT_ID: &str = "iguana_necktie";
 
 /// `(label, progress, available)` for a cloud-credit balance. Expired or
 /// locked credits show no progress; dollars are never estimated from the

@@ -275,12 +275,12 @@ impl Theme {
     }
 
     /// Brand tint of a provider mark on this theme's surfaces.
-    pub(crate) fn brand(&self, provider: crate::settings::ProviderKind) -> Hsla {
-        rgb8(if self.dark {
-            crate::provider_registry::dark_surface_brand_rgb(provider)
-        } else {
-            crate::provider_registry::light_surface_brand_rgb(provider)
-        })
+    pub(crate) fn brand(&self, provider: crate::provider_registry::ProviderKind) -> Hsla {
+        rgb8(
+            crate::provider_registry::descriptor(provider)
+                .icon_rgb
+                .pick(self.dark),
+        )
     }
 
     /// Neutral icon tint used for monochrome marks.

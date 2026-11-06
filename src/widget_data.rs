@@ -12,7 +12,7 @@ use crate::{
     instances::ProviderId,
     limits::{LimitWindow, ProviderLimits, RateLimits},
     provider_registry,
-    settings::ProviderKind,
+    provider_registry::ProviderKind,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -245,25 +245,14 @@ fn is_luna_reserve_metric(provider: ProviderKind, limits: &RateLimits, metric_id
     if provider != ProviderKind::Codex {
         return false;
     }
-    let reserve_metric_id =
-        provider_registry::additional_limit_brick_id(provider, crate::limits::GPT_RESERVE_LIMIT_ID);
-    if metric_id.eq_ignore_ascii_case(&reserve_metric_id)
-        || metric_id.eq_ignore_ascii_case(&format!(
-            "{}.additional.{}",
-            provider_registry::descriptor(provider).id,
-            crate::limits::GPT_RESERVE_LIMIT_ID
-        ))
-    {
-        return true;
-    }
-    limits.codex_luna_reserve_override().is_some()
-        && matches!(
-            provider_registry::metric(provider, metric_id).map(|metric| metric.source),
-            Some(
-                provider_registry::MetricSource::Primary
-                    | provider_registry::MetricSource::Secondary
-            )
-        )
+    let reserve_ids = [
+        provider_registry::additional_limit_brick_id(provider, crate::limits::GPT_RESERVE_LIMIT_ID),
+        provider_registry::dynamic_metric_id(provider, crate::limits::GPT_RESERVE_LIMIT_ID),
+    ];
+    reserve_ids
+        .iter()
+        .any(|id| metric_id.eq_ignore_ascii_case(id))
+        || provider_registry::luna_reserve_override(provider, limits, metric_id).is_some()
 }
 
 pub(crate) fn window_snapshot(window: &LimitWindow) -> WindowSnapshot {

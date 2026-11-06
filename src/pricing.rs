@@ -23,7 +23,7 @@ use chrono::Duration;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::{settings::ProviderKind, store};
+use crate::{provider_registry::ProviderKind, store};
 
 #[cfg(not(test))]
 const LITELLM_RATES_URL: &str =
@@ -329,19 +329,10 @@ fn lookup_rate(
     if let Some(rate) = catalog.rates.get(&key).copied() {
         return Some(rate);
     }
-    let candidates: Vec<String> = match provider {
-        ProviderKind::Codex => vec![format!("openai/{key}")],
-        ProviderKind::Claude => vec![format!("anthropic/{key}")],
-        ProviderKind::Cursor => vec![
-            format!("cursor/{key}"),
-            format!("openai/{key}"),
-            format!("anthropic/{key}"),
-            format!("google/{key}"),
-            format!("xai/{key}"),
-            format!("x-ai/{key}"),
-        ],
-        _ => Vec::new(),
-    };
+    let candidates = crate::provider_registry::descriptor(provider)
+        .pricing_prefixes
+        .iter()
+        .map(|prefix| format!("{prefix}/{key}"));
     let mut resolved = None;
     for candidate in candidates {
         let Some(rate) = catalog.rates.get(&candidate).copied() else {

@@ -17,7 +17,8 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::settings::{LimitRefreshInterval, OpenRouterAccount, ProviderKind};
+use crate::provider_registry::ProviderKind;
+use crate::settings::{LimitRefreshInterval, OpenRouterAccount};
 
 /// Identity of one provider instance. `Copy` so it can replace the former
 /// provider enum everywhere a provider was used as a key.
@@ -451,6 +452,19 @@ impl ProviderInstance {
         self.source == InstanceSource::Manual
     }
 
+    /// Whether the credential Usage Stats are read with is configured.
+    pub fn has_usage_stats_credential(&self) -> bool {
+        crate::provider_registry::descriptor(self.driver).usage_stats
+            != crate::provider_registry::UsageStats::ManagementKey
+            || crate::openrouter::has_management_key(self.openrouter.as_slice())
+    }
+
+    /// Whether this instance's usage statistics are collected, independent
+    /// of the global Usage switch.
+    pub fn collects_usage_stats(&self) -> bool {
+        self.usage_stats && Capabilities::of(self).usage_stats && self.has_usage_stats_credential()
+    }
+
     /// Fields that require replacing the running worker when they change.
     /// Names, badges and Home visibility are presentation-only.
     pub fn runtime_key(&self) -> impl PartialEq + use<> {
@@ -614,7 +628,7 @@ pub fn folder_conflicts(instances: &[ProviderInstance]) -> BTreeMap<String, Stri
     let mut seen = HashMap::<(ProviderKind, String), String>::new();
     let mut conflicts = BTreeMap::new();
     for instance in instances {
-        if !matches!(instance.driver, ProviderKind::Claude | ProviderKind::Codex)
+        if !crate::provider_registry::descriptor(instance.driver).config_folder
             || instance.uses_manual_credential()
         {
             continue;
@@ -661,7 +675,7 @@ impl Capabilities {
     pub fn of(instance: &ProviderInstance) -> Self {
         let descriptor = crate::provider_registry::descriptor(instance.driver);
         let manual = instance.uses_manual_credential();
-        let folder_driver = matches!(instance.driver, ProviderKind::Claude | ProviderKind::Codex);
+        let folder_driver = descriptor.config_folder && !manual;
         // OpenCode's local history is one database for this PC; only the
         // primary instance reads it so it is never counted twice.
         let shared_local_history = matches!(
@@ -670,14 +684,13 @@ impl Capabilities {
         ) && !instance.is_primary();
         Self {
             limits: true,
-            usage_stats: crate::provider_registry::supports_usage_stats(instance.driver)
-                && !manual
-                && !shared_local_history,
+            usage_stats: descriptor.usage_stats.is_supported() && !manual && !shared_local_history,
             auto_activation: descriptor.supports_activation && !manual,
-            // Redemption needs the CLI login folder (see `banked_reset::consume`).
-            auto_reset: folder_driver && !manual,
-            sign_in: folder_driver && !manual,
-            config_folder: folder_driver && !manual,
+            auto_reset: descriptor.banked_resets
+                != crate::provider_registry::BankedResets::Unsupported
+                && !manual,
+            sign_in: folder_driver,
+            config_folder: folder_driver,
             multiple_instances: descriptor.supports_multiple_instances,
         }
     }

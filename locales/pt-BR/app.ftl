@@ -1434,10 +1434,6 @@ exit = Sair
 
 update-available-67fd3a = Atualização disponível
 
-monthly-credits-976559 = Créditos mensais
-
-msg-5h-session-de7ce8 = Sessão de 5h
-
 name-weekly = { $name } semanal
 
 tokens-94e0b9 = { $v0 }: { $v1 } tokens
@@ -1556,9 +1552,6 @@ this-provider-has-no-session-window-to-start = Este provedor não tem janela de 
 this-provider-does-not-use-a-config-folder = Este provedor não usa pasta de configuração.
 
 could-not-save-provider-settings-error-restoring-its-previous-cre = Não foi possível salvar as configurações do provedor ({ $error }); a restauração da credencial anterior também falhou ({ $rollback_error }).
-
-msg-5h-7d = 5h  ·  { $v0 }  ·  { $v1 }
-    7d  ·  { $v2 }  ·  { $v3 }
 
 api-key-count = { $v0 ->
     [one] { $v0 } chave de API

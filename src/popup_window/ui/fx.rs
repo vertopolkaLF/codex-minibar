@@ -512,7 +512,8 @@ mod tests {
             instances::ProviderId,
             limits::RateLimits,
             popup_window::{PopupSurface, model::*},
-            settings::{PopupVisibility, ProviderKind},
+            provider_registry::ProviderKind,
+            settings::PopupVisibility,
         };
 
         for driver in [ProviderKind::Claude, ProviderKind::Codex] {

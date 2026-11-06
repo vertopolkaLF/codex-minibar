@@ -9,7 +9,8 @@ fn main() {
     use codex_minibar::{
         instances::ProviderId,
         limits::{LimitWindow, ProviderLimits, RateLimits},
-        settings::{ProviderKind, Settings, TaskbarWidget, TaskbarWidgetStyle, TrayIndicator},
+        provider_registry::ProviderKind,
+        settings::{Settings, TaskbarWidget, TaskbarWidgetStyle, TrayIndicator},
     };
 
     unsafe {

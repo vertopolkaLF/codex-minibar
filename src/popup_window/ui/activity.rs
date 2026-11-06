@@ -21,6 +21,7 @@ use super::{
     tooltip::{ActivityTip, TipContent},
 };
 use crate::popup_window::*;
+use crate::provider_registry::UsageValue;
 use crate::usage::{DailyTokenUsage, TokenUsage, UsageStatistics};
 
 const HEIGHT: f32 = 56.0;
@@ -694,7 +695,10 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
-        if provider.kind() == ProviderKind::Cursor && !statistics.has_data() {
+        if crate::provider_registry::descriptor(provider.kind()).usage_stats
+            == UsageStats::RemoteExport
+            && !statistics.has_data()
+        {
             return card(&palette)
                 .p(px(12.0))
                 .flex()
@@ -710,7 +714,8 @@ impl PopupRoot {
                 ))
                 .into_any_element();
         }
-        let cost_based = is_cost_provider(provider.kind());
+        let cost_based =
+            crate::provider_registry::descriptor(provider.kind()).usage_value == UsageValue::Spend;
         let chart = format!(
             "{}-{}",
             provider.id(),
@@ -1478,13 +1483,6 @@ fn grow(element: gpui::Div, weight: f32) -> gpui::Div {
     element
 }
 
-pub(crate) fn is_cost_provider(provider: ProviderKind) -> bool {
-    matches!(
-        provider,
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo | ProviderKind::CommandCode
-    )
-}
-
 fn metric_cell(label: String, value: String, detail: String, palette: &Palette) -> gpui::Div {
     div()
         .flex_1()
@@ -1511,7 +1509,8 @@ fn usage_card_metrics(
 ) -> gpui::Div {
     let period = statistics.history_days;
     let row = div().flex().flex_row().w_full().gap(px(8.0));
-    if is_cost_provider(provider) {
+    let usage_value = crate::provider_registry::descriptor(provider).usage_value;
+    if usage_value == UsageValue::Spend {
         let spend = |usage: &TokenUsage| format_micro_usd(usage.estimated_cost_microusd);
         return row
             .child(metric_cell(
@@ -1530,7 +1529,7 @@ fn usage_card_metrics(
                 palette,
             ));
     }
-    let exact = provider == ProviderKind::OpenRouter;
+    let exact = usage_value == UsageValue::BilledTokens;
     let value = |usage: &TokenUsage| {
         format!(
             "{} {}",

@@ -12,9 +12,10 @@ use std::sync::{
 
 use gpui::{Hsla, Rgba, SharedString};
 
+use crate::provider_registry::ProviderKind;
 use crate::settings::{
     AccentColor, AppTheme, POPUP_VSCODE_CONTRAST_DEFAULT, POPUP_VSCODE_TINT_DEFAULT,
-    PopupBackgroundMaterial, PopupTheme, ProviderKind,
+    PopupBackgroundMaterial, PopupTheme,
 };
 use crate::vscode_themes::VsCodeTheme;
 
@@ -781,11 +782,11 @@ impl Palette {
         if !colored {
             return self.mono_provider_icon;
         }
-        rgb8(if self.dark {
-            crate::provider_registry::dark_surface_brand_rgb(provider)
-        } else {
-            crate::provider_registry::light_surface_brand_rgb(provider)
-        })
+        rgb8(
+            crate::provider_registry::descriptor(provider)
+                .icon_rgb
+                .pick(self.dark),
+        )
     }
 
     /// Footer tab mark: brand tint, or the neutral chrome glyph.
@@ -800,12 +801,14 @@ impl Palette {
     /// keeps the driver color; others use their badge color, or a shade of
     /// the driver color, so instances of one driver stay distinguishable.
     pub(crate) fn spend_color(&self, provider: crate::instances::ProviderId) -> Hsla {
-        self.instance_shade(provider, self.driver_spend_color(provider.kind()))
+        let rgb = crate::provider_registry::descriptor(provider.kind()).spend_rgb;
+        self.instance_shade(provider, rgb8(rgb.pick(self.dark)))
     }
 
     /// Area-chart series color of one instance on the Usage tab.
     pub(crate) fn series_color(&self, provider: crate::instances::ProviderId) -> Hsla {
-        self.instance_shade(provider, self.driver_series_color(provider.kind()))
+        let rgb = crate::provider_registry::descriptor(provider.kind()).series_rgb;
+        self.instance_shade(provider, rgb8(rgb.pick(self.dark)))
     }
 
     fn instance_shade(&self, provider: crate::instances::ProviderId, base: Hsla) -> Hsla {
@@ -825,68 +828,6 @@ impl Palette {
             gpui::white()
         };
         base.mix(toward, amount)
-    }
-
-    /// Share-bar / donut / legend color used by combined spend surfaces.
-    pub(crate) fn driver_spend_color(&self, provider: ProviderKind) -> Hsla {
-        let dark = self.dark;
-        rgb8(match provider {
-            ProviderKind::Codex => (128, 159, 255),
-            ProviderKind::Claude => (217, 119, 87),
-            ProviderKind::Cursor => {
-                if dark {
-                    (255, 255, 255)
-                } else {
-                    (18, 18, 18)
-                }
-            }
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-                if dark {
-                    (205, 205, 205)
-                } else {
-                    (75, 75, 75)
-                }
-            }
-            ProviderKind::OpenRouter => (200, 255, 0),
-            ProviderKind::Antigravity => (66, 133, 244),
-            ProviderKind::Grok => {
-                if dark {
-                    (255, 255, 255)
-                } else {
-                    (51, 51, 51)
-                }
-            }
-            ProviderKind::Kiro => (151, 125, 255),
-            ProviderKind::CommandCode => {
-                if dark {
-                    (255, 255, 255)
-                } else {
-                    (51, 51, 51)
-                }
-            }
-        })
-    }
-
-    /// Area-chart series color on the Usage tab.
-    pub(crate) fn driver_series_color(&self, provider: ProviderKind) -> Hsla {
-        let dark = self.dark;
-        rgb8(match provider {
-            ProviderKind::Cursor => {
-                if dark {
-                    (255, 255, 255)
-                } else {
-                    (28, 28, 28)
-                }
-            }
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-                if dark {
-                    (210, 210, 210)
-                } else {
-                    (72, 72, 72)
-                }
-            }
-            _ => crate::provider_registry::descriptor(provider).brand_rgb,
-        })
     }
 }
 

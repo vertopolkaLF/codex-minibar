@@ -1431,10 +1431,6 @@ exit = 結束
 
 update-available-67fd3a = 有可用更新
 
-monthly-credits-976559 = 每月點數
-
-msg-5h-session-de7ce8 = 5 小時工作階段
-
 name-weekly = { $name } 每週
 
 tokens-94e0b9 = { $v0 }：{ $v1 } 個 token
@@ -1538,9 +1534,6 @@ this-provider-has-no-session-window-to-start = 此服務供應商沒有可開啟
 this-provider-does-not-use-a-config-folder = 此服務供應商不使用設定資料夾。
 
 could-not-save-provider-settings-error-restoring-its-previous-cre = 無法儲存服務供應商設定（{ $error }）；恢復先前認證資訊也失敗（{ $rollback_error }）。
-
-msg-5h-7d = 5 小時  ·  { $v0 }  ·  { $v1 }
-    7 天  ·  { $v2 }  ·  { $v3 }
 
 api-key-count = { $v0 } 個 API 金鑰
 

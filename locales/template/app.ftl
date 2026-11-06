@@ -2948,14 +2948,6 @@ exit = { "" }
 update-available-67fd3a = { "" }
 
 # English source:
-# monthly-credits-976559 = Monthly Credits
-monthly-credits-976559 = { "" }
-
-# English source:
-# msg-5h-session-de7ce8 = 5h Session
-msg-5h-session-de7ce8 = { "" }
-
-# English source:
 # name-weekly = { $name } weekly
 name-weekly = { "" }
 
@@ -3169,11 +3161,6 @@ this-provider-does-not-use-a-config-folder = { "" }
 # English source:
 # could-not-save-provider-settings-error-restoring-its-previous-cre = Could not save provider settings ({ $error }); restoring its previous credential also failed ({ $rollback_error }).
 could-not-save-provider-settings-error-restoring-its-previous-cre = { "" }
-
-# English source:
-# msg-5h-7d = 5h  |  { $v0 }  |  { $v1 }
-#     7d  |  { $v2 }  |  { $v3 }
-msg-5h-7d = { "" }
 
 # English source:
 # api-key-count = { $v0 ->
