@@ -1120,13 +1120,8 @@ mod windows_impl {
 
     use anyhow::{Context, Result};
     use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
         Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT},
         System::LibraryLoader::{GetModuleHandleW, GetProcAddress},
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-            RegCreateKeyExW, RegSetValueExW,
-        },
         UI::Shell::{
             QUNS_ACCEPTS_NOTIFICATIONS, QUNS_QUIET_TIME, SHQueryUserNotificationState,
             SetCurrentProcessExplicitAppUserModelID,
@@ -1137,7 +1132,7 @@ mod windows_impl {
 
     pub(super) fn initialize() -> Result<()> {
         register_aumid().context("register AUMID")?;
-        let aumid: Vec<u16> = AUMID.encode_utf16().chain(std::iter::once(0)).collect();
+        let aumid = crate::win32::wide(AUMID);
         let status = unsafe { SetCurrentProcessExplicitAppUserModelID(aumid.as_ptr()) };
         anyhow::ensure!(
             status == 0,
@@ -1172,11 +1167,7 @@ mod windows_impl {
         static QUERY: OnceLock<Option<NtQueryWnfStateData>> = OnceLock::new();
 
         let Some(query) = *QUERY.get_or_init(|| {
-            let ntdll: Vec<u16> = "ntdll.dll"
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect();
-            let module = unsafe { GetModuleHandleW(ntdll.as_ptr()) };
+            let module = unsafe { GetModuleHandleW(crate::win32::wide("ntdll.dll").as_ptr()) };
             if module.is_null() {
                 return None;
             }
@@ -1260,39 +1251,8 @@ mod windows_impl {
     }
 
     fn set_reg_sz(subkey: &str, name: &str, value: &str) -> Result<()> {
-        let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-        let name_w: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-        let data: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut key: HKEY = std::ptr::null_mut();
-        let status = unsafe {
-            RegCreateKeyExW(
-                HKEY_CURRENT_USER,
-                subkey_w.as_ptr(),
-                0,
-                std::ptr::null_mut(),
-                REG_OPTION_NON_VOLATILE,
-                KEY_SET_VALUE,
-                std::ptr::null(),
-                &mut key,
-                std::ptr::null_mut(),
-            )
-        };
-        anyhow::ensure!(
-            status == ERROR_SUCCESS,
-            "RegCreateKeyExW({subkey}): {status}"
-        );
-        let status = unsafe {
-            RegSetValueExW(
-                key,
-                name_w.as_ptr(),
-                0,
-                REG_SZ,
-                data.as_ptr().cast(),
-                (data.len() * size_of::<u16>()) as u32,
-            )
-        };
-        unsafe { RegCloseKey(key) };
-        anyhow::ensure!(status == ERROR_SUCCESS, "RegSetValueExW({name}): {status}");
-        Ok(())
+        crate::win32::RegKey::create_hkcu(subkey)?
+            .set_string(name, value)
+            .map_err(|status| anyhow::anyhow!("RegSetValueExW({name}): {status}"))
     }
 }

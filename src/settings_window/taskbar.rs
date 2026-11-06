@@ -178,7 +178,7 @@ impl SettingsWindow {
         widgets: &[TaskbarWidget],
         window: &Window,
     ) -> Option<(Arc<gpui::Image>, (f32, f32))> {
-        let light = crate::taskbar::uses_light_theme();
+        let light = crate::win32::shell_uses_light_theme();
         let scale = window.scale_factor();
         let cache_key = PreviewKey {
             widgets: widgets.to_vec(),
@@ -228,7 +228,7 @@ impl SettingsWindow {
         widgets: &[TaskbarWidget],
         window: &Window,
     ) -> AnyElement {
-        let light = crate::taskbar::uses_light_theme();
+        let light = crate::win32::shell_uses_light_theme();
         div()
             .h(px(TASKBAR_HEIGHT))
             .flex_none()
@@ -245,7 +245,7 @@ impl SettingsWindow {
 
     /// The whole strip beside a mock notification area and clock.
     fn taskbar_mock(&mut self, k: &Kit, widgets: &[TaskbarWidget], window: &Window) -> AnyElement {
-        let light = crate::taskbar::uses_light_theme();
+        let light = crate::win32::shell_uses_light_theme();
         let text = if light {
             rgb8((0x1A, 0x1A, 0x1A))
         } else {
@@ -773,7 +773,7 @@ impl SettingsWindow {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let light = crate::taskbar::uses_light_theme();
+        let light = crate::win32::shell_uses_light_theme();
         let tiles = TaskbarWidgetStyle::ALL
             .into_iter()
             .map(|style| {

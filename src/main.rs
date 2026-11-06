@@ -145,18 +145,11 @@ fn run() -> Result<()> {
 fn show_error(message: &str) {
     #[cfg(windows)]
     {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
+        use codex_minibar::win32::wide;
         use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
-        let text: Vec<u16> = OsStr::new(message)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let caption: Vec<u16> = OsStr::new("Codex Minibar")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
+        let text = wide(message);
+        let caption = wide("Codex Minibar");
         unsafe {
             MessageBoxW(
                 std::ptr::null_mut(),

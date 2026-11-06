@@ -473,44 +473,9 @@ fn windows_time_format() -> Option<TimeFormat> {
 
 #[cfg(windows)]
 fn read_international_value(name: &str) -> Option<String> {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegGetValueW,
-            RegOpenKeyExW,
-        },
-    };
-
-    let subkey: Vec<u16> = "Control Panel\\International"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let value_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut key: HKEY = std::ptr::null_mut();
-    let status =
-        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut key) };
-    if status != ERROR_SUCCESS {
-        return None;
-    }
-    let mut data = [0u16; 64];
-    let mut data_size = (std::mem::size_of_val(&data)) as u32;
-    let result = unsafe {
-        RegGetValueW(
-            key,
-            std::ptr::null(),
-            value_name.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            data.as_mut_ptr().cast(),
-            &mut data_size,
-        )
-    };
-    unsafe { RegCloseKey(key) };
-    if result != ERROR_SUCCESS {
-        return None;
-    }
-    let units = (data_size as usize / 2).saturating_sub(1).min(data.len());
-    Some(String::from_utf16_lossy(&data[..units]).trim().to_string())
+    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
+    let key = crate::win32::RegKey::open(HKEY_CURRENT_USER, r"Control Panel\International")?;
+    Some(key.string(name)?.to_string_lossy().trim().to_string())
 }
 
 /// How often one provider instance reads its quotas. Each instance polls on
@@ -3037,43 +3002,17 @@ impl Settings {
 }
 
 #[cfg(windows)]
-fn startup_registration_present() -> Result<bool> {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegGetValueW,
-            RegOpenKeyExW,
-        },
-    };
+const STARTUP_RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
+#[cfg(windows)]
+const STARTUP_VALUE: &str = "Codex Minibar";
 
-    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let value_name: Vec<u16> = "Codex Minibar"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut key: HKEY = std::ptr::null_mut();
-    let status =
-        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut key) };
-    if status != ERROR_SUCCESS {
-        return Ok(false);
-    }
-    let mut data_size = 0u32;
-    let result = unsafe {
-        RegGetValueW(
-            key,
-            std::ptr::null(),
-            value_name.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut data_size,
-        )
-    };
-    unsafe { RegCloseKey(key) };
-    Ok(result == ERROR_SUCCESS)
+#[cfg(windows)]
+fn startup_registration_present() -> Result<bool> {
+    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
+    Ok(
+        crate::win32::RegKey::open(HKEY_CURRENT_USER, STARTUP_RUN_KEY)
+            .is_some_and(|key| key.string(STARTUP_VALUE).is_some()),
+    )
 }
 
 #[cfg(not(windows))]
@@ -3083,68 +3022,23 @@ fn startup_registration_present() -> Result<bool> {
 
 #[cfg(windows)]
 fn apply_startup_registration(enabled: bool) -> Result<()> {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-            RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
-        },
-    };
-
-    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let value_name: Vec<u16> = "Codex Minibar"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut key: HKEY = std::ptr::null_mut();
-    let status = unsafe {
-        RegCreateKeyExW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            0,
-            std::ptr::null_mut(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
-            std::ptr::null(),
-            &mut key,
-            std::ptr::null_mut(),
-        )
-    };
-    anyhow::ensure!(
-        status == ERROR_SUCCESS,
-        "open Windows startup registry key: {status}"
-    );
-
+    let key = crate::win32::RegKey::create_hkcu(STARTUP_RUN_KEY)
+        .context("open Windows startup registry key")?;
     let result = if enabled {
         let executable =
             std::env::current_exe().context("resolve current executable for startup")?;
-        let command = format!("\"{}\"", executable.display());
-        let data: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe {
-            RegSetValueExW(
-                key,
-                value_name.as_ptr(),
-                0,
-                REG_SZ,
-                data.as_ptr().cast(),
-                (data.len() * size_of::<u16>()) as u32,
-            )
-        }
+        key.set_string(STARTUP_VALUE, format!("\"{}\"", executable.display()))
     } else {
-        unsafe { RegDeleteValueW(key, value_name.as_ptr()) }
+        key.delete_value(STARTUP_VALUE)
     };
-    unsafe { RegCloseKey(key) };
     // Deleting an already-absent Run value is success: the desired end state is
     // "not registered", whether we removed it now or it was never there.
     const ERROR_FILE_NOT_FOUND: u32 = 2;
-    anyhow::ensure!(
-        result == ERROR_SUCCESS || (!enabled && result == ERROR_FILE_NOT_FOUND),
-        "update Windows startup registration: {result}"
-    );
-    Ok(())
+    match result {
+        Ok(()) => Ok(()),
+        Err(ERROR_FILE_NOT_FOUND) if !enabled => Ok(()),
+        Err(status) => anyhow::bail!("update Windows startup registration: {status}"),
+    }
 }
 
 #[cfg(not(windows))]

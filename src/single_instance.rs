@@ -15,6 +15,7 @@ mod platform {
     };
 
     use crate::popup_window::ui::win32::POPUP_TITLE;
+    use crate::win32::wide;
 
     const MUTEX_NAME: &str = "Local\\CodexMinibar.9F89F5E9-770D-41AA-879F-9B15C12A2E6A";
 
@@ -94,10 +95,6 @@ mod platform {
         let title = wide(title);
         let hwnd = unsafe { FindWindowW(ptr::null(), title.as_ptr()) };
         (!hwnd.is_null()).then_some(hwnd)
-    }
-
-    fn wide(value: &str) -> Vec<u16> {
-        value.encode_utf16().chain(Some(0)).collect()
     }
 }
 

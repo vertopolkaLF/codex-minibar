@@ -305,7 +305,7 @@ pub(crate) fn configure(hwnd: HWND) {
     POPUP_HWND.set(hwnd);
     unsafe {
         SetWindowSubclass(hwnd, Some(popup_subclass_proc), SUBCLASS_ID, 0);
-        let title: Vec<u16> = POPUP_TITLE.encode_utf16().chain(Some(0)).collect();
+        let title = crate::win32::wide(POPUP_TITLE);
         SetWindowTextW(hwnd, title.as_ptr());
     }
     restyle(hwnd);
@@ -414,7 +414,7 @@ unsafe extern "system" fn foreground_changed(
             let mut class = [0u16; 64];
             let len = unsafe { GetClassNameW(hwnd, class.as_mut_ptr(), class.len() as i32) }.max(0)
                 as usize;
-            if ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"]
+            if crate::win32::TASKBAR_CLASSES
                 .iter()
                 .any(|name| name.encode_utf16().eq(class[..len].iter().copied()))
             {
@@ -504,8 +504,8 @@ pub(crate) fn restore_position(position: &crate::settings::PopupPosition) -> (Mo
 
 /// The frame of the primary or secondary taskbar that lives on `monitor`.
 fn taskbar_on(monitor: HMONITOR) -> Option<Rect> {
-    for class in ["Shell_TrayWnd", "Shell_SecondaryTrayWnd"] {
-        let class: Vec<u16> = class.encode_utf16().chain(Some(0)).collect();
+    for class in crate::win32::TASKBAR_CLASSES {
+        let class = crate::win32::wide(class);
         let mut after: HWND = std::ptr::null_mut();
         loop {
             let taskbar = unsafe {

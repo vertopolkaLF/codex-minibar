@@ -49,4 +49,5 @@ pub(crate) mod usage_projects;
 pub mod vscode_themes;
 pub mod whats_new;
 pub mod widget_data;
+pub mod win32;
 pub mod worker;

@@ -33,17 +33,16 @@ use windows_sys::Win32::{
         },
         WindowsAndMessaging::{
             AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu,
-            DestroyWindow, DispatchMessageW, FindWindowExW, FindWindowW, GW_CHILD, GWL_STYLE,
-            GetClientRect, GetCursorPos, GetMessageW, GetWindow, GetWindowRect, HMENU,
-            HWND_MESSAGE, HWND_TOP, IDC_ARROW, IsWindow, KillTimer, LoadCursorW, MF_GRAYED,
-            MF_SEPARATOR, MF_STRING, MSG, PostMessageW, RegisterClassW, SW_SHOWNA, SWP_NOACTIVATE,
-            SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetParent, SetTimer,
-            SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN,
-            TPM_RETURNCMD, TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx,
-            TranslateMessage, ULW_ALPHA, UpdateLayeredWindow, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP,
-            WM_MOUSEMOVE, WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS,
-            WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT,
-            WS_POPUP,
+            DestroyWindow, DispatchMessageW, FindWindowExW, GW_CHILD, GWL_STYLE, GetClientRect,
+            GetCursorPos, GetMessageW, GetWindow, GetWindowRect, HMENU, HWND_MESSAGE, HWND_TOP,
+            IDC_ARROW, IsWindow, KillTimer, LoadCursorW, MF_GRAYED, MF_SEPARATOR, MF_STRING, MSG,
+            PostMessageW, RegisterClassW, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+            SWP_NOZORDER, SetForegroundWindow, SetParent, SetTimer, SetWindowLongPtrW,
+            SetWindowPos, ShowWindow, TPM_BOTTOMALIGN, TPM_LEFTALIGN, TPM_RETURNCMD,
+            TPM_RIGHTALIGN, TPM_RIGHTBUTTON, TPM_TOPALIGN, TrackPopupMenuEx, TranslateMessage,
+            ULW_ALPHA, UpdateLayeredWindow, WM_APP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+            WM_RBUTTONUP, WM_TIMER, WNDCLASSW, WS_CHILD, WS_CLIPSIBLINGS, WS_EX_LAYERED,
+            WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
         },
     },
 };
@@ -54,7 +53,7 @@ use super::{
     obstacles::Obstacles,
     render::{CARD_MARGIN, Item, Metrics, Renderer},
 };
-use crate::{limits::ProviderLimits, settings::TaskbarAlignment};
+use crate::{limits::ProviderLimits, settings::TaskbarAlignment, win32::wide};
 
 pub(super) enum Message {
     Config(Config),
@@ -137,10 +136,6 @@ fn trace(message: impl AsRef<str>) {
     #[cfg(debug_assertions)]
     eprintln!("taskbar: {}", message.as_ref());
     crate::logger::info(message);
-}
-
-fn wide(value: &str) -> Vec<u16> {
-    value.encode_utf16().chain(Some(0)).collect()
 }
 
 const CONTROLLER_CLASS: &str = "CodexMinibarTaskbarController";
@@ -1708,7 +1703,7 @@ fn key(rect: RECT) -> (i32, i32, i32, i32) {
 
 fn current_appearance(colored_icons: bool) -> Appearance {
     Appearance {
-        light: crate::taskbar::uses_light_theme(),
+        light: crate::win32::shell_uses_light_theme(),
         colored_icons,
         accent: crate::theme::current_accent_rgb(),
     }
@@ -1749,7 +1744,7 @@ unsafe fn child_span(taskbar: HWND, child: HWND, vertical: bool) -> (i32, i32) {
 fn locate(alignment: TaskbarAlignment) -> Option<Geometry> {
     use windows_sys::Win32::UI::WindowsAndMessaging::IsWindowVisible;
     unsafe {
-        let taskbar = FindWindowW(wide("Shell_TrayWnd").as_ptr(), null_mut());
+        let taskbar = crate::win32::primary_taskbar();
         if taskbar.is_null() {
             return None;
         }

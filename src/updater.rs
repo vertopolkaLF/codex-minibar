@@ -257,49 +257,15 @@ pub fn sync_installed_display_version() {
 
 #[cfg(windows)]
 fn sync_uninstall_display_version(version: &str) -> Result<()> {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_SZ, RegCloseKey, RegOpenKeyExW,
-            RegSetValueExW,
-        },
-    };
-
+    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
     // Installer writes HKCU (RequestExecutionLevel user) for each arch package.
     for arch in ["x86", "x64", "arm64"] {
         let subkey =
             format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Codex Minibar {arch}");
-        let subkey_w: Vec<u16> = subkey.encode_utf16().chain(std::iter::once(0)).collect();
-        let mut key: HKEY = std::ptr::null_mut();
-        let status = unsafe {
-            RegOpenKeyExW(
-                HKEY_CURRENT_USER,
-                subkey_w.as_ptr(),
-                0,
-                KEY_SET_VALUE,
-                &mut key,
-            )
-        };
-        if status != ERROR_SUCCESS {
+        let Some(key) = crate::win32::RegKey::open_for_write(HKEY_CURRENT_USER, subkey) else {
             continue;
-        }
-        let name_w: Vec<u16> = "DisplayVersion"
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
-        let data: Vec<u16> = version.encode_utf16().chain(std::iter::once(0)).collect();
-        let status = unsafe {
-            RegSetValueExW(
-                key,
-                name_w.as_ptr(),
-                0,
-                REG_SZ,
-                data.as_ptr().cast(),
-                (data.len() * size_of::<u16>()) as u32,
-            )
         };
-        unsafe { RegCloseKey(key) };
-        if status != ERROR_SUCCESS {
+        if let Err(status) = key.set_string("DisplayVersion", version) {
             bail!("RegSetValueExW(DisplayVersion) for {arch}: {status}");
         }
     }

@@ -460,7 +460,7 @@ pub enum InstallPhase {
 #[cfg(windows)]
 pub fn is_installed() -> bool {
     use windows_sys::Win32::Storage::Packaging::Appx::GetPackagesByPackageFamily;
-    let family: Vec<u16> = PACKAGE_FAMILY.encode_utf16().chain(Some(0)).collect();
+    let family = crate::win32::wide(PACKAGE_FAMILY);
     let mut count = 0u32;
     let mut buffer_length = 0u32;
     // SAFETY: null buffers ask only for the counts.
@@ -550,6 +550,7 @@ pub fn uninstall_async(on_phase: impl Fn(InstallPhase) + Send + 'static) {
 
 #[cfg(windows)]
 fn run_elevated_powershell(script: &str) -> anyhow::Result<()> {
+    use crate::win32::wide;
     use windows_sys::Win32::{
         Foundation::{CloseHandle, WAIT_OBJECT_0},
         System::Threading::{GetExitCodeProcess, INFINITE, WaitForSingleObject},
@@ -558,7 +559,6 @@ fn run_elevated_powershell(script: &str) -> anyhow::Result<()> {
             WindowsAndMessaging::SW_HIDE,
         },
     };
-    let wide = |text: &str| text.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
     // A failing cmdlet must set the exit code the caller reads.
     let wrapped = format!("$ErrorActionPreference = 'Stop'; try {{ {script} }} catch {{ exit 1 }}");
     let encoded = {
@@ -571,7 +571,7 @@ fn run_elevated_powershell(script: &str) -> anyhow::Result<()> {
     };
     let verb = wide("runas");
     let file = wide("powershell.exe");
-    let parameters = wide(&format!(
+    let parameters = wide(format!(
         "-NoProfile -NonInteractive -ExecutionPolicy Bypass -EncodedCommand {encoded}"
     ));
     // SAFETY: zeroed is a valid empty SHELLEXECUTEINFOW; every pointer set

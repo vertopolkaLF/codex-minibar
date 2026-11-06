@@ -368,11 +368,10 @@ fn stretched(configured: Duration, floor: Duration, ceiling: Duration) -> Durati
 mod os {
     use std::os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle};
 
-    use windows_sys::Win32::Foundation::{ERROR_SUCCESS, STILL_ACTIVE};
-    use windows_sys::Win32::System::Registry::{
-        HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_ANY, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW,
-        RegGetValueW, RegOpenKeyExW,
-    };
+    use windows_sys::Win32::Foundation::STILL_ACTIVE;
+    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
+
+    use crate::win32::RegKey;
     use windows_sys::Win32::System::Threading::{
         GetCurrentProcessId, GetExitCodeProcess, OpenProcess, PROCESS_NAME_WIN32,
         PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
@@ -448,94 +447,24 @@ mod os {
     /// Executables Game Bar knows as games. Undocumented but stable
     /// since Windows 10; any failure reads as an empty catalog.
     pub(super) fn game_bar_catalog() -> Vec<String> {
-        let wide = |value: &str| {
-            value
-                .encode_utf16()
-                .chain(std::iter::once(0))
-                .collect::<Vec<_>>()
-        };
-        let mut key: HKEY = std::ptr::null_mut();
-        let opened = unsafe {
-            RegOpenKeyExW(
-                HKEY_CURRENT_USER,
-                wide("System\\GameConfigStore\\Children").as_ptr(),
-                0,
-                KEY_READ,
-                &mut key,
-            )
-        };
-        if opened != ERROR_SUCCESS {
+        let Some(key) = RegKey::open(HKEY_CURRENT_USER, r"System\GameConfigStore\Children") else {
             return Vec::new();
-        }
-        let value = wide("MatchedExeFullPath");
-        let identity = [wide("TitleId"), wide("GameDVR_GameGUID")];
-        let mut paths = Vec::new();
-        for index in 0.. {
-            let mut name = [0_u16; 256];
-            let mut name_len = name.len() as u32;
-            let status = unsafe {
-                RegEnumKeyExW(
-                    key,
-                    index,
-                    name.as_mut_ptr(),
-                    &mut name_len,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                )
-            };
-            if status != ERROR_SUCCESS {
-                break;
-            }
-            // The enumerated name comes back null-terminated.
-            let mut path = [0_u16; 1024];
-            let mut bytes = std::mem::size_of_val(&path) as u32;
-            let status = unsafe {
-                RegGetValueW(
-                    key,
-                    name.as_ptr(),
-                    value.as_ptr(),
-                    RRF_RT_REG_SZ,
-                    std::ptr::null_mut(),
-                    path.as_mut_ptr().cast(),
-                    &mut bytes,
-                )
-            };
-            if status != ERROR_SUCCESS {
-                continue;
-            }
-            // Games carry a store title id or a Game DVR id (Game Bar adds
-            // one when the user marks an app as a game). Entries with
-            // neither are shortcuts Windows keeps for other reasons, such
-            // as Chrome's.
-            let identified = identity.iter().any(|value| {
-                let status = unsafe {
-                    RegGetValueW(
-                        key,
-                        name.as_ptr(),
-                        value.as_ptr(),
-                        RRF_RT_ANY,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                    )
-                };
-                status == ERROR_SUCCESS
-            });
-            if !identified {
-                continue;
-            }
-            let len = path
-                .iter()
-                .position(|&unit| unit == 0)
-                .unwrap_or(path.len());
-            if len > 0 {
-                paths.push(String::from_utf16_lossy(&path[..len]));
-            }
-        }
-        unsafe { RegCloseKey(key) };
-        paths
+        };
+        key.subkey_names()
+            .into_iter()
+            .filter_map(|name| key.subkey(name))
+            .filter_map(|child| {
+                // Games carry a store title id or a Game DVR id (Game Bar adds
+                // one when the user marks an app as a game). Entries with
+                // neither are shortcuts Windows keeps for other reasons, such
+                // as Chrome's.
+                let path = child.string("MatchedExeFullPath")?;
+                let identified = ["TitleId", "GameDVR_GameGUID"]
+                    .iter()
+                    .any(|value| child.has_value(value));
+                (identified && !path.is_empty()).then(|| path.to_string_lossy().into_owned())
+            })
+            .collect()
     }
 }
 

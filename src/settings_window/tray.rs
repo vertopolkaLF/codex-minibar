@@ -353,7 +353,7 @@ impl SettingsWindow {
         let key = PreviewKey {
             widget: widget.clone(),
             accent: crate::theme::current_accent_rgb(),
-            light: crate::tray::system_uses_light_theme(),
+            light: crate::win32::shell_uses_light_theme(),
             time_format: TimeFormat::current(),
             minute: std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -373,7 +373,7 @@ impl SettingsWindow {
             }
         };
         // The tray paints over the taskbar; give the preview the same plate.
-        let plate = if crate::tray::system_uses_light_theme() {
+        let plate = if crate::win32::shell_uses_light_theme() {
             rgb8((0xEE, 0xEE, 0xEE))
         } else {
             rgb8((0x1C, 0x1C, 0x1C))

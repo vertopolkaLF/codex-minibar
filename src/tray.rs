@@ -112,45 +112,6 @@ fn tray_text_color(uses_light_theme: bool) -> [u8; 3] {
     }
 }
 
-/// `AppsUseLightTheme` is the source Windows itself uses for application
-/// surfaces. Treat an unreadable value as light so tray text never disappears
-/// against the ordinary light notification area.
-#[cfg(windows)]
-pub(crate) fn system_uses_light_theme() -> bool {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW},
-    };
-
-    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let value_name: Vec<u16> = "AppsUseLightTheme"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut value = 1u32;
-    let mut value_size = size_of::<u32>() as u32;
-    let status = unsafe {
-        RegGetValueW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            value_name.as_ptr(),
-            RRF_RT_REG_DWORD,
-            std::ptr::null_mut(),
-            &mut value as *mut u32 as *mut _,
-            &mut value_size,
-        )
-    };
-    status == ERROR_SUCCESS && value != 0
-}
-
-#[cfg(not(windows))]
-pub(crate) fn system_uses_light_theme() -> bool {
-    true
-}
-
 fn system_font() -> Option<&'static Font> {
     static FONT: OnceLock<Option<Font>> = OnceLock::new();
     FONT.get_or_init(|| {
@@ -181,7 +142,7 @@ fn indicator_color(
             Some(0..=15) => [230, 74, 72],
             Some(16..=50) => [245, 158, 11],
             Some(_) => [49, 196, 141],
-            None => tray_text_color(system_uses_light_theme()),
+            None => tray_text_color(crate::win32::shell_uses_light_theme()),
         },
         TrayColorMode::Fixed => [
             indicator.fixed_color.red,
@@ -193,7 +154,7 @@ fn indicator_color(
             [red, green, blue]
         }
         TrayColorMode::Accent => accent,
-        TrayColorMode::Monochrome => tray_text_color(system_uses_light_theme()),
+        TrayColorMode::Monochrome => tray_text_color(crate::win32::shell_uses_light_theme()),
     }
 }
 
@@ -556,7 +517,7 @@ mod platform {
                 last_tooltips: Vec::new(),
                 update_available: false,
                 language: crate::i18n::current_language(),
-                uses_light_theme: system_uses_light_theme(),
+                uses_light_theme: crate::win32::shell_uses_light_theme(),
                 next_theme_check: Instant::now(),
             }
         }
@@ -567,7 +528,7 @@ mod platform {
             limits: &ProviderLimits,
             update_available: bool,
         ) -> Result<()> {
-            self.uses_light_theme = system_uses_light_theme();
+            self.uses_light_theme = crate::win32::shell_uses_light_theme();
             self.next_theme_check = Instant::now() + Duration::from_millis(250);
             crate::taskbar::set_update_available(update_available);
             let language = crate::i18n::current_language();
@@ -639,7 +600,7 @@ mod platform {
                 return Ok(());
             }
             self.next_theme_check = Instant::now() + Duration::from_millis(250);
-            if system_uses_light_theme() == self.uses_light_theme {
+            if crate::win32::shell_uses_light_theme() == self.uses_light_theme {
                 return Ok(());
             }
             self.sync(widgets, limits, self.update_available)
@@ -914,7 +875,7 @@ mod tests {
         let accent = [0, 120, 212];
         assert_eq!(
             indicator_color(&indicator, codex, None, accent),
-            tray_text_color(system_uses_light_theme())
+            tray_text_color(crate::win32::shell_uses_light_theme())
         );
         assert_eq!(
             indicator_color(&indicator, codex, Some(80), accent),

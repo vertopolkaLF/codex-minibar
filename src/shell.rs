@@ -32,18 +32,14 @@ fn open_shell_target(target: std::ffi::OsString, description: String) -> Result<
 fn shell_execute(target: &std::ffi::OsStr, description: &str) -> Result<()> {
     #[cfg(windows)]
     {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
+        use crate::win32::wide;
         use windows_sys::Win32::System::Com::{
             COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoInitializeEx, CoUninitialize,
         };
         use windows_sys::Win32::UI::Shell::ShellExecuteW;
 
-        let operation: Vec<u16> = OsStr::new("open")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let target: Vec<u16> = target.encode_wide().chain(std::iter::once(0)).collect();
+        let operation = wide("open");
+        let target = wide(target);
         // Shell extensions behind ShellExecuteW may require an STA.
         let com = unsafe {
             CoInitializeEx(

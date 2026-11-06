@@ -101,11 +101,7 @@ fn run() {
 
 fn measure(automation: &IUIAutomation) -> Option<Obstacles> {
     unsafe {
-        let class = "Shell_TrayWnd\0".encode_utf16().collect::<Vec<_>>();
-        let taskbar = windows_sys::Win32::UI::WindowsAndMessaging::FindWindowW(
-            class.as_ptr(),
-            std::ptr::null(),
-        );
+        let taskbar = crate::win32::primary_taskbar();
         if taskbar.is_null() {
             return None;
         }
@@ -152,7 +148,7 @@ fn measure(automation: &IUIAutomation) -> Option<Obstacles> {
 
 fn find_child(parent: HWND, class: &str) -> Option<HWND> {
     use windows_sys::Win32::UI::WindowsAndMessaging::{FindWindowExW, IsWindowVisible};
-    let class = class.encode_utf16().chain([0]).collect::<Vec<_>>();
+    let class = crate::win32::wide(class);
     let child = unsafe {
         FindWindowExW(
             parent.0,

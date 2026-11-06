@@ -117,104 +117,24 @@ fn desktop_paths_from_packages(packages: &Path) -> Vec<PathBuf> {
 
 #[cfg(windows)]
 fn desktop_app_locations_from_registry() -> Vec<PathBuf> {
-    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegEnumKeyExW,
-            RegGetValueW, RegOpenKeyExW,
-        },
-    };
+    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
 
-    const KEY: &str = "Software\\Classes\\Local Settings\\Software\\Microsoft\\Windows\\CurrentVersion\\AppModel\\Repository\\Packages";
-    let wide = |value: &str| {
-        value
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>()
-    };
-    let mut key: HKEY = std::ptr::null_mut();
-    if unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, wide(KEY).as_ptr(), 0, KEY_READ, &mut key) }
-        != ERROR_SUCCESS
-    {
+    const KEY: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
+    let Some(key) = crate::win32::RegKey::open(HKEY_CURRENT_USER, KEY) else {
         return Vec::new();
-    }
-
-    let mut paths = Vec::new();
-    let mut index = 0;
-    loop {
-        let mut name = [0_u16; 512];
-        let mut name_len = name.len() as u32;
-        let status = unsafe {
-            RegEnumKeyExW(
-                key,
-                index,
-                name.as_mut_ptr(),
-                &mut name_len,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-            )
-        };
-        if status != ERROR_SUCCESS {
-            break;
-        }
-        index += 1;
-        let package_name = OsString::from_wide(&name[..name_len as usize]);
-        if package_name
-            .to_str()
-            .and_then(desktop_cache::package_version)
-            .is_none()
-        {
-            continue;
-        }
-
-        let mut package_key: HKEY = std::ptr::null_mut();
-        let package_name_wide = name[..name_len as usize]
-            .iter()
-            .copied()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>();
-        if unsafe {
-            RegOpenKeyExW(
-                key,
-                package_name_wide.as_ptr(),
-                0,
-                KEY_READ,
-                &mut package_key,
-            )
-        } != ERROR_SUCCESS
-        {
-            continue;
-        }
-        let mut root = [0_u16; 1024];
-        let mut bytes = std::mem::size_of_val(&root) as u32;
-        let status = unsafe {
-            RegGetValueW(
-                package_key,
-                std::ptr::null(),
-                wide("PackageRootFolder").as_ptr(),
-                RRF_RT_REG_SZ,
-                std::ptr::null_mut(),
-                root.as_mut_ptr().cast(),
-                &mut bytes,
-            )
-        };
-        unsafe { RegCloseKey(package_key) };
-        if status == ERROR_SUCCESS {
-            let len = root
-                .iter()
-                .position(|&unit| unit == 0)
-                .unwrap_or(root.len());
-            let source =
-                PathBuf::from(OsString::from_wide(&root[..len])).join("app/resources/codex.exe");
-            if source.is_file() {
-                paths.push(source);
-            }
-        }
-    }
-    unsafe { RegCloseKey(key) };
+    };
+    let mut paths: Vec<PathBuf> = key
+        .subkey_names()
+        .into_iter()
+        .filter(|name| {
+            name.to_str()
+                .and_then(desktop_cache::package_version)
+                .is_some()
+        })
+        .filter_map(|name| key.subkey(name)?.string("PackageRootFolder"))
+        .map(|root| PathBuf::from(root).join("app/resources/codex.exe"))
+        .filter(|source| source.is_file())
+        .collect();
     sort_desktop_paths(&mut paths);
     paths
 }

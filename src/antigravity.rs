@@ -260,10 +260,7 @@ fn credential_blob() -> Result<Vec<u8>> {
         CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
     };
 
-    let target = CREDENTIAL_TARGET
-        .encode_utf16()
-        .chain(Some(0))
-        .collect::<Vec<_>>();
+    let target = crate::win32::wide(CREDENTIAL_TARGET);
     let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
     let found = unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) } != 0;
     if !found || credential.is_null() {

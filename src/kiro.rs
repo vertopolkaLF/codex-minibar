@@ -433,14 +433,8 @@ fn executable_from_crew_path(path: &Path, allow_explicit_file: bool) -> Option<P
 
 #[cfg(windows)]
 fn registered_crew_install_locations() -> Vec<PathBuf> {
-    use std::{ffi::OsString, os::windows::ffi::OsStringExt};
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, RRF_RT_REG_SZ, RegCloseKey,
-            RegEnumKeyExW, RegGetValueW, RegOpenKeyExW,
-        },
-    };
+    use crate::win32::RegKey;
+    use windows_sys::Win32::System::Registry::{HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE};
 
     const UNINSTALL_KEYS: [(HKEY, &str); 3] = [
         (
@@ -456,78 +450,20 @@ fn registered_crew_install_locations() -> Vec<PathBuf> {
             r"Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
         ),
     ];
-    let wide = |value: &str| {
-        value
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect::<Vec<_>>()
-    };
-    let read_value = |key: HKEY, name: &str| -> Option<String> {
-        let value_name = wide(name);
-        let mut value = [0_u16; 2048];
-        let mut size = std::mem::size_of_val(&value) as u32;
-        let status = unsafe {
-            RegGetValueW(
-                key,
-                std::ptr::null(),
-                value_name.as_ptr(),
-                RRF_RT_REG_SZ,
-                std::ptr::null_mut(),
-                value.as_mut_ptr().cast(),
-                &mut size,
-            )
-        };
-        if status != ERROR_SUCCESS {
-            return None;
-        }
-        let len = value
-            .iter()
-            .position(|unit| *unit == 0)
-            .unwrap_or(value.len());
-        Some(String::from_utf16_lossy(&value[..len]).trim().to_owned())
+    let read_value = |key: &RegKey, name: &str| -> Option<String> {
+        Some(key.string(name)?.to_string_lossy().trim().to_owned())
     };
 
     let mut locations = Vec::new();
     for (hive, key_path) in UNINSTALL_KEYS {
-        let mut root: HKEY = std::ptr::null_mut();
-        if unsafe { RegOpenKeyExW(hive, wide(key_path).as_ptr(), 0, KEY_READ, &mut root) }
-            != ERROR_SUCCESS
-        {
+        let Some(root) = RegKey::open(hive, key_path) else {
             continue;
-        }
-        let mut index = 0;
-        loop {
-            let mut name = [0_u16; 512];
-            let mut name_len = name.len() as u32;
-            if unsafe {
-                RegEnumKeyExW(
-                    root,
-                    index,
-                    name.as_mut_ptr(),
-                    &mut name_len,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                )
-            } != ERROR_SUCCESS
-            {
-                break;
-            }
-            index += 1;
-            let subkey_name = OsString::from_wide(&name[..name_len as usize]);
-            let mut install_key: HKEY = std::ptr::null_mut();
-            let subkey = name[..name_len as usize]
-                .iter()
-                .copied()
-                .chain(std::iter::once(0))
-                .collect::<Vec<_>>();
-            if unsafe { RegOpenKeyExW(root, subkey.as_ptr(), 0, KEY_READ, &mut install_key) }
-                != ERROR_SUCCESS
-            {
+        };
+        for subkey_name in root.subkey_names() {
+            let Some(install_key) = root.subkey(&subkey_name) else {
                 continue;
-            }
-            let product_name = read_value(install_key, "DisplayName")
+            };
+            let product_name = read_value(&install_key, "DisplayName")
                 .unwrap_or_else(|| subkey_name.to_string_lossy().into_owned());
             let normalized_name = product_name
                 .chars()
@@ -536,11 +472,11 @@ fn registered_crew_install_locations() -> Vec<PathBuf> {
                 .to_ascii_lowercase();
             if normalized_name.contains("kirocrew") {
                 if let Some(location) =
-                    read_value(install_key, "InstallLocation").filter(|value| !value.is_empty())
+                    read_value(&install_key, "InstallLocation").filter(|value| !value.is_empty())
                 {
                     locations.push(PathBuf::from(location));
                 }
-                if let Some(icon) = read_value(install_key, "DisplayIcon") {
+                if let Some(icon) = read_value(&install_key, "DisplayIcon") {
                     let icon = icon.trim();
                     let icon_path = if let Some(quoted) = icon.strip_prefix('"') {
                         quoted.split_once('"').map_or(quoted, |(path, _)| path)
@@ -552,9 +488,7 @@ fn registered_crew_install_locations() -> Vec<PathBuf> {
                     }
                 }
             }
-            unsafe { RegCloseKey(install_key) };
         }
-        unsafe { RegCloseKey(root) };
     }
     locations
 }
