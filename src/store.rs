@@ -721,7 +721,15 @@ impl ProviderStore {
                     requests=excluded.requests,
                     estimated_cost_microusd=excluded.estimated_cost_microusd,
                     priced_requests=excluded.priced_requests,
-                    cache_savings_microusd=excluded.cache_savings_microusd",
+                    cache_savings_microusd=excluded.cache_savings_microusd
+                 WHERE (usage_hourly.input_tokens, usage_hourly.cached_input_tokens,
+                        usage_hourly.output_tokens, usage_hourly.requests,
+                        usage_hourly.estimated_cost_microusd, usage_hourly.priced_requests,
+                        usage_hourly.cache_savings_microusd)
+                    <> (excluded.input_tokens, excluded.cached_input_tokens,
+                        excluded.output_tokens, excluded.requests,
+                        excluded.estimated_cost_microusd, excluded.priced_requests,
+                        excluded.cache_savings_microusd)",
             )?;
             for (hour, usage) in hours {
                 let hour_key = hour_key(*hour);
@@ -2248,6 +2256,25 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap()
+    }
+
+    #[test]
+    fn unchanged_hourly_rollups_do_not_write_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(&dir.path().join("hourly.sqlite"));
+        let provider = id(ProviderKind::Codex);
+        let at = truncate_local_hour(Local::now());
+        let rows = vec![(at, hour_usage(10))];
+        store.replace_usage_hourly(provider, &rows).unwrap();
+        let before = store.conn.total_changes();
+        store.replace_usage_hourly(provider, &rows).unwrap();
+        assert_eq!(store.conn.total_changes(), before);
+        store
+            .replace_usage_hourly(provider, &[(at, hour_usage(11))])
+            .unwrap();
+        assert_eq!(store.conn.total_changes(), before + 1);
+        let loaded = store.load_usage_hourly(provider, at, at).unwrap();
+        assert_eq!(loaded[&at], hour_usage(11));
     }
 
     #[test]
