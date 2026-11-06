@@ -375,10 +375,18 @@ impl SettingsWindow {
                 }),
             );
             let check = match reason {
-                Some(reason) => {
-                    kit::tooltip_host(k, format!("usage-tip-{}", provider.id()), reason, check)
-                }
-                None => check,
+                Some(reason) => kit::tooltip_host(
+                    k,
+                    format!("usage-tip-{}", provider.id()),
+                    format!("{}\n{reason}", provider.qualified_name()),
+                    check,
+                ),
+                None => kit::tooltip_host(
+                    k,
+                    format!("usage-tip-{}", provider.id()),
+                    provider.qualified_name(),
+                    check,
+                ),
             };
             grid = grid.child(div().w(relative(1.0 / 3.0)).pr(px(12.0)).child(check));
         }

@@ -1478,18 +1478,23 @@ pub(crate) fn checkbox(
     el = el
         .flex()
         .items_center()
+        .min_w_0()
         .gap(px(10.0))
         .child(box_el)
         .when_some(label, |el, label| {
-            el.child(text(
-                label,
-                14.0,
-                if disabled {
-                    theme.text_disabled
-                } else {
-                    theme.text
-                },
-            ))
+            el.child(
+                text(
+                    label,
+                    14.0,
+                    if disabled {
+                        theme.text_disabled
+                    } else {
+                        theme.text
+                    },
+                )
+                .min_w_0()
+                .truncate(),
+            )
         });
     if !disabled {
         el = el.cursor_pointer().on_click(move |_, window, cx| {
