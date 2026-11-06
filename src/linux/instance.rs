@@ -252,20 +252,50 @@ pub fn show_initial_window(onboarding_needed: bool) {
 fn serve(listener: UnixListener) {
     for stream in listener.incoming() {
         let Ok(mut stream) = stream else { continue };
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-        let mut request = Vec::with_capacity(64);
-        if (&mut stream)
-            .take(MAX_REQUEST)
-            .read_to_end(&mut request)
-            .is_err()
-        {
-            continue;
-        }
+        let request = match read_request(&mut stream, Duration::from_secs(2)) {
+            Ok(request) => request,
+            Err(error) => {
+                crate::logger::info(format!("Ignoring incomplete activation request: {error}"));
+                continue;
+            }
+        };
         if let Some(token) = parse_request(&request, ACTIVATE) {
             set_activation_token(token);
             activate();
         } else if let Some(token) = parse_request(&request, TOGGLE) {
             toggle_with_token(token);
+        }
+    }
+}
+
+// A per-read socket timeout alone lets a peer keep the serial listener busy
+// indefinitely by sending a byte before each timeout. Bound the whole frame.
+fn read_request(stream: &mut UnixStream, timeout: Duration) -> std::io::Result<Vec<u8>> {
+    let started = Instant::now();
+    let mut request = Vec::with_capacity(64);
+    loop {
+        let remaining = timeout.saturating_sub(started.elapsed());
+        if remaining.is_zero() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "activation request timed out",
+            ));
+        }
+        stream.set_read_timeout(Some(remaining))?;
+        let mut buffer = [0; 512];
+        match stream.read(&mut buffer) {
+            Ok(0) => return Ok(request),
+            Ok(count) => {
+                request.extend_from_slice(&buffer[..count]);
+                if request.len() > MAX_REQUEST as usize {
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        "activation request too large",
+                    ));
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(error) => return Err(error),
         }
     }
 }
@@ -409,6 +439,46 @@ fn activate() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activation_request_deadline_bounds_a_trickling_peer() {
+        let (mut reader, mut writer) = UnixStream::pair().unwrap();
+        let peer = std::thread::spawn(move || {
+            for _ in 0..100 {
+                if writer.write_all(b"a").is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        });
+        let started = Instant::now();
+        let result = read_request(&mut reader, Duration::from_millis(100));
+        drop(reader);
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+        peer.join().unwrap();
+    }
+
+    #[test]
+    fn activation_request_reader_preserves_frames_and_rejects_oversize_input() {
+        for (data, valid) in [
+            (b"activate\n".to_vec(), true),
+            (vec![b'a'; MAX_REQUEST as usize + 1], false),
+        ] {
+            let (mut reader, mut writer) = UnixStream::pair().unwrap();
+            let peer = std::thread::spawn(move || {
+                let _ = writer.write_all(&data);
+            });
+            let result = read_request(&mut reader, Duration::from_secs(2));
+            if valid {
+                assert_eq!(result.unwrap(), b"activate\n");
+            } else {
+                assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+            }
+            drop(reader);
+            peer.join().unwrap();
+        }
+    }
 
     #[test]
     fn toggle_request_detection_accepts_non_utf8_unrelated_arguments() {
