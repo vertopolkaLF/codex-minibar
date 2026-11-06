@@ -16,13 +16,18 @@ use directories::BaseDirs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::banked_reset::Outcome;
+use crate::drivers::{
+    Driver, FolderField, InstallSource, InstallStatus, ResetResult, SettingsCopy, Sources,
+    display_path,
+};
 use crate::instances::{ProviderId, ProviderInstance};
 use crate::limits::{
     AdditionalLimit, Credits, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary,
     RateLimits,
 };
 use crate::usage;
-use crate::worker::{Activator, LimitProvider, UsageProvider};
+use crate::worker::{Activator, LimitProvider, UsageProvider, WorkerHandle, WorkerOptions};
 
 pub const ACTIVATION_PROMPT: &str = "Reply exactly: a";
 pub const ACTIVATION_MODEL: &str = "gpt-5.6-luna";
@@ -43,6 +48,7 @@ pub fn cleanup_abandoned_logins() -> Result<()> {
 }
 
 /// Reads one Codex instance's quota from its own `CODEX_HOME`.
+#[derive(Clone)]
 pub struct CodexClient {
     executable: PathBuf,
     timeout: StdDuration,
@@ -318,7 +324,7 @@ impl CodexClient {
 
     /// The same account-level app-server method used by T3 Code. No model
     /// request is sent and CODEX_HOME stays scoped to this instance.
-    pub(crate) fn consume_reset(&self) -> Result<crate::banked_reset::Outcome> {
+    pub(crate) fn consume_reset(&self) -> Result<Outcome> {
         let credentials = load_oauth_credentials(&auth_json_path(self.home.as_deref()))?;
         let account = credentials
             .account_id
@@ -343,7 +349,7 @@ impl CodexClient {
             );
             crate::provider_support::terminate(&mut child);
             let response = result?;
-            crate::banked_reset::Outcome::parse(
+            reset_outcome(
                 response
                     .pointer("/result/outcome")
                     .and_then(Value::as_str)
@@ -978,16 +984,107 @@ pub fn first_available(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Codex executable was not found"))
 }
 
-/// Returns whether a local Codex CLI or the Codex desktop-app CLI bridge is
-/// present. This is intentionally filesystem-only so onboarding never starts
-/// a provider process merely to identify an installation.
-pub fn is_installed(explicit: Option<&Path>) -> bool {
-    first_available(explicit).is_ok()
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::APP_AND_CLI,
+    copy: settings_copy,
+    forget_secrets: None,
+    consume_reset: Some(consume_reset),
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let executable =
+        first_available(instance.binary_path.as_deref()).unwrap_or_else(|_| PathBuf::from("codex"));
+    crate::logger::info(format!(
+        "{} executable: {}",
+        instance.provider_id().display_name(),
+        executable.display()
+    ));
+    let client = CodexClient::for_instance(&executable, instance);
+    let activator = CodexActivator::new(executable).with_home(instance.config_folder());
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        Some(Box::new(activator)),
+        options,
+    ))
+}
+
+/// Filesystem-only, so detection never starts a provider process merely to
+/// identify an installation.
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let candidates = discovery::discover(instance.binary_path.as_deref());
+    let path = |desktop_app: bool| {
+        candidates
+            .iter()
+            .find(|candidate| candidate.desktop_app == desktop_app)
+            .map(|candidate| display_path(&candidate.path))
+    };
+    InstallStatus {
+        app: path(true),
+        cli: path(false),
+        used: candidates.first().map(|candidate| {
+            if candidate.desktop_app {
+                InstallSource::App
+            } else {
+                InstallSource::Cli
+            }
+        }),
+        ..InstallStatus::none(instance)
+    }
+}
+
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        app: crate::i18n::tr("codex-desktop-app"),
+        cli: crate::i18n::tr("codex-cli"),
+        folders: vec![FolderField::binary(
+            crate::i18n::tr("codex-cli-folder"),
+            crate::i18n::tr("folder-with-codex-exe-codex-cmd-or-codex-ps1-leave-empty-to-find"),
+            r"C:\Users\you\AppData\Roaming\npm",
+        )],
+        ..SettingsCopy::new(crate::i18n::tr(
+            "reads-the-signed-in-codex-cli-or-desktop-app",
+        ))
+    }
+}
+
+fn consume_reset(instance: &ProviderInstance) -> ResetResult {
+    let executable = first_available(instance.binary_path.as_deref())?;
+    let client = CodexClient::for_instance(executable, instance);
+    let outcome = client.consume_reset()?;
+    Ok((outcome, client.read_rate_limits()))
+}
+
+/// The app-server's `account/rateLimitResetCredit/consume` outcomes.
+fn reset_outcome(value: &str) -> Result<Outcome> {
+    Ok(match value {
+        "reset" => Outcome::Reset,
+        "nothingToReset" => Outcome::NothingToReset,
+        "noCredit" => Outcome::NoCredit,
+        "alreadyRedeemed" => Outcome::AlreadyRedeemed,
+        _ => return Err(crate::banked_reset::unconfirmed()),
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reset_outcomes_are_distinct_and_unknown_is_not_success() {
+        for (value, outcome) in [
+            ("reset", Outcome::Reset),
+            ("nothingToReset", Outcome::NothingToReset),
+            ("noCredit", Outcome::NoCredit),
+            ("alreadyRedeemed", Outcome::AlreadyRedeemed),
+        ] {
+            assert_eq!(reset_outcome(value).unwrap(), outcome);
+        }
+        assert!(reset_outcome("unavailable").is_err());
+        assert!(reset_outcome("").is_err());
+    }
 
     #[test]
     fn cmd_shims_are_spawned_directly_without_a_shell_string() {

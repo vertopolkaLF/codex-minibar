@@ -29,79 +29,21 @@ const DRIVERS: usize = ProviderKind::ALL.len();
 /// Whether each driver (in [`ProviderKind::ALL`] order) is installed, using
 /// the paths of its first instance.
 fn detected_providers(settings: &Settings) -> [bool; DRIVERS] {
-    let first = |driver: ProviderKind| {
-        settings
+    ProviderKind::ALL.map(|driver| {
+        let instance = settings
             .instances
             .iter()
             .find(|instance| instance.driver == driver)
             .cloned()
-            .unwrap_or_else(|| ProviderInstance::primary(driver))
-    };
-    ProviderKind::ALL.map(|driver| {
-        let instance = first(driver);
-        let path = instance.binary_path.as_deref();
-        match driver {
-            ProviderKind::Codex => crate::codex::is_installed(path),
-            ProviderKind::Claude => crate::claude::is_installed(path),
-            ProviderKind::Cursor => crate::cursor::is_installed(path),
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-                crate::opencode::is_installed(driver)
-            }
-            ProviderKind::OpenRouter => {
-                crate::openrouter::is_installed_for_accounts(instance.openrouter.as_slice())
-            }
-            ProviderKind::Antigravity => crate::antigravity::is_installed(path),
-            ProviderKind::Grok => crate::grok::is_installed(path),
-            ProviderKind::CommandCode => crate::commandcode::is_installed(path),
-            ProviderKind::Kiro => crate::kiro::source_is_ready(
-                path,
-                instance.kiro_crew_path.as_deref(),
-                instance.kiro_cli_path.as_deref(),
-            ),
-        }
+            .unwrap_or_else(|| ProviderInstance::primary(driver));
+        crate::drivers::detect(&instance).ready()
     })
 }
 
 /// What the provider step says about each driver.
 fn detection_note(driver: ProviderKind, found: bool) -> &'static str {
-    match (driver, found) {
-        (ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo, true) => {
-            crate::i18n::tr("found-in-opencode-auth-or-local-history")
-        }
-        (ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo, false) => {
-            crate::i18n::tr("not-found-turn-it-on-if-it-s-set-up-elsewhere")
-        }
-        (ProviderKind::OpenRouter, true) => crate::i18n::tr("account-credentials-are-already-set"),
-        (ProviderKind::OpenRouter, false) => {
-            crate::i18n::tr("optional-add-accounts-later-in-providers")
-        }
-        (ProviderKind::Antigravity, true) => {
-            crate::i18n::tr("found-an-official-agy-sign-in-on-this-pc")
-        }
-        (ProviderKind::Antigravity, false) => {
-            crate::i18n::tr("not-found-sign-in-with-agy-before-enabling-it")
-        }
-        (ProviderKind::Grok, true) => {
-            crate::i18n::tr("found-an-official-grok-cli-sign-in-on-this-pc")
-        }
-        (ProviderKind::Grok, false) => {
-            crate::i18n::tr("not-found-run-grok-login-before-enabling-it")
-        }
-        (ProviderKind::CommandCode, true) => {
-            crate::i18n::tr("found-an-official-command-code-cli-sign-in-on-this-pc")
-        }
-        (ProviderKind::CommandCode, false) => {
-            crate::i18n::tr("not-found-run-cmdc-login-before-enabling-it")
-        }
-        (ProviderKind::Kiro, true) => {
-            crate::i18n::tr("found-kiro-ide-kiro-crew-or-a-signed-in-kiro-cli")
-        }
-        (ProviderKind::Kiro, false) => {
-            crate::i18n::tr("not-found-install-kiro-ide-or-kiro-crew-or-sign-in-to-kiro-cli")
-        }
-        (_, true) => crate::i18n::tr("found-on-this-pc"),
-        (_, false) => crate::i18n::tr("not-found-turn-it-on-if-it-s-installed-somewhere-else"),
-    }
+    let copy = crate::drivers::settings_copy(driver);
+    if found { copy.found } else { copy.not_found }
 }
 
 /// Whether each driver's first instance is enabled.
@@ -180,8 +122,8 @@ fn default_tray_widgets(settings: &Settings) -> Vec<TrayWidget> {
 }
 
 /// Puts back what onboarding changed: its choices, the providers it added
-/// or toggled, and the tray widgets.
-fn restore(original: &Settings, settings: &mut Settings) {
+/// or toggled, and the tray widgets. Returns the providers it removed.
+fn restore(original: &Settings, settings: &mut Settings) -> Vec<ProviderInstance> {
     copy_choices(original, settings);
     let added = settings
         .instances
@@ -189,15 +131,17 @@ fn restore(original: &Settings, settings: &mut Settings) {
         .filter(|instance| original.instance_by_id(&instance.id).is_none())
         .map(ProviderInstance::provider_id)
         .collect::<Vec<_>>();
-    for provider in added {
-        settings.remove_instance(provider);
-    }
+    let removed = added
+        .into_iter()
+        .filter_map(|provider| settings.remove_instance(provider))
+        .collect();
     for instance in &mut settings.instances {
         if let Some(before) = original.instance_by_id(&instance.id) {
             instance.enabled = before.enabled;
         }
     }
     settings.tray_widgets = original.tray_widgets.clone();
+    removed
 }
 
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
@@ -395,7 +339,9 @@ impl OnboardingWindow {
         }
         let original = self.original.clone();
         super::persistence::queue(self.state.settings_tx.clone(), move |settings| {
-            restore(&original, settings)
+            for instance in restore(&original, settings) {
+                crate::drivers::forget_secrets(&instance);
+            }
         });
     }
 

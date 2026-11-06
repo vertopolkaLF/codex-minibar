@@ -14,12 +14,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
-    instances::ProviderId,
+    drivers::{Driver, InstallSource, InstallStatus, SettingsCopy, Sources},
+    instances::{ProviderId, ProviderInstance},
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     provider_registry::ProviderKind,
     secrets, store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
-    worker::{Activator, LimitProvider, UsageProvider},
+    worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
 const ZEN_MODELS_URL: &str = "https://opencode.ai/zen/v1/models";
@@ -50,7 +51,7 @@ impl Catalog {
     }
 }
 
-pub fn is_installed(provider: ProviderKind) -> bool {
+fn is_installed(provider: ProviderKind) -> bool {
     let Some(catalog) = catalog(provider) else {
         return false;
     };
@@ -100,6 +101,7 @@ pub fn key_is_configured(provider: ProviderId) -> bool {
     secret_name(provider).is_some_and(|name| secrets::has_value(&name))
 }
 
+#[derive(Clone)]
 pub struct OpenCodeClient {
     catalog: Catalog,
     provider: ProviderId,
@@ -300,10 +302,71 @@ impl UsageProvider for OpenCodeClient {
     }
 }
 
-impl Activator for OpenCodeClient {
-    fn activate(&mut self) -> Result<()> {
-        bail!("OpenCode does not support automatic session activation")
+pub(crate) static ZEN_DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::APP,
+    copy: zen_settings_copy,
+    forget_secrets: Some(forget_secrets),
+    consume_reset: None,
+};
+
+pub(crate) static GO_DRIVER: Driver = Driver {
+    copy: go_settings_copy,
+    ..ZEN_DRIVER
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let client = OpenCodeClient::new(instance.provider_id())?;
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        None,
+        options,
+    ))
+}
+
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let provider = instance.provider_id();
+    // Secondary instances read only their own API key.
+    let (detected, detail) = if provider.is_primary() {
+        (
+            is_installed(instance.driver),
+            crate::i18n::tr("opencode-auth-json-or-local-database"),
+        )
+    } else {
+        (
+            key_is_configured(provider),
+            crate::i18n::tr("saved-api-key"),
+        )
+    };
+    InstallStatus {
+        app: detected.then(|| detail.into()),
+        used: detected.then_some(InstallSource::App),
+        ..InstallStatus::none(instance)
     }
+}
+
+fn settings_copy(description: &'static str) -> SettingsCopy {
+    SettingsCopy {
+        found: crate::i18n::tr("found-in-opencode-auth-or-local-history"),
+        not_found: crate::i18n::tr("not-found-turn-it-on-if-it-s-set-up-elsewhere"),
+        ..SettingsCopy::new(description)
+    }
+}
+
+fn zen_settings_copy() -> SettingsCopy {
+    settings_copy(crate::i18n::tr("reads-zen-auth-and-local-opencode-history"))
+}
+
+fn go_settings_copy() -> SettingsCopy {
+    settings_copy(crate::i18n::tr(
+        "reads-go-quota-windows-and-local-opencode-history",
+    ))
+}
+
+fn forget_secrets(instance: &ProviderInstance) -> Result<()> {
+    save_manual_key(instance.provider_id(), None)
 }
 
 fn catalog(provider: ProviderKind) -> Option<Catalog> {

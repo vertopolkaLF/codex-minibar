@@ -25,11 +25,14 @@ use directories::BaseDirs;
 use serde_json::Value;
 
 use crate::{
-    instances::ProviderId,
+    drivers::{
+        Driver, FolderField, InstallSource, InstallStatus, SettingsCopy, Sources, display_path,
+    },
+    instances::{ProviderId, ProviderInstance},
     limits::{AdditionalLimit, Credits, LimitWindow, RateLimits, UsageAmount},
     provider_support, store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
-    worker::{Activator, LimitProvider, UsageProvider},
+    worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
 const API_BASE: &str = "https://api.commandcode.ai";
@@ -64,14 +67,13 @@ const PLANS: &[(&str, &str, f64)] = &[
     ("individual-ultra", "Ultra", 300.0),
 ];
 
+#[derive(Clone)]
 pub struct CommandCodeClient {
     agent: ureq::Agent,
     provider: ProviderId,
     /// Parsed session logs keyed by path, reused while a file is unchanged.
     sessions: HashMap<PathBuf, SessionLog>,
 }
-
-pub struct CommandCodeActivator;
 
 impl CommandCodeClient {
     pub fn new(provider: ProviderId) -> Self {
@@ -159,14 +161,52 @@ impl UsageProvider for CommandCodeClient {
     }
 }
 
-impl Activator for CommandCodeActivator {
-    fn activate(&mut self) -> Result<()> {
-        bail!("Command Code does not support session-window activation")
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::CLI,
+    copy: settings_copy,
+    forget_secrets: None,
+    consume_reset: None,
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    if let Some(executable) = cli_available(instance.binary_path.as_deref()) {
+        crate::logger::info(format!("Command Code launcher: {}", executable.display()));
+    }
+    let client = CommandCodeClient::new(instance.provider_id());
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        None,
+        options,
+    ))
+}
+
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let cli = cli_available(instance.binary_path.as_deref());
+    InstallStatus {
+        used: cli.as_ref().map(|_| InstallSource::Cli),
+        cli: cli.as_deref().map(display_path),
+        signed_in: signed_in(),
+        ..InstallStatus::none(instance)
     }
 }
 
-pub fn is_installed(explicit: Option<&Path>) -> bool {
-    signed_in() || cli_available(explicit).is_some()
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        cli: crate::i18n::tr("command-code-cli"),
+        folders: vec![FolderField::binary(
+            crate::i18n::tr("command-code-cli-folder"),
+            crate::i18n::tr("folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati"),
+            r"C:\Users\you\AppData\Roaming\npm",
+        )],
+        found: crate::i18n::tr("found-an-official-command-code-cli-sign-in-on-this-pc"),
+        not_found: crate::i18n::tr("not-found-run-cmdc-login-before-enabling-it"),
+        ..SettingsCopy::new(crate::i18n::tr(
+            "reads-command-code-5h-weekly-and-monthly-credits-from-your-existin",
+        ))
+    }
 }
 
 /// Resolves a Command Code CLI launcher. An explicit folder is searched first;
@@ -455,7 +495,7 @@ fn session_files(root: &Path) -> Vec<PathBuf> {
     files
 }
 
-#[derive(Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 struct SessionLog {
     len: u64,
     modified: Option<SystemTime>,

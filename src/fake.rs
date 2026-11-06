@@ -127,6 +127,18 @@ pub fn consume(driver: ProviderKind) -> Result<(Outcome, Result<RateLimits>)> {
     Ok((outcome, Ok(limits(driver))))
 }
 
+pub(crate) fn start(
+    driver: ProviderKind,
+    options: crate::worker::WorkerOptions,
+) -> crate::worker::WorkerHandle {
+    crate::worker::start_worker(
+        FakeProvider(driver),
+        FakeProvider(driver),
+        Some(Box::new(FakeProvider(driver))),
+        options,
+    )
+}
+
 pub struct FakeProvider(pub ProviderKind);
 
 impl crate::worker::LimitProvider for FakeProvider {

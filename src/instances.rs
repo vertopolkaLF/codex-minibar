@@ -360,6 +360,17 @@ pub struct ProviderInstance {
     pub credentials_revision: u64,
 }
 
+/// See [`ProviderInstance::source_key`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SourceKey {
+    driver: ProviderKind,
+    binary_path: Option<PathBuf>,
+    source: InstanceSource,
+    config_folder: Option<PathBuf>,
+    kiro_crew_path: Option<PathBuf>,
+    kiro_cli_path: Option<PathBuf>,
+}
+
 impl Default for ProviderInstance {
     fn default() -> Self {
         Self::primary(ProviderKind::default())
@@ -465,16 +476,26 @@ impl ProviderInstance {
         self.usage_stats && Capabilities::of(self).usage_stats && self.has_usage_stats_credential()
     }
 
+    /// Where this instance reads from, apart from saved secrets: everything
+    /// install detection looks at. The one list of driver-specific location
+    /// fields besides the struct itself.
+    pub fn source_key(&self) -> SourceKey {
+        SourceKey {
+            driver: self.driver,
+            binary_path: self.binary_path.clone(),
+            source: self.source.clone(),
+            config_folder: self.config_folder(),
+            kiro_crew_path: self.kiro_crew_path.clone(),
+            kiro_cli_path: self.kiro_cli_path.clone(),
+        }
+    }
+
     /// Fields that require replacing the running worker when they change.
     /// Names, badges and Home visibility are presentation-only.
     pub fn runtime_key(&self) -> impl PartialEq + use<> {
         (
             self.enabled,
-            self.binary_path.clone(),
-            self.source.clone(),
-            self.config_folder(),
-            self.kiro_crew_path.clone(),
-            self.kiro_cli_path.clone(),
+            self.source_key(),
             self.openrouter
                 .as_ref()
                 .map(|account| account.api_key_ids.clone()),
@@ -528,6 +549,58 @@ impl ProviderInstance {
             changed = true;
         }
         changed
+    }
+}
+
+/// A location an instance can be pointed at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PathField {
+    /// CLI/app location (Kiro: IDE).
+    Binary,
+    KiroCrew,
+    KiroCli,
+    /// `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+    ConfigFolder,
+}
+
+impl PathField {
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Binary => "binary",
+            Self::KiroCrew => "kiro-crew",
+            Self::KiroCli => "kiro-cli",
+            Self::ConfigFolder => "config-folder",
+        }
+    }
+
+    pub fn read(self, instance: &ProviderInstance) -> Option<&Path> {
+        match self {
+            Self::Binary => instance.binary_path.as_deref(),
+            Self::KiroCrew => instance.kiro_crew_path.as_deref(),
+            Self::KiroCli => instance.kiro_cli_path.as_deref(),
+            Self::ConfigFolder => match &instance.source {
+                InstanceSource::ConfigFolder { path } => path.as_deref(),
+                InstanceSource::Manual => None,
+            },
+        }
+    }
+
+    pub fn write(self, instance: &mut ProviderInstance, folder: Option<PathBuf>) {
+        let before = self.read(instance).map(Path::to_path_buf);
+        match self {
+            Self::Binary => instance.binary_path = folder,
+            Self::KiroCrew => instance.kiro_crew_path = folder,
+            Self::KiroCli => instance.kiro_cli_path = folder,
+            Self::ConfigFolder => {
+                instance.source = InstanceSource::ConfigFolder { path: folder };
+            }
+        }
+        if self.read(instance) != before.as_deref() {
+            // Another folder or binary can mean another account. The new
+            // revision makes the popup reject output the replaced worker
+            // already queued.
+            instance.credentials_revision = instance.credentials_revision.wrapping_add(1);
+        }
     }
 }
 

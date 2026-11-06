@@ -1637,7 +1637,7 @@ impl PopupRoot {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::banked_reset::consume(&instance) })
+                .spawn(async move { crate::drivers::consume_reset(&instance) })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.reset_busy.remove(&provider);

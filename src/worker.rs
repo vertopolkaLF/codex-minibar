@@ -270,22 +270,38 @@ impl Drop for WorkerHandle {
     }
 }
 
+/// What a worker starts with; later changes arrive as [`WorkerCommand`]s.
+pub struct WorkerOptions {
+    pub activation_path: PathBuf,
+    pub automatic_activation: bool,
+    pub schedules: Vec<ScheduledActivation>,
+    pub pauses: Vec<AutoActivationPause>,
+    pub history_retention_days: u16,
+    pub usage_refresh_interval: Duration,
+    pub usage_collection_enabled: bool,
+    pub limit_refresh_interval: Duration,
+}
+
 /// Starts independent background tasks. Rate limits remain on the fast polling
 /// path; scanning local session logs starts only after the first successful
-/// limit response and then runs at the much slower stats interval.
+/// limit response and then runs at the much slower stats interval. Without an
+/// activator the worker never starts a session window.
 pub fn start_worker(
     provider: impl LimitProvider,
     usage_provider: impl UsageProvider,
-    activator: impl Activator,
-    state_path: PathBuf,
-    automatic_activation: bool,
-    scheduled_activations: Vec<ScheduledActivation>,
-    auto_activation_pauses: Vec<AutoActivationPause>,
-    history_retention_days: u16,
-    usage_refresh_interval: Duration,
-    usage_collection_enabled: bool,
-    poll_interval: Duration,
+    activator: Option<Box<dyn Activator>>,
+    options: WorkerOptions,
 ) -> WorkerHandle {
+    let WorkerOptions {
+        activation_path: state_path,
+        automatic_activation,
+        schedules: scheduled_activations,
+        pauses: auto_activation_pauses,
+        history_retention_days,
+        usage_refresh_interval,
+        usage_collection_enabled,
+        limit_refresh_interval: poll_interval,
+    } = options;
     let (command_sender, command_receiver) = mpsc::channel();
     let (event_sender, event_receiver) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -414,7 +430,7 @@ fn enter_background_processing_mode() {
 #[allow(clippy::too_many_arguments)]
 fn run_limit_task(
     mut provider: impl LimitProvider,
-    mut activator: impl Activator,
+    mut activator: Option<Box<dyn Activator>>,
     state_path: PathBuf,
     mut automatic_activation: bool,
     mut scheduled_activations: Vec<ScheduledActivation>,
@@ -451,7 +467,7 @@ fn run_limit_task(
             let mut rate_limited = false;
             match tick(
                 &mut provider,
-                &mut activator,
+                activator.as_deref_mut(),
                 &mut state,
                 automatic_activation,
                 &scheduled_activations,
@@ -843,7 +859,7 @@ fn activation_limits(limits: &RateLimits) -> Option<&RateLimits> {
 
 fn tick(
     provider: &mut impl LimitProvider,
-    activator: &mut impl Activator,
+    activator: Option<&mut dyn Activator>,
     state: &mut ActivationState,
     automatic_activation: bool,
     scheduled_activations: &[ScheduledActivation],
@@ -860,10 +876,11 @@ fn tick(
     let activation = activation_limits(&limits);
     let session_window_available = activation.is_some_and(|sample| !sample.five_hour_disabled());
     let weekly_blocks_auto_activation = activation.is_some_and(RateLimits::weekly_exhausted);
-    let scheduled_due = session_window_available
+    let can_activate = activator.is_some() && session_window_available;
+    let scheduled_due = can_activate
         .then(|| scheduler::due_scheduled_activation(scheduled_activations, state, now))
         .flatten();
-    let automatic_due = session_window_available
+    let automatic_due = can_activate
         && !weekly_blocks_auto_activation
         && automatic_activation
         && !scheduler::auto_activation_paused(auto_activation_pauses, now)
@@ -880,7 +897,7 @@ fn tick(
                 sample.sampled_at,
             ) == Decision::ActivateNow
         });
-    if scheduled_due.is_some() || automatic_due {
+    if let Some(activator) = activator.filter(|_| scheduled_due.is_some() || automatic_due) {
         state.record_attempt(Utc::now());
         events.push(WorkerEvent::ActivationStarted);
         match activator.activate() {
@@ -1020,7 +1037,7 @@ mod tests {
         let task = thread::spawn(move || {
             run_limit_task(
                 PartialProvider,
-                CountingActivator(0),
+                Some(Box::new(CountingActivator(0))),
                 state_path,
                 false,
                 Vec::new(),
@@ -1069,15 +1086,17 @@ mod tests {
         let mut worker = start_worker(
             ScriptedProvider::new(vec![limits_at(15, 0)]),
             BlockedScan(Arc::clone(&release)),
-            CountingActivator(0),
-            directory.path().join("activation.toml"),
-            false,
-            Vec::new(),
-            Vec::new(),
-            30,
-            Duration::from_secs(300),
-            true,
-            Duration::from_secs(300),
+            Some(Box::new(CountingActivator(0))),
+            WorkerOptions {
+                activation_path: directory.path().join("activation.toml"),
+                automatic_activation: false,
+                schedules: Vec::new(),
+                pauses: Vec::new(),
+                history_retention_days: 30,
+                usage_refresh_interval: Duration::from_secs(300),
+                usage_collection_enabled: true,
+                limit_refresh_interval: Duration::from_secs(300),
+            },
         );
         let events_rx = worker.events.take().unwrap();
         let retired = worker.retired_flag();
@@ -1222,11 +1241,35 @@ mod tests {
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
 
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 0);
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 0);
-        let events = tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        let events = tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 1);
         assert!(matches!(events[0], WorkerEvent::ActivationStarted));
         assert!(matches!(events[1], WorkerEvent::ActivationSucceeded));
@@ -1235,7 +1278,15 @@ mod tests {
             state.last_seen_resets_at,
             limits_at(20, 1).primary.resets_at
         );
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 1);
     }
 
@@ -1280,13 +1331,45 @@ mod tests {
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
 
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 0);
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 0);
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 1);
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 1);
         assert!(!state.attempted_without_active_window);
     }
@@ -1325,7 +1408,15 @@ mod tests {
         let mut state = ActivationState::default();
         state.last_seen_resets_at = Some(previous_reset);
 
-        let events = tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        let events = tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
 
         assert_eq!(activator.0, 1);
         assert!(
@@ -1360,9 +1451,33 @@ mod tests {
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
 
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
-        let events = tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
+        let events = tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
 
         assert_eq!(activator.0, 1);
         assert!(events.iter().any(|event| matches!(
@@ -1394,7 +1509,7 @@ mod tests {
 
         tick(
             &mut provider,
-            &mut activator,
+            Some(&mut activator),
             &mut state,
             true,
             &[],
@@ -1403,7 +1518,7 @@ mod tests {
         .unwrap();
         tick(
             &mut provider,
-            &mut activator,
+            Some(&mut activator),
             &mut state,
             true,
             &[],
@@ -1439,7 +1554,7 @@ mod tests {
 
         tick(
             &mut ScriptedProvider::new(vec![limits_at(15, 0), limits_at(15, 0)]),
-            &mut activator,
+            Some(&mut activator),
             &mut state,
             true,
             &[schedule],
@@ -1467,7 +1582,7 @@ mod tests {
 
         tick(
             &mut ScriptedProvider::new(vec![sample]),
-            &mut activator,
+            Some(&mut activator),
             &mut state,
             true,
             &[],
@@ -1498,11 +1613,35 @@ mod tests {
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
 
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 1);
 
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
         assert_eq!(activator.0, 1);
         assert_eq!(
             state.last_seen_resets_at,
@@ -1525,7 +1664,7 @@ mod tests {
         let mut state = ActivationState::default();
         let events = tick(
             &mut ScriptedProvider::new(vec![RateLimits::default()]),
-            &mut activator,
+            Some(&mut activator),
             &mut state,
             true,
             &[schedule],
@@ -1557,8 +1696,24 @@ mod tests {
         let mut activator = CountingActivator(0);
         let mut state = ActivationState::default();
 
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
-        tick(&mut provider, &mut activator, &mut state, true, &[], &[]).unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
+        tick(
+            &mut provider,
+            Some(&mut activator),
+            &mut state,
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
 
         assert_eq!(activator.0, 0);
     }
@@ -1576,7 +1731,7 @@ mod tests {
         state.last_seen_resets_at = limits_at(15, 0).primary.resets_at;
         let events = tick(
             &mut ScriptedProvider::new(vec![limits_at(15, 5)]),
-            &mut FailingActivator,
+            Some(&mut FailingActivator),
             &mut state,
             true,
             &[],

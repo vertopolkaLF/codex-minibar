@@ -20,13 +20,16 @@ use rusqlite::{Connection, OpenFlags};
 use serde_json::{Value, json};
 
 use crate::{
-    instances::ProviderId,
+    drivers::{
+        Driver, FolderField, InstallSource, InstallStatus, SettingsCopy, Sources, display_path,
+    },
+    instances::{ProviderId, ProviderInstance},
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     pricing,
     provider_registry::ProviderKind,
     store,
     usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
-    worker::{Activator, LimitProvider, UsageProvider},
+    worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
 const API_BASE: &str = "https://api2.cursor.sh";
@@ -38,10 +41,52 @@ const USAGE_EXPORT_PATH: &str = "/api/dashboard/export-usage-events-csv";
 const USAGE_CACHE_VERSION: u8 = 8;
 const USAGE_CACHE_TTL: ChronoDuration = ChronoDuration::minutes(10);
 
-/// Detect the Cursor desktop application from its local installation or its
-/// VS Code state database. No database is opened and no network call is made.
-pub fn is_installed(explicit: Option<&Path>) -> bool {
-    installation_path(explicit).is_some() || cursor_state_db().is_file()
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::APP,
+    copy: settings_copy,
+    forget_secrets: None,
+    consume_reset: None,
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let executable = installation_path(instance.binary_path.as_deref())
+        .unwrap_or_else(|| PathBuf::from("Cursor.exe"));
+    crate::logger::info(format!("Cursor executable: {}", executable.display()));
+    let client = CursorClient::new();
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        None,
+        options,
+    ))
+}
+
+/// Its local installation or its VS Code state database. No database is
+/// opened and no network call is made.
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let app = installation_path(instance.binary_path.as_deref());
+    InstallStatus {
+        used: app.as_ref().map(|_| InstallSource::App),
+        app: app.as_deref().map(display_path),
+        signed_in: cursor_state_db().is_file(),
+        ..InstallStatus::none(instance)
+    }
+}
+
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        app: crate::i18n::tr("cursor-app"),
+        folders: vec![FolderField::binary(
+            crate::i18n::tr("cursor-app-folder"),
+            crate::i18n::tr("folder-with-cursor-exe-leave-empty-to-find-it-automatically-usage"),
+            r"C:\Users\you\AppData\Local\Programs\Cursor",
+        )],
+        ..SettingsCopy::new(crate::i18n::tr(
+            "reads-the-signed-in-cursor-app-for-this-billing-cycle",
+        ))
+    }
 }
 
 /// Resolves Cursor.exe without opening its profile database. The configured
@@ -78,11 +123,10 @@ pub fn installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
         })
 }
 
+#[derive(Clone)]
 pub struct CursorClient {
     agent: ureq::Agent,
 }
-
-pub struct CursorActivator;
 
 impl Default for CursorClient {
     fn default() -> Self {
@@ -536,15 +580,6 @@ fn cursor_export_tokens(value: &str) -> Option<u64> {
     }
 }
 
-impl Activator for CursorActivator {
-    fn activate(&mut self) -> Result<()> {
-        // Cursor billing windows are calendar-based; unlike Codex/Claude,
-        // there is no operation that starts a session window. Keep this hard
-        // failure as a final guard against future command-routing regressions.
-        bail!("Cursor does not support session-window activation")
-    }
-}
-
 struct CursorAuth {
     access_token: String,
     refresh_token: String,
@@ -890,12 +925,6 @@ mod tests {
         );
         assert_eq!(statistics.today.total_tokens(), 20);
         assert_eq!(statistics.history.requests, 1);
-    }
-
-    #[test]
-    fn cursor_activation_can_never_report_success() {
-        let error = CursorActivator.activate().unwrap_err();
-        assert!(error.to_string().contains("does not support"));
     }
 
     #[test]

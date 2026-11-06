@@ -15,10 +15,19 @@ pub enum AiTool {
 }
 
 impl AiTool {
+    const ALL: [Self; 2] = [Self::Codex, Self::Claude];
+
     pub fn id(self) -> &'static str {
         match self {
             Self::Codex => "codex",
             Self::Claude => "claude",
+        }
+    }
+
+    fn driver(self) -> crate::provider_registry::ProviderKind {
+        match self {
+            Self::Codex => crate::provider_registry::ProviderKind::Codex,
+            Self::Claude => crate::provider_registry::ProviderKind::Claude,
         }
     }
 
@@ -57,25 +66,23 @@ pub fn is_cli_request() -> bool {
         .is_some_and(|argument| argument.eq_ignore_ascii_case("trouble"))
 }
 
-/// Finds the supported AI CLIs without starting them.
-pub fn available_tools(
-    codex_path: Option<&Path>,
-    claude_path: Option<&Path>,
-) -> Vec<AvailableAiTool> {
-    let mut tools = Vec::new();
-    if let Ok(executable) = crate::codex::first_available(codex_path) {
-        tools.push(AvailableAiTool {
-            tool: AiTool::Codex,
-            executable,
-        });
-    }
-    if let Some(executable) = crate::claude::first_available(claude_path) {
-        tools.push(AvailableAiTool {
-            tool: AiTool::Claude,
-            executable,
-        });
-    }
-    tools
+/// Finds the supported AI CLIs without starting them, each at the location
+/// configured on the first instance of its provider.
+pub fn available_tools(instances: &[crate::instances::ProviderInstance]) -> Vec<AvailableAiTool> {
+    AiTool::ALL
+        .into_iter()
+        .filter_map(|tool| {
+            let explicit = instances
+                .iter()
+                .find(|instance| instance.driver == tool.driver())
+                .and_then(|instance| instance.binary_path.as_deref());
+            let executable = match tool {
+                AiTool::Codex => crate::codex::first_available(explicit).ok(),
+                AiTool::Claude => crate::claude::first_available(explicit),
+            }?;
+            Some(AvailableAiTool { tool, executable })
+        })
+        .collect()
 }
 
 pub fn launch_cli_picker() -> Result<()> {

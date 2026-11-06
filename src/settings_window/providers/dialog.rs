@@ -1104,7 +1104,7 @@ impl SettingsWindow {
                     move |this, removed, cx| {
                         // The instance is gone either way; leftover secrets are unused.
                         if let Some(instance) = &removed {
-                            forget_instance_secrets(instance);
+                            crate::drivers::forget_secrets(instance);
                         }
                         let name = removed
                             .as_ref()

@@ -12,10 +12,14 @@ use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
 use crate::{
+    drivers::{
+        Driver, FolderField, InstallSource, InstallStatus, SettingsCopy, Sources, display_path,
+    },
+    instances::ProviderInstance,
     limits::{LimitWindow, RateLimits},
     provider_support,
     usage::UsageStatistics,
-    worker::{Activator, LimitProvider, UsageProvider},
+    worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
 const CREDENTIAL_TARGET: &str = "gemini:antigravity";
@@ -27,12 +31,11 @@ const QUOTA_API_BASE: &str = "https://daily-cloudcode-pa.googleapis.com";
 const USER_AGENT: &str = "antigravity/hub/2.9.1 windows/amd64";
 const CLI_NAMES: &[&str] = &["agy.exe", "agy.cmd", "agy.ps1", "agy.bat"];
 
+#[derive(Clone)]
 pub struct AntigravityClient {
     agent: ureq::Agent,
     cli_folder: Option<PathBuf>,
 }
-
-pub struct AntigravityActivator;
 
 impl AntigravityClient {
     pub fn new(cli_folder: Option<PathBuf>) -> Self {
@@ -82,14 +85,62 @@ impl UsageProvider for AntigravityClient {
     }
 }
 
-impl Activator for AntigravityActivator {
-    fn activate(&mut self) -> Result<()> {
-        bail!("Antigravity does not support session-window activation")
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::APP_AND_CLI,
+    copy: settings_copy,
+    forget_secrets: None,
+    consume_reset: None,
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let path = instance.binary_path.clone();
+    if let Some(executable) = cli_available(path.as_deref()) {
+        crate::logger::info(format!("Antigravity executable: {}", executable.display()));
+    }
+    let client = AntigravityClient::new(path);
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        None,
+        options,
+    ))
+}
+
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let explicit = instance.binary_path.as_deref();
+    let app = desktop_app(explicit);
+    let cli = cli_available(explicit);
+    let used = if cli.is_some() {
+        Some(InstallSource::Cli)
+    } else {
+        app.as_ref().map(|_| InstallSource::App)
+    };
+    InstallStatus {
+        app: app.as_deref().map(display_path),
+        cli: cli.as_deref().map(display_path),
+        used,
+        signed_in: signed_in(),
+        ..InstallStatus::none(instance)
     }
 }
 
-pub fn is_installed(explicit: Option<&Path>) -> bool {
-    signed_in() || cli_available(explicit).is_some() || desktop_app(explicit).is_some()
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        app: crate::i18n::tr("antigravity-app"),
+        cli: "agy CLI",
+        folders: vec![FolderField::binary(
+            crate::i18n::tr("agy-cli-folder"),
+            crate::i18n::tr("folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut"),
+            r"C:\Users\you\AppData\Local\agy\bin",
+        )],
+        found: crate::i18n::tr("found-an-official-agy-sign-in-on-this-pc"),
+        not_found: crate::i18n::tr("not-found-sign-in-with-agy-before-enabling-it"),
+        ..SettingsCopy::new(crate::i18n::tr(
+            "reads-subscription-quota-from-your-existing-official-agy-windows",
+        ))
+    }
 }
 
 /// Resolves a standalone `agy` launcher. An explicit folder is searched first;

@@ -13,10 +13,14 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
+    drivers::{
+        Driver, FolderField, InstallSource, InstallStatus, SettingsCopy, Sources, display_path,
+    },
+    instances::ProviderInstance,
     limits::{LimitWindow, RateLimits},
     provider_support,
     usage::UsageStatistics,
-    worker::{Activator, LimitProvider, UsageProvider},
+    worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
 const BILLING_URL: &str = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
@@ -25,12 +29,11 @@ const OIDC_SCOPE_PREFIX: &str = "https://auth.x.ai::";
 const LEGACY_SCOPE: &str = "https://accounts.x.ai/sign-in";
 const CLI_NAMES: &[&str] = &["grok.exe", "grok.cmd", "grok.ps1", "grok.bat"];
 
+#[derive(Clone)]
 pub struct GrokClient {
     agent: ureq::Agent,
     cli_folder: Option<PathBuf>,
 }
-
-pub struct GrokActivator;
 
 impl GrokClient {
     pub fn new(cli_folder: Option<PathBuf>) -> Self {
@@ -114,14 +117,53 @@ impl UsageProvider for GrokClient {
     }
 }
 
-impl Activator for GrokActivator {
-    fn activate(&mut self) -> Result<()> {
-        bail!("Grok does not support session-window activation")
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::CLI,
+    copy: settings_copy,
+    forget_secrets: None,
+    consume_reset: None,
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let path = instance.binary_path.clone();
+    if let Some(executable) = cli_available(path.as_deref()) {
+        crate::logger::info(format!("Grok executable: {}", executable.display()));
+    }
+    let client = GrokClient::new(path);
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        None,
+        options,
+    ))
+}
+
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let cli = cli_available(instance.binary_path.as_deref());
+    InstallStatus {
+        used: cli.as_ref().map(|_| InstallSource::Cli),
+        cli: cli.as_deref().map(display_path),
+        signed_in: signed_in(),
+        ..InstallStatus::none(instance)
     }
 }
 
-pub fn is_installed(explicit: Option<&Path>) -> bool {
-    signed_in() || cli_available(explicit).is_some()
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        cli: crate::i18n::tr("grok-cli"),
+        folders: vec![FolderField::binary(
+            crate::i18n::tr("grok-cli-folder"),
+            crate::i18n::tr("folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it"),
+            r"C:\Users\you\.grok\bin",
+        )],
+        found: crate::i18n::tr("found-an-official-grok-cli-sign-in-on-this-pc"),
+        not_found: crate::i18n::tr("not-found-run-grok-login-before-enabling-it"),
+        ..SettingsCopy::new(crate::i18n::tr(
+            "reads-supergrok-subscription-credits-from-your-existing-official",
+        ))
+    }
 }
 
 /// Resolves a Grok CLI launcher. An explicit folder is searched first; a file

@@ -11,6 +11,7 @@ use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone
 use serde::Deserialize;
 
 use crate::{
+    drivers::{Driver, InstallSource, InstallStatus, SettingsCopy, Sources},
     instances::{ProviderId, ProviderInstance},
     limits::{
         LimitWindow, OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, RateLimits,
@@ -19,7 +20,7 @@ use crate::{
     secrets,
     settings::OpenRouterAccount,
     usage::UsageStatistics,
-    worker::{Activator, LimitProvider, UsageProvider},
+    worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
 const API_URL: &str = "https://openrouter.ai/api/v1/key";
@@ -34,6 +35,7 @@ const LEGACY_API_KEY_ID: &str = "legacy";
 pub(crate) mod admin;
 pub(crate) mod analytics;
 
+#[derive(Clone)]
 pub struct OpenRouterClient {
     cancelled: Arc<AtomicBool>,
     provider: ProviderId,
@@ -44,8 +46,7 @@ pub struct OpenRouterClient {
     key_cache: HashMap<String, CachedOpenRouterKey>,
 }
 
-pub struct OpenRouterActivator;
-
+#[derive(Clone)]
 struct AccountCredentials {
     id: String,
     name: String,
@@ -53,6 +54,7 @@ struct AccountCredentials {
     management_key: Option<String>,
 }
 
+#[derive(Clone)]
 struct ApiKeyCredential {
     id: String,
     value: String,
@@ -786,10 +788,56 @@ impl UsageProvider for OpenRouterClient {
     }
 }
 
-impl Activator for OpenRouterActivator {
-    fn activate(&mut self) -> Result<()> {
-        bail!("OpenRouter does not support session-window activation")
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::APP,
+    copy: settings_copy,
+    forget_secrets: Some(forget_secrets),
+    consume_reset: None,
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let client = OpenRouterClient::new(instance)?;
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        None,
+        options,
+    ))
+}
+
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let detected = is_installed_for_accounts(instance.openrouter.as_slice());
+    InstallStatus {
+        app: detected
+            .then(|| crate::i18n::tr("openrouter-account-credentials-are-configured").into()),
+        used: detected.then_some(InstallSource::App),
+        ..InstallStatus::none(instance)
     }
+}
+
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        found: crate::i18n::tr("account-credentials-are-already-set"),
+        not_found: crate::i18n::tr("optional-add-accounts-later-in-providers"),
+        ..SettingsCopy::new(crate::i18n::tr(
+            "reads-api-key-usage-and-spend-limits-a-management-key-also-enable",
+        ))
+    }
+}
+
+fn forget_secrets(instance: &ProviderInstance) -> Result<()> {
+    let Some(account) = &instance.openrouter else {
+        return Ok(());
+    };
+    let mut changes = account
+        .api_key_ids
+        .iter()
+        .map(|key_id| AccountSecretChange::api_key(account.id.clone(), key_id.clone(), None))
+        .collect::<Vec<_>>();
+    changes.push(AccountSecretChange::management(account.id.clone(), None));
+    apply_account_secret_changes(&changes).map(drop)
 }
 
 #[derive(Debug)]

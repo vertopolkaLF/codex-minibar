@@ -1,6 +1,6 @@
 //! Account-scoped reset redemption. Unanswered requests keep their key and
 //! grant so a manual retry cannot accidentally spend a second credit.
-use anyhow::{Result, bail};
+use anyhow::Result;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex, OnceLock},
@@ -20,26 +20,6 @@ pub(crate) fn account_key(driver: &str, folder: &std::path::Path, account: &str)
         folder.into_owned()
     };
     format!("{driver}:{folder}:{account}")
-}
-
-pub(crate) fn consume(
-    instance: &crate::instances::ProviderInstance,
-) -> Result<(Outcome, Result<crate::limits::RateLimits>)> {
-    match instance.driver {
-        driver if crate::fake::serves(driver) => crate::fake::consume(driver),
-        crate::provider_registry::ProviderKind::Codex => {
-            let executable = crate::codex::first_available(instance.binary_path.as_deref())?;
-            let client = crate::codex::CodexClient::for_instance(executable, instance);
-            let outcome = client.consume_reset()?;
-            Ok((outcome, client.read_rate_limits()))
-        }
-        crate::provider_registry::ProviderKind::Claude => {
-            let mut client = crate::claude::ClaudeClient::for_instance(instance);
-            let outcome = client.consume_reset()?;
-            Ok((outcome, client.read_rate_limits()))
-        }
-        _ => bail!("Provider does not support reset credits"),
-    }
 }
 
 /// A choice made on the "reset will be applied soon" notification. The
@@ -90,15 +70,12 @@ impl Outcome {
             Self::AlreadyRedeemed => "reset-already-redeemed",
         }
     }
-    pub fn parse(value: &str) -> Result<Self> {
-        match value {
-            "reset" => Ok(Self::Reset),
-            "nothingToReset" | "not_limited" => Ok(Self::NothingToReset),
-            "noCredit" | "ineligible" => Ok(Self::NoCredit),
-            "alreadyRedeemed" | "already_used" => Ok(Self::AlreadyRedeemed),
-            _ => bail!("{}", crate::i18n::tr("reset-unconfirmed")),
-        }
-    }
+}
+
+/// A provider answered with an outcome this build does not know. It must
+/// never be mistaken for a successful reset.
+pub(crate) fn unconfirmed() -> anyhow::Error {
+    anyhow::anyhow!("{}", crate::i18n::tr("reset-unconfirmed"))
 }
 
 #[derive(Clone, Debug)]
@@ -197,6 +174,7 @@ pub(crate) fn settled(key: &'static str) -> anyhow::Error {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use anyhow::bail;
     #[test]
     fn reset_account_key_canonicalizes_folder_without_merging_team_logins() {
         let first = tempfile::tempdir().unwrap();
@@ -221,22 +199,6 @@ mod tests {
             Ok(Outcome::Reset)
         })
         .unwrap();
-    }
-    #[test]
-    fn reset_provider_outcomes_are_distinct_and_unknown_is_not_success() {
-        for (value, outcome) in [
-            ("reset", Outcome::Reset),
-            ("not_limited", Outcome::NothingToReset),
-            ("nothingToReset", Outcome::NothingToReset),
-            ("ineligible", Outcome::NoCredit),
-            ("noCredit", Outcome::NoCredit),
-            ("already_used", Outcome::AlreadyRedeemed),
-            ("alreadyRedeemed", Outcome::AlreadyRedeemed),
-        ] {
-            assert_eq!(Outcome::parse(value).unwrap(), outcome);
-        }
-        assert!(Outcome::parse("unavailable").is_err());
-        assert!(Outcome::parse("").is_err());
     }
     #[test]
     fn unanswered_retry_keeps_key_and_original_grant() {

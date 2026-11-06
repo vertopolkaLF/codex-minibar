@@ -18,9 +18,13 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
+    drivers::{
+        Driver, FolderField, InstallSource, InstallStatus, SettingsCopy, Sources, display_path,
+    },
+    instances::{PathField, ProviderInstance},
     limits::{LimitWindow, RateLimits, UsageAmount},
     usage::UsageStatistics,
-    worker::{Activator, LimitProvider, UsageProvider},
+    worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
 const STATE_KEY: &str = "kiro.kiroAgent";
@@ -285,12 +289,82 @@ impl UsageProvider for KiroClient {
     }
 }
 
-pub struct KiroActivator;
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::ALL,
+    copy: settings_copy,
+    forget_secrets: None,
+    consume_reset: None,
+};
 
-impl Activator for KiroActivator {
-    fn activate(&mut self) -> Result<()> {
-        Err(anyhow!(
-            "Kiro does not expose a supported session activation command"
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let client = KiroClient::with_paths(
+        instance.binary_path.as_deref(),
+        instance.kiro_crew_path.as_deref(),
+        instance.kiro_cli_path.as_deref(),
+    );
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        None,
+        options,
+    ))
+}
+
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let app = instance.binary_path.as_deref();
+    let crew = instance.kiro_crew_path.as_deref();
+    let cli = instance.kiro_cli_path.as_deref();
+    InstallStatus {
+        app: ide_source_path(app).as_deref().map(display_path),
+        crew: crew_installation_path(crew).as_deref().map(display_path),
+        cli: cli_path(cli).as_deref().map(display_path),
+        used: selected_source(app, crew, cli).map(|source| match source {
+            KiroSource::Ide => InstallSource::App,
+            KiroSource::Crew => InstallSource::Crew,
+            KiroSource::Cli => InstallSource::Cli,
+        }),
+        ..InstallStatus::none(instance)
+    }
+}
+
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        app: crate::i18n::tr("kiro-ide"),
+        crew: crate::i18n::tr("kiro-crew"),
+        cli: crate::i18n::tr("kiro-cli"),
+        folders: vec![
+            FolderField::binary(
+                crate::i18n::tr("kiro-ide-folder"),
+                crate::i18n::tr(
+                    "folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t",
+                ),
+                r"C:\Users\you\AppData\Local\Programs\Kiro",
+            ),
+            FolderField {
+                field: PathField::KiroCrew,
+                label: crate::i18n::tr("kiro-crew-app-path"),
+                description: crate::i18n::tr(
+                    "folder-containing-kirocrew-exe-or-the-executable-itself-leave-emp",
+                ),
+                placeholder: r"C:\Users\you\AppData\Local\Programs\KiroCrew",
+            },
+            FolderField {
+                field: PathField::KiroCli,
+                label: crate::i18n::tr("kiro-cli-folder"),
+                description: crate::i18n::tr(
+                    "folder-containing-kiro-cli-exe-or-the-executable-itself-leave-emp",
+                ),
+                placeholder: r"C:\Users\you\AppData\Local\kiro-cli",
+            },
+        ],
+        found: crate::i18n::tr("found-kiro-ide-kiro-crew-or-a-signed-in-kiro-cli"),
+        not_found: crate::i18n::tr(
+            "not-found-install-kiro-ide-or-kiro-crew-or-sign-in-to-kiro-cli",
+        ),
+        ..SettingsCopy::new(crate::i18n::tr(
+            "fetches-kiro-s-live-monthly-credits-with-its-shared-sign-in-recog",
         ))
     }
 }
@@ -334,14 +408,6 @@ pub fn selected_source(
     } else {
         None
     }
-}
-
-pub fn source_is_ready(
-    app_path: Option<&Path>,
-    crew_path: Option<&Path>,
-    cli_path: Option<&Path>,
-) -> bool {
-    selected_source(app_path, crew_path, cli_path).is_some()
 }
 
 pub fn ide_source_path(explicit: Option<&Path>) -> Option<PathBuf> {

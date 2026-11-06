@@ -15,14 +15,19 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
+    banked_reset::Outcome,
     claude_desktop,
+    drivers::{
+        Driver, FolderField, InstallSource, InstallStatus, ResetResult, SettingsCopy, Sources,
+        display_path,
+    },
     instances::{ProviderId, ProviderInstance},
     limits::{
         AdditionalLimit, LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary,
         RateLimits, SpendingSummary,
     },
     secrets, usage,
-    worker::{Activator, LimitProvider, UsageProvider},
+    worker::{Activator, LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
 pub(crate) mod profile_oauth;
@@ -57,15 +62,6 @@ const FALLBACK_CLAUDE_CODE_VERSION: &str = "2.1.280";
 const PROFILE_REFRESH_INTERVAL: Duration = Duration::from_secs(30 * 60);
 pub const ACTIVATION_MODEL: &str = "haiku";
 pub const ACTIVATION_PROMPT: &str = "reply with letter a";
-
-/// Detect a local Claude Code installation without starting it. A signed-in
-/// credentials directory is also a useful signal for portable/npm installs
-/// whose launcher is no longer present on PATH in the current process, and the
-/// desktop app counts too: it ships its own Claude Code and never writes a
-/// credentials file.
-pub fn is_installed(explicit: Option<&Path>) -> bool {
-    first_available(explicit).is_some() || credentials_path().is_some_and(|path| path.is_file())
-}
 
 /// Resolves a Claude Code launcher without spawning it. An explicit folder is
 /// searched first; legacy explicit file paths remain supported for upgrades.
@@ -171,6 +167,103 @@ fn activation_command_for(program: &Path) -> Command {
             "--effort=low",
         ],
     )
+}
+
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::APP_AND_CLI,
+    copy: settings_copy,
+    forget_secrets: Some(forget_secrets),
+    consume_reset: Some(consume_reset),
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let folder = instance.config_folder();
+    let executable = executable_for(instance.binary_path.as_deref(), folder.as_deref());
+    crate::logger::info(format!(
+        "{} executable: {}",
+        instance.provider_id().display_name(),
+        executable
+            .as_deref()
+            .map_or("none".into(), |path| path.display().to_string())
+    ));
+    let client = ClaudeClient::for_instance(instance);
+    let activator = ClaudeActivator::new(executable).with_config_folder(folder);
+    Ok(crate::worker::start_worker(
+        client.clone(),
+        client,
+        Some(Box::new(activator)),
+        options,
+    ))
+}
+
+/// The desktop app counts too: it ships its own Claude Code and never writes
+/// a credentials file. A signed-in folder alone is enough to read limits,
+/// for portable/npm installs whose launcher is not on this process's PATH.
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    if instance.uses_manual_credential() {
+        let saved = secrets::has_value(&manual_secret_name(&instance.id));
+        return InstallStatus {
+            app: saved.then(|| crate::i18n::tr("saved-credential").into()),
+            used: saved.then_some(InstallSource::App),
+            ..InstallStatus::none(instance)
+        };
+    }
+    let folder = instance.config_folder();
+    let app = claude_desktop::bundled_cli();
+    let cli = cli_available(instance.binary_path.as_deref());
+    // Another account's folder never runs the app's bundled copy.
+    let used = if app.is_some() && folder.is_none() {
+        Some(InstallSource::App)
+    } else {
+        cli.as_ref().map(|_| InstallSource::Cli)
+    };
+    let credentials = match folder {
+        Some(folder) => Some(folder.join(".credentials.json")),
+        None => credentials_path(),
+    };
+    InstallStatus {
+        app: app.as_deref().map(display_path),
+        cli: cli.as_deref().map(display_path),
+        used,
+        signed_in: credentials.is_some_and(|path| path.is_file()),
+        ..InstallStatus::none(instance)
+    }
+}
+
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        app: crate::i18n::tr("claude-desktop-app"),
+        cli: crate::i18n::tr("claude-code-cli"),
+        folders: vec![FolderField::binary(
+            crate::i18n::tr("claude-code-cli-folder"),
+            crate::i18n::tr("folder-with-claude-exe-claude-cmd-or-claude-ps1-leave-empty-to-fi"),
+            r"C:\Users\you\AppData\Roaming\npm",
+        )],
+        ..SettingsCopy::new(crate::i18n::tr("reads-your-existing-claude-code-login"))
+    }
+}
+
+fn forget_secrets(instance: &ProviderInstance) -> Result<()> {
+    save_manual_credential(&instance.id, None)
+}
+
+fn consume_reset(instance: &ProviderInstance) -> ResetResult {
+    let mut client = ClaudeClient::for_instance(instance);
+    let outcome = client.consume_reset()?;
+    Ok((outcome, client.read_rate_limits()))
+}
+
+/// The `reset_rate_limits` endpoint's outcomes.
+fn reset_outcome(value: &str) -> Result<Outcome> {
+    Ok(match value {
+        "reset" => Outcome::Reset,
+        "not_limited" => Outcome::NothingToReset,
+        "ineligible" => Outcome::NoCredit,
+        "already_used" => Outcome::AlreadyRedeemed,
+        _ => return Err(crate::banked_reset::unconfirmed()),
+    })
 }
 
 pub fn save_manual_credential(instance_id: &str, value: Option<&str>) -> Result<()> {
@@ -304,6 +397,7 @@ impl ClaudeLogin {
 /// Reads one Claude instance's usage from Claude's OAuth usage endpoint, the
 /// same one CodexBar queries. Folder logins stay in Claude's own
 /// `.credentials.json`; Minibar only writes back a login it renewed itself.
+#[derive(Clone)]
 pub struct ClaudeClient {
     timeout: Duration,
     provider: ProviderId,
@@ -318,13 +412,14 @@ pub struct ClaudeClient {
 
 /// The last renewal tried for one refresh token. A new token (another
 /// renewal or a fresh sign-in) is always tried right away.
+#[derive(Clone)]
 struct RefreshAttempt {
     refresh_token: String,
     at: Instant,
     rejected: bool,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct ClaudeAccountCache {
     account_name: Option<String>,
     plan_type: Option<String>,
@@ -379,7 +474,7 @@ impl ClaudeClient {
         self
     }
 
-    pub(crate) fn consume_reset(&mut self) -> Result<crate::banked_reset::Outcome> {
+    pub(crate) fn consume_reset(&mut self) -> Result<Outcome> {
         let folder = match &self.login {
             ClaudeLogin::Folder(folder) => folder.clone(),
             ClaudeLogin::Ambient => credentials_path()
@@ -425,7 +520,7 @@ impl ClaudeClient {
         let account = crate::banked_reset::account_key("claude", &folder, organization);
         crate::banked_reset::redeem(account, grant, |key, grant| {
             if grant.is_empty() {
-                return Ok(crate::banked_reset::Outcome::NoCredit);
+                return Ok(Outcome::NoCredit);
             }
             if grant.len() > 40
                 || !grant
@@ -1266,7 +1361,7 @@ fn claim_reset(
     access_token: &str,
     grant: &str,
     key: &str,
-) -> Result<crate::banked_reset::Outcome> {
+) -> Result<Outcome> {
     let response = request
         .set("Authorization", &format!("Bearer {}", access_token))
         .set("anthropic-beta", OAUTH_BETA)
@@ -1296,7 +1391,7 @@ fn claim_reset(
     if outcome == "cooldown" {
         return Err(crate::banked_reset::settled("reset-cooldown"));
     }
-    crate::banked_reset::Outcome::parse(outcome)
+    reset_outcome(outcome)
 }
 
 #[derive(Deserialize)]
@@ -1709,6 +1804,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reset_outcomes_are_distinct_and_unknown_is_not_success() {
+        for (value, outcome) in [
+            ("reset", Outcome::Reset),
+            ("not_limited", Outcome::NothingToReset),
+            ("ineligible", Outcome::NoCredit),
+            ("already_used", Outcome::AlreadyRedeemed),
+        ] {
+            assert_eq!(reset_outcome(value).unwrap(), outcome);
+        }
+        assert!(reset_outcome("unavailable").is_err());
+        assert!(reset_outcome("").is_err());
+    }
+
+    #[test]
     fn parses_oauth_session_and_weekly_windows() {
         let sampled_at = Utc.with_ymd_and_hms(2026, 7, 15, 12, 0, 0).unwrap();
         let limits = parse_usage_response(
@@ -2084,7 +2193,7 @@ mod tests {
             "stable-request",
         )
         .unwrap();
-        assert_eq!(result, crate::banked_reset::Outcome::Reset);
+        assert_eq!(result, Outcome::Reset);
         let (headers, body) = peer.join().unwrap();
         let headers = headers.to_ascii_lowercase();
         assert!(headers.starts_with("post /api/organizations/test-org/reset_rate_limits "));

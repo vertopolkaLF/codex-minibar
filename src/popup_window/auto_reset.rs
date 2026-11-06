@@ -307,7 +307,7 @@ impl AutoReset {
             } else {
                 format!("{name} banked reset expires soon; applying it automatically")
             });
-            let result = crate::banked_reset::consume(&instance);
+            let result = crate::drivers::consume_reset(&instance);
             match &result {
                 Ok((Outcome::Reset, _)) => {
                     crate::logger::info(format!("{name} banked reset applied"));

@@ -7,6 +7,7 @@ pub mod cmdpal;
 pub mod codex;
 pub mod commandcode;
 pub mod cursor;
+mod drivers;
 pub mod fake;
 pub mod format;
 pub mod game_mode;

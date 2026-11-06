@@ -21,11 +21,11 @@ use super::{
     nav::{NavMode, Page, Tab, first_provider_page, provider_nav_order, shows_badge},
     persistence,
     providers::{
-        OpenRouterSettingsSnapshot, ProviderDialog, ProviderInstallStatus, ProviderReadiness,
-        instance_install_status, provider_readiness,
+        OpenRouterSettingsSnapshot, ProviderDialog, ProviderReadiness, provider_readiness,
     },
     theme::{Fonts, Theme},
 };
+use crate::drivers::InstallStatus;
 use crate::popup_window::AppState;
 use crate::popup_window::ui::fx;
 use crate::provider_registry::ProviderKind;
@@ -45,15 +45,8 @@ const CONTENT_MAX_WIDTH: f32 = 1000.0;
 /// Smooth wheel scrolling: one notch glides over this duration.
 const SCROLL_GLIDE: Duration = Duration::from_millis(140);
 
-/// Instance fields that drive install detection; names, badges and toggles
-/// never re-run it.
-type DetectionInput = (
-    String,
-    ProviderKind,
-    Option<std::path::PathBuf>,
-    Option<std::path::PathBuf>,
-    Option<std::path::PathBuf>,
-);
+/// What install detection reads; names, badges and toggles never re-run it.
+type DetectionInput = (String, crate::instances::SourceKey);
 
 pub(crate) struct SettingsWindow {
     pub(super) state: Arc<AppState>,
@@ -81,7 +74,7 @@ pub(crate) struct SettingsWindow {
     // Text inputs keyed by field id.
     inputs: Inputs<SettingsWindow>,
     // Provider pages.
-    pub(super) install_statuses: HashMap<String, ProviderInstallStatus>,
+    pub(super) install_statuses: HashMap<String, InstallStatus>,
     detection_inputs: Option<Vec<DetectionInput>>,
     detection_revision: u64,
     detection_task: Option<Task<()>>,
@@ -486,15 +479,7 @@ impl SettingsWindow {
             .settings
             .instances
             .iter()
-            .map(|instance| {
-                (
-                    instance.id.clone(),
-                    instance.driver,
-                    instance.binary_path.clone(),
-                    instance.kiro_crew_path.clone(),
-                    instance.kiro_cli_path.clone(),
-                )
-            })
+            .map(|instance| (instance.id.clone(), instance.source_key()))
             .collect::<Vec<_>>();
         let revision = self.status_revision;
         if self.detection_inputs.as_ref() == Some(&inputs) && self.detection_revision == revision {
@@ -506,15 +491,13 @@ impl SettingsWindow {
         self.detection_revision = revision;
         self.install_statuses
             .retain(|id, _| inputs.iter().any(|input| &input.0 == id));
-        for input in &inputs {
+        for (input, instance) in inputs.iter().zip(&self.settings.instances) {
             let unchanged = previous
                 .as_ref()
                 .is_some_and(|previous| previous.contains(input));
             if !unchanged || !self.install_statuses.contains_key(&input.0) {
-                self.install_statuses.insert(
-                    input.0.clone(),
-                    ProviderInstallStatus::checking_for(input.1),
-                );
+                self.install_statuses
+                    .insert(input.0.clone(), InstallStatus::checking(instance));
             }
         }
         let instances = self.settings.instances.clone();
@@ -527,7 +510,7 @@ impl SettingsWindow {
                 .spawn(async move {
                     instances
                         .iter()
-                        .map(|instance| (instance.id.clone(), instance_install_status(instance)))
+                        .map(|instance| (instance.id.clone(), crate::drivers::detect(instance)))
                         .collect::<HashMap<_, _>>()
                 })
                 .await;
@@ -544,11 +527,11 @@ impl SettingsWindow {
             .map_or(ProviderReadiness::Checking, provider_readiness)
     }
 
-    pub(super) fn install_status(&self, provider: ProviderId) -> ProviderInstallStatus {
+    pub(super) fn install_status(&self, instance: &ProviderInstance) -> InstallStatus {
         self.install_statuses
-            .get(provider.id())
+            .get(&instance.id)
             .cloned()
-            .unwrap_or_else(|| ProviderInstallStatus::checking_for(provider.kind()))
+            .unwrap_or_else(|| InstallStatus::checking(instance))
     }
 
     pub(super) fn instance(&self, provider: ProviderId) -> Option<&ProviderInstance> {

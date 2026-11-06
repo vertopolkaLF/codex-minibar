@@ -5,10 +5,14 @@ use gpui::{
     prelude::FluentBuilder, px, relative,
 };
 
+use std::path::PathBuf;
+
 use super::super::input::InputEvent;
 use super::super::kit::{self, Button, Kit, MenuItem, Row};
 use super::super::window::SettingsWindow;
 use super::*;
+use crate::drivers::FolderField;
+use crate::instances::PathField;
 use crate::popup_window::ui::fx;
 use crate::settings::{BadgeColor, LimitRefreshInterval, TimeFormat};
 
@@ -19,10 +23,7 @@ enum Dot {
 }
 
 /// One-line status shared by the page header and the sidebar dot.
-fn status_line(
-    instance: &ProviderInstance,
-    status: &ProviderInstallStatus,
-) -> (String, Option<Dot>) {
+fn status_line(instance: &ProviderInstance, status: &InstallStatus) -> (String, Option<Dot>) {
     let provider = instance.driver;
     if !instance.enabled {
         return (crate::i18n::tr("off").into(), None);
@@ -81,15 +82,19 @@ fn status_line(
                 }
             }
             _ => {
-                let (app, crew, cli) = source_labels(provider);
+                let copy = crate::drivers::settings_copy(provider);
                 match status.used {
-                    Some(ProviderInstallSource::Cli) => {
-                        crate::i18n::format("reading-cli", &[("cli", cli.to_string())])
+                    Some(InstallSource::Cli) => {
+                        crate::i18n::format("reading-cli", &[("cli", copy.cli.to_string())])
                     }
-                    Some(ProviderInstallSource::Crew) => {
-                        crate::i18n::format("reading-crew", &[("crew", crew.to_string())])
+                    Some(InstallSource::Crew) => {
+                        crate::i18n::format("reading-crew", &[("crew", copy.crew.to_string())])
                     }
-                    _ => crate::i18n::format("reading-app", &[("app", app.to_string())]),
+                    Some(InstallSource::App) => {
+                        crate::i18n::format("reading-app", &[("app", copy.app.to_string())])
+                    }
+                    // Read straight from the sign-in, without the app or CLI.
+                    None => crate::i18n::tr("found-on-this-pc").to_owned(),
                 }
             }
         },
@@ -97,16 +102,23 @@ fn status_line(
     (text, dot)
 }
 
-fn checking_message(status: &ProviderInstallStatus) -> &'static str {
-    if status.crew_applicable {
+fn checking_message(status: &InstallStatus) -> &'static str {
+    if status.sources.crew {
         crate::i18n::tr("checking-kiro-ide-kiro-crew-and-cli")
-    } else if status.app_applicable && status.cli_applicable {
+    } else if status.sources.app && status.sources.cli {
         crate::i18n::tr("checking-installed-app-and-cli")
-    } else if status.cli_applicable {
+    } else if status.sources.cli {
         crate::i18n::tr("checking-cli")
     } else {
         crate::i18n::tr("checking-installed-app")
     }
+}
+
+fn path_text(field: PathField, instance: &ProviderInstance) -> String {
+    field
+        .read(instance)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn masked(k: &Kit, hint: impl Into<SharedString>) -> AnyElement {
@@ -167,7 +179,7 @@ impl SettingsWindow {
         let Some(instance) = self.instance(provider).cloned() else {
             return self.no_providers_page(k, cx);
         };
-        let status = self.install_status(provider);
+        let status = self.install_status(&instance);
         let mut rows = vec![self.provider_header(&instance, &status, k, cx)];
         if !instance.enabled {
             rows.push(kit::info_bar(
@@ -222,7 +234,7 @@ impl SettingsWindow {
     fn provider_header(
         &mut self,
         instance: &ProviderInstance,
-        status: &ProviderInstallStatus,
+        status: &InstallStatus,
         k: &mut Kit,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -527,7 +539,7 @@ impl SettingsWindow {
                         .truncate()
                         .text_size(px(12.0))
                         .text_color(k.theme.text_tertiary)
-                        .child(display_fs_path(folder))
+                        .child(crate::drivers::display_path(folder))
                         .into_any_element(),
                 );
             }
@@ -555,7 +567,7 @@ impl SettingsWindow {
     fn runtime_section(
         &mut self,
         instance: &ProviderInstance,
-        status: &ProviderInstallStatus,
+        status: &InstallStatus,
         k: &mut Kit,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -565,13 +577,14 @@ impl SettingsWindow {
         if driver == ProviderKind::OpenRouter {
             return Vec::new();
         }
+        let copy = crate::drivers::settings_copy(driver);
         let mut out = vec![kit::section_header(
             k,
             crate::i18n::tr("runtime"),
             Some(
                 crate::i18n::format(
                     "minibar-finds-these-automatically",
-                    &[("v0", (provider_description(driver)).to_string())],
+                    &[("v0", copy.description.to_string())],
                 )
                 .into(),
             ),
@@ -594,44 +607,43 @@ impl SettingsWindow {
                         .render(k),
                 );
             } else {
-                let (app_label, crew_label, cli_label) = source_labels(driver);
                 let other_claude_account =
                     driver == ProviderKind::Claude && instance.config_folder().is_some();
-                if status.app_applicable {
+                if status.sources.app {
                     cards.push(self.source_row(
                         k,
                         cx,
                         provider,
                         "desktop-fill",
-                        app_label,
+                        copy.app,
                         status.app.as_deref(),
-                        status.used == Some(ProviderInstallSource::App),
+                        status.used == Some(InstallSource::App),
                         driver == ProviderKind::Cursor,
                         other_claude_account.then_some(crate::claude::OTHER_ACCOUNT_NEEDS_CLI),
                     ));
                 }
-                if status.crew_applicable {
+                if status.sources.crew {
                     cards.push(self.source_row(
                         k,
                         cx,
                         provider,
                         "desktop-fill",
-                        crew_label,
+                        copy.crew,
                         status.crew.as_deref(),
-                        status.used == Some(ProviderInstallSource::Crew),
+                        status.used == Some(InstallSource::Crew),
                         false,
                         None,
                     ));
                 }
-                if status.cli_applicable {
+                if status.sources.cli {
                     cards.push(self.source_row(
                         k,
                         cx,
                         provider,
                         "terminal-window-fill",
-                        cli_label,
+                        copy.cli,
                         status.cli.as_deref(),
-                        status.used == Some(ProviderInstallSource::Cli),
+                        status.used == Some(InstallSource::Cli),
                         driver != ProviderKind::Kiro,
                         None,
                     ));
@@ -644,7 +656,7 @@ impl SettingsWindow {
         if crate::provider_registry::descriptor(driver).config_folder {
             out.extend(self.source_settings(instance, k, window, cx));
         }
-        for config in folder_configs(driver) {
+        for config in copy.folders {
             out.push(div().h(px(4.0)).into_any_element());
             out.push(self.folder_expander(instance, config, k, window, cx));
         }
@@ -778,7 +790,7 @@ impl SettingsWindow {
         let provider = instance.provider_id();
         let input = self.input(
             format!("provider-{}-path-{}", provider.id(), field.key()),
-            &field.read(instance),
+            &path_text(field, instance),
             placeholder.to_owned(),
             false,
             false,
@@ -787,7 +799,7 @@ impl SettingsWindow {
             move |this, value, _, _, cx| {
                 let unchanged = this
                     .instance(provider)
-                    .is_some_and(|instance| field.read(instance) == value.trim());
+                    .is_some_and(|instance| path_text(field, instance) == value.trim());
                 if unchanged {
                     return;
                 }
@@ -824,7 +836,7 @@ impl SettingsWindow {
     fn folder_expander(
         &mut self,
         instance: &ProviderInstance,
-        config: FolderConfig,
+        config: FolderField,
         k: &mut Kit,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -908,7 +920,10 @@ impl SettingsWindow {
             } else {
                 crate::instances::managed_folder(&instance.id).ok()
             };
-            let placeholder = default.as_deref().map(display_fs_path).unwrap_or_default();
+            let placeholder = default
+                .as_deref()
+                .map(crate::drivers::display_path)
+                .unwrap_or_default();
             let picker = self.folder_picker(
                 instance,
                 PathField::ConfigFolder,
@@ -1040,7 +1055,7 @@ impl SettingsWindow {
         ]
     }
 
-    fn opencode_source_card(&self, status: &ProviderInstallStatus, k: &Kit) -> AnyElement {
+    fn opencode_source_card(&self, status: &InstallStatus, k: &Kit) -> AnyElement {
         if status.checking {
             return kit::row_card(
                 k,

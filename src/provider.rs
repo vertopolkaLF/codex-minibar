@@ -3,14 +3,9 @@ use std::{collections::HashMap, path::PathBuf, sync::mpsc::Sender, thread, time:
 use anyhow::{Context, Result, anyhow};
 
 use crate::{
-    claude::{ClaudeActivator, ClaudeClient},
-    codex::{CodexActivator, CodexClient, first_available},
-    cursor::{CursorActivator, CursorClient},
     instances::{Capabilities, ProviderId, ProviderInstance},
-    openrouter::OpenRouterClient,
-    provider_registry::ProviderKind,
     settings::Settings,
-    worker::{self, WorkerEvent, WorkerHandle},
+    worker::{WorkerEvent, WorkerHandle, WorkerOptions},
 };
 
 pub type ProviderWorkers = HashMap<ProviderId, WorkerHandle>;
@@ -41,18 +36,6 @@ pub fn start_enabled_workers(
     (workers, errors)
 }
 
-/// Settings shared by every worker regardless of driver.
-struct WorkerOptions {
-    activation_path: PathBuf,
-    automatic_activation: bool,
-    schedules: Vec<crate::settings::ScheduledActivation>,
-    pauses: Vec<crate::settings::AutoActivationPause>,
-    history_retention_days: u16,
-    usage_refresh_interval: Duration,
-    usage_collection_enabled: bool,
-    limit_refresh_interval: Duration,
-}
-
 pub fn start_provider_worker(
     provider: ProviderId,
     settings: &Settings,
@@ -62,20 +45,11 @@ pub fn start_provider_worker(
     let instance = settings
         .instance(provider)
         .with_context(|| format!("{} is not configured", provider.display_name()))?;
-    let activates = crate::provider_registry::descriptor(provider.kind()).supports_activation;
     let options = WorkerOptions {
         activation_path: provider_activation_path(provider, activation_path),
         automatic_activation: automatic_activation(provider, settings),
-        schedules: if activates {
-            schedules_for(provider, settings)
-        } else {
-            Vec::new()
-        },
-        pauses: if activates {
-            auto_activation_pauses_for(provider, settings)
-        } else {
-            Vec::new()
-        },
+        schedules: schedules_for(provider, settings),
+        pauses: auto_activation_pauses_for(provider, settings),
         history_retention_days: settings.history_retention_days,
         usage_refresh_interval: usage_refresh_interval(settings),
         usage_collection_enabled: settings.usage_stats_collection_enabled(provider),
@@ -84,7 +58,7 @@ pub fn start_provider_worker(
     // A replaced worker can still have queued output. Tag every forwarded
     // event so the bridge rejects anything from an older credential.
     let worker_revision = instance.credentials_revision;
-    let mut worker = start_driver_worker(instance, options)?;
+    let mut worker = crate::drivers::start_worker(instance, options)?;
     let source_events = worker
         .take_events()
         .ok_or_else(|| anyhow!("provider worker did not expose an event stream"))?;
@@ -160,141 +134,6 @@ pub fn start_provider_worker(
         }
     });
     Ok(worker)
-}
-
-fn start_driver_worker(
-    instance: &ProviderInstance,
-    options: WorkerOptions,
-) -> Result<WorkerHandle> {
-    let provider = instance.provider_id();
-    macro_rules! start_worker {
-        ($limits:expr, $usage:expr, $activator:expr, $activation:expr) => {
-            worker::start_worker(
-                $limits,
-                $usage,
-                $activator,
-                options.activation_path,
-                $activation && options.automatic_activation,
-                options.schedules,
-                options.pauses,
-                options.history_retention_days,
-                options.usage_refresh_interval,
-                options.usage_collection_enabled,
-                options.limit_refresh_interval,
-            )
-        };
-    }
-    Ok(match instance.driver {
-        driver if crate::fake::serves(driver) => start_worker!(
-            crate::fake::FakeProvider(driver),
-            crate::fake::FakeProvider(driver),
-            crate::fake::FakeProvider(driver),
-            true
-        ),
-        ProviderKind::Codex => {
-            let executable = first_available(instance.binary_path.as_deref())
-                .unwrap_or_else(|_| PathBuf::from("codex"));
-            crate::logger::info(format!(
-                "{} executable: {}",
-                provider.display_name(),
-                executable.display()
-            ));
-            start_worker!(
-                CodexClient::for_instance(&executable, instance),
-                CodexClient::for_instance(&executable, instance),
-                CodexActivator::new(executable).with_home(instance.config_folder()),
-                true
-            )
-        }
-        ProviderKind::Claude => {
-            let folder = instance.config_folder();
-            let executable =
-                crate::claude::executable_for(instance.binary_path.as_deref(), folder.as_deref());
-            crate::logger::info(format!(
-                "{} executable: {}",
-                provider.display_name(),
-                executable
-                    .as_deref()
-                    .map_or("none".into(), |path| path.display().to_string())
-            ));
-            start_worker!(
-                ClaudeClient::for_instance(instance),
-                ClaudeClient::for_instance(instance),
-                ClaudeActivator::new(executable).with_config_folder(folder),
-                true
-            )
-        }
-        ProviderKind::Cursor => {
-            let executable = crate::cursor::installation_path(instance.binary_path.as_deref())
-                .unwrap_or_else(|| PathBuf::from("Cursor.exe"));
-            crate::logger::info(format!("Cursor executable: {}", executable.display()));
-            start_worker!(
-                CursorClient::new(),
-                CursorClient::new(),
-                CursorActivator,
-                false
-            )
-        }
-        ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => start_worker!(
-            crate::opencode::OpenCodeClient::new(provider)?,
-            crate::opencode::OpenCodeClient::new(provider)?,
-            crate::opencode::OpenCodeClient::new(provider)?,
-            false
-        ),
-        ProviderKind::OpenRouter => start_worker!(
-            OpenRouterClient::new(instance)?,
-            OpenRouterClient::new(instance)?,
-            crate::openrouter::OpenRouterActivator,
-            false
-        ),
-        ProviderKind::Antigravity => {
-            let path = instance.binary_path.clone();
-            if let Some(executable) = crate::antigravity::cli_available(path.as_deref()) {
-                crate::logger::info(format!("Antigravity executable: {}", executable.display()));
-            }
-            start_worker!(
-                crate::antigravity::AntigravityClient::new(path.clone()),
-                crate::antigravity::AntigravityClient::new(path),
-                crate::antigravity::AntigravityActivator,
-                false
-            )
-        }
-        ProviderKind::Grok => {
-            let path = instance.binary_path.clone();
-            if let Some(executable) = crate::grok::cli_available(path.as_deref()) {
-                crate::logger::info(format!("Grok executable: {}", executable.display()));
-            }
-            start_worker!(
-                crate::grok::GrokClient::new(path.clone()),
-                crate::grok::GrokClient::new(path),
-                crate::grok::GrokActivator,
-                false
-            )
-        }
-        ProviderKind::Kiro => {
-            let client = || {
-                crate::kiro::KiroClient::with_paths(
-                    instance.binary_path.as_deref(),
-                    instance.kiro_crew_path.as_deref(),
-                    instance.kiro_cli_path.as_deref(),
-                )
-            };
-            start_worker!(client(), client(), crate::kiro::KiroActivator, false)
-        }
-        ProviderKind::CommandCode => {
-            if let Some(executable) =
-                crate::commandcode::cli_available(instance.binary_path.as_deref())
-            {
-                crate::logger::info(format!("Command Code launcher: {}", executable.display()));
-            }
-            start_worker!(
-                crate::commandcode::CommandCodeClient::new(provider),
-                crate::commandcode::CommandCodeClient::new(provider),
-                crate::commandcode::CommandCodeActivator,
-                false
-            )
-        }
-    })
 }
 
 /// The quota poll interval an instance's worker uses right now: the
@@ -381,6 +220,7 @@ fn provider_activation_path(provider: ProviderId, base_path: PathBuf) -> PathBuf
 mod tests {
     use super::*;
     use crate::instances::InstanceSource;
+    use crate::provider_registry::ProviderKind;
 
     #[test]
     fn activation_is_a_per_instance_setting() {

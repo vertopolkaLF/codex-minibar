@@ -7,7 +7,6 @@ use gpui::{
 
 use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
-use crate::provider_registry::ProviderKind;
 
 impl SettingsWindow {
     pub(super) fn log_page(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {
@@ -97,18 +96,7 @@ impl SettingsWindow {
     }
 
     fn open_troubleshoot(&mut self, cx: &mut gpui::Context<Self>) {
-        // Troubleshooting uses the CLIs configured on the first instances.
-        let binary = |driver: ProviderKind| {
-            self.settings
-                .instances
-                .iter()
-                .find(|instance| instance.driver == driver)
-                .and_then(|instance| instance.binary_path.clone())
-        };
-        let tools = crate::troubleshoot::available_tools(
-            binary(ProviderKind::Codex).as_deref(),
-            binary(ProviderKind::Claude).as_deref(),
-        );
+        let tools = crate::troubleshoot::available_tools(&self.settings.instances);
         if tools.is_empty() {
             crate::notifications::show_kind(
                 crate::notifications::NotificationKind::Warning,
