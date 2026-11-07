@@ -1,7 +1,9 @@
 pub mod antigravity;
 pub mod app_event;
+pub mod app_ids;
 pub mod app_paths;
 pub mod banked_reset;
+pub mod choice;
 pub mod claude;
 pub mod claude_desktop;
 pub mod cmdpal;

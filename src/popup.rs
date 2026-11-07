@@ -14,6 +14,7 @@
 //! After hiding, the host parks at 1x1 pixels to release its large DirectX
 //! surfaces. Its full monitor geometry is restored before the next show.
 
+use crate::choice::Choice;
 use std::{
     sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU8, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -45,10 +46,10 @@ static IGNORE_OUTSIDE_UNTIL_MS: AtomicI64 = AtomicI64::new(0);
 static REVEAL_PINNED: AtomicBool = AtomicBool::new(false);
 static USER_PINNED: AtomicBool = AtomicBool::new(false);
 static DRAGGING: AtomicBool = AtomicBool::new(false);
-static BOTTOM_BAR_SIZE: AtomicU8 = AtomicU8::new(BottomBarSize::Comfortable.index() as u8);
+/// Index into `Choice::ALL`, like the material below.
+static BOTTOM_BAR_SIZE: AtomicU8 = AtomicU8::new(0);
 static CORNER_RADIUS_DIP: AtomicI32 = AtomicI32::new(WINDOW_CORNER_RADIUS_DIP);
-static POPUP_BACKGROUND_MATERIAL: AtomicU8 =
-    AtomicU8::new(PopupBackgroundMaterial::Acrylic.index() as u8);
+static POPUP_BACKGROUND_MATERIAL: AtomicU8 = AtomicU8::new(0);
 /// Visible capsule bounds in screen pixels, published by the GPUI thread on
 /// every geometry change. Outside-click detection must use the capsule and
 /// not the transparent technical host around it.
@@ -123,7 +124,7 @@ pub(crate) fn publish_surface_bounds(left: i32, top: i32, right: i32, bottom: i3
 }
 
 pub fn bottom_bar_size() -> BottomBarSize {
-    BottomBarSize::from_index(i32::from(BOTTOM_BAR_SIZE.load(Ordering::SeqCst)))
+    BottomBarSize::from_index(usize::from(BOTTOM_BAR_SIZE.load(Ordering::SeqCst)))
 }
 
 pub fn corner_radius_dip() -> i32 {
@@ -131,7 +132,9 @@ pub fn corner_radius_dip() -> i32 {
 }
 
 pub fn background_material() -> PopupBackgroundMaterial {
-    PopupBackgroundMaterial::from_index(i32::from(POPUP_BACKGROUND_MATERIAL.load(Ordering::SeqCst)))
+    PopupBackgroundMaterial::from_index(usize::from(
+        POPUP_BACKGROUND_MATERIAL.load(Ordering::SeqCst),
+    ))
 }
 
 /// Apply appearance values that affect the popup chrome. Startup calls this

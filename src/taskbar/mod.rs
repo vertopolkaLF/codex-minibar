@@ -202,6 +202,7 @@ pub fn publish_limits(limits: &ProviderLimits) {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+    use crate::choice::Choice;
     use crate::{
         limits::{LimitWindow, RateLimits},
         provider_registry::ProviderKind,
@@ -224,7 +225,8 @@ mod tests {
             },
         )]);
         let widgets = TaskbarWidgetStyle::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .map(|style| TaskbarWidget {
                 style,
                 ..TaskbarWidget::for_provider(codex)

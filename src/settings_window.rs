@@ -64,7 +64,7 @@ const WINDOW_MIN_SIZE: (f32, f32) = (860.0, 560.0);
 const ONBOARDING_WIDTH: f32 = 780.0;
 const ONBOARDING_HEIGHT: f32 = 560.0;
 pub(crate) fn settings_window_title() -> &'static str {
-    crate::i18n::tr("codex-minibar-settings")
+    crate::i18n::tr(crate::app_ids::SETTINGS_TITLE_KEY)
 }
 pub(crate) fn onboarding_window_title() -> &'static str {
     crate::i18n::tr("welcome-to-codex-minibar")

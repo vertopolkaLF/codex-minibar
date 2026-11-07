@@ -1,6 +1,7 @@
 //! Taskbar: widgets drawn inside the Windows taskbar, with live previews
 //! rendered by the same Direct2D code the taskbar uses.
 
+use crate::choice::Choice;
 use std::{collections::HashMap, sync::Arc};
 
 use gpui::{
@@ -403,7 +404,7 @@ impl SettingsWindow {
                         crate::i18n::tr("taskbar-click-tab"),
                         crate::i18n::tr("taskbar-click-home"),
                     ]),
-                    taskbar.click.index() as i32,
+                    taskbar.click.index(),
                     false,
                     Self::h(cx, |this, index: usize, _, cx| {
                         let click = TaskbarClick::ALL.get(index).copied().unwrap_or_default();
@@ -691,7 +692,7 @@ impl SettingsWindow {
                             crate::i18n::tr("taskbar-reset-countdown"),
                             crate::i18n::tr("taskbar-reset-clock"),
                         ]),
-                        reset.index() as i32,
+                        reset.index(),
                         false,
                         Self::h(cx, move |this, choice: usize, _, cx| {
                             let reset = TaskbarResetDisplay::ALL
@@ -775,7 +776,8 @@ impl SettingsWindow {
     ) -> AnyElement {
         let light = crate::win32::shell_uses_light_theme();
         let tiles = TaskbarWidgetStyle::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .map(|style| {
                 let selected = style == widget.style;
                 let mut variant = widget.clone();

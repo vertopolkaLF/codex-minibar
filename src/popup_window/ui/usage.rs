@@ -1,5 +1,6 @@
 //! Usage tab: local API usage overview across providers.
 
+use crate::choice::Choice;
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},

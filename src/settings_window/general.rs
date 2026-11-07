@@ -1,5 +1,6 @@
 //! General: startup, Usage Stats, the reset feed and provider status pages.
 
+use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, SharedString, Styled, Window,
     div, px, relative,
@@ -46,7 +47,7 @@ impl SettingsWindow {
                     "applies-immediately-to-every-app-window-and-notification-auto-fol",
                 )),
                 kit::options(&crate::i18n::Language::labels()),
-                s.language.index() as i32,
+                s.language.index(),
                 false,
                 Self::h(cx, |this, index: usize, _, cx| {
                     let language = crate::i18n::Language::from_index(index);
@@ -99,7 +100,7 @@ impl SettingsWindow {
                     usage_interval.index(),
                     !usage_enabled,
                     Self::h(cx, |this, index: usize, _, cx| {
-                        let value = UsageRefreshInterval::from_index(index as i32);
+                        let value = UsageRefreshInterval::from_index(index);
                         this.edit(cx, move |settings| settings.usage_refresh_interval = value)
                     }),
                 ),
@@ -161,7 +162,7 @@ impl SettingsWindow {
                     feed_interval.index(),
                     !feed,
                     Self::h(cx, |this, index: usize, _, cx| {
-                        let value = ResetAnnouncementRefreshInterval::from_index(index as i32);
+                        let value = ResetAnnouncementRefreshInterval::from_index(index);
                         this.edit(cx, move |settings| {
                             settings.reset_announcement_refresh_interval = value
                         })

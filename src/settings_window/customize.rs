@@ -1,6 +1,7 @@
 //! Customize: popup layout, tabs, card presentation and the Usage widget,
 //! plus the per-instance popup card table shown on provider pages.
 
+use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px,
 };
@@ -150,7 +151,7 @@ impl SettingsWindow {
                     tab_mode.index(),
                     false,
                     Self::h(cx, |this, index: usize, _, cx| {
-                        let mode = PopupTabMode::from_index(index as i32);
+                        let mode = PopupTabMode::from_index(index);
                         this.edit(cx, move |settings| settings.popup_tab_mode = mode)
                     }),
                 ),
@@ -234,10 +235,10 @@ impl SettingsWindow {
                         k,
                         "customize-spend-layout",
                         &[crate::i18n::tr("donut"), crate::i18n::tr("cards")],
-                        presentation.index().max(0) as usize,
+                        presentation.index(),
                         !self.settings.show_total_spend_on_all_tab,
                         Self::h(cx, |this, index: usize, _, cx| {
-                            let value = TotalSpendPresentation::from_index(index as i32);
+                            let value = TotalSpendPresentation::from_index(index);
                             this.edit(cx, move |settings| {
                                 settings.total_spend_presentation = value
                             })

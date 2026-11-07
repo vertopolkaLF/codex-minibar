@@ -16,6 +16,7 @@ const TASKBAR_DEFAULT_VERSION: u32 = 41;
 mod migration;
 pub(crate) mod unknown;
 
+pub use crate::choice::Choice;
 pub use crate::instances::{BadgeColor, InstanceSource, ProviderId, ProviderInstance};
 use crate::provider_registry::ProviderKind;
 
@@ -29,24 +30,6 @@ pub enum AppTheme {
     Auto,
     Light,
     Dark,
-}
-
-impl AppTheme {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Auto => 0,
-            Self::Light => 1,
-            Self::Dark => 2,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Light,
-            2 => Self::Dark,
-            _ => Self::Auto,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,35 +49,20 @@ pub enum AccentColor {
 }
 
 impl AccentColor {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Windows => 0,
-            Self::Blue => 1,
-            Self::Purple => 2,
-            Self::Pink => 3,
-            Self::Red => 4,
-            Self::Orange => 5,
-            Self::Green => 6,
-            Self::Teal => 7,
-            Self::Custom(_) => 8,
-        }
-    }
+    /// The named accents, in picker order.
+    pub const PRESETS: [Self; 8] = [
+        Self::Windows,
+        Self::Blue,
+        Self::Purple,
+        Self::Pink,
+        Self::Red,
+        Self::Orange,
+        Self::Green,
+        Self::Teal,
+    ];
 
     pub const fn custom(rgb: (u8, u8, u8)) -> Self {
         Self::Custom(((rgb.0 as u32) << 16) | ((rgb.1 as u32) << 8) | rgb.2 as u32)
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Blue,
-            2 => Self::Purple,
-            3 => Self::Pink,
-            4 => Self::Red,
-            5 => Self::Orange,
-            6 => Self::Green,
-            7 => Self::Teal,
-            _ => Self::Windows,
-        }
     }
 
     pub const fn rgb(self) -> Option<(u8, u8, u8)> {
@@ -122,21 +90,11 @@ pub enum BottomBarSize {
     Compact,
 }
 
+impl Choice for BottomBarSize {
+    const ALL: &'static [Self] = &[Self::Comfortable, Self::Compact];
+}
+
 impl BottomBarSize {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Comfortable => 0,
-            Self::Compact => 1,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Compact,
-            _ => Self::Comfortable,
-        }
-    }
-
     pub const fn footer_height_dip(self) -> i32 {
         match self {
             Self::Comfortable => 61,
@@ -231,28 +189,6 @@ pub enum PopupCornerRadius {
 }
 
 impl PopupCornerRadius {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Zero => 0,
-            Self::Four => 1,
-            Self::Small => 2,
-            Self::Medium => 3,
-            Self::Large => 4,
-            Self::ExtraLarge => 5,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            0 => Self::Zero,
-            1 => Self::Four,
-            3 => Self::Medium,
-            4 => Self::Large,
-            5 => Self::ExtraLarge,
-            _ => Self::Small,
-        }
-    }
-
     pub const fn from_dip(dip: i32) -> Self {
         match dip {
             0 => Self::Zero,
@@ -290,22 +226,8 @@ pub enum PopupBackgroundMaterial {
     Solid,
 }
 
-impl PopupBackgroundMaterial {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Acrylic => 0,
-            Self::Mica => 1,
-            Self::Solid => 2,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Mica,
-            2 => Self::Solid,
-            _ => Self::Acrylic,
-        }
-    }
+impl Choice for PopupBackgroundMaterial {
+    const ALL: &'static [Self] = &[Self::Acrylic, Self::Mica, Self::Solid];
 }
 
 /// Range and default of [`Settings::popup_vscode_contrast`], in percent.
@@ -353,21 +275,11 @@ impl Default for TimeFormat {
     }
 }
 
+impl Choice for TimeFormat {
+    const ALL: &'static [Self] = &[Self::Hour12, Self::Hour24];
+}
+
 impl TimeFormat {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Hour12 => 0,
-            Self::Hour24 => 1,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Hour24,
-            _ => Self::Hour12,
-        }
-    }
-
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Hour12 => "hour_12",
@@ -376,21 +288,14 @@ impl TimeFormat {
     }
 
     pub fn apply(self) {
-        TIME_FORMAT.store(
-            match self {
-                Self::Hour12 => 0,
-                Self::Hour24 => 1,
-            },
-            Ordering::Relaxed,
-        );
+        TIME_FORMAT.store(self.index() as u8, Ordering::Relaxed);
     }
 
     pub fn current() -> Self {
-        match TIME_FORMAT.load(Ordering::Relaxed) {
-            0 => Self::Hour12,
-            1 => Self::Hour24,
-            _ => Self::from_windows(),
-        }
+        Self::ALL
+            .get(usize::from(TIME_FORMAT.load(Ordering::Relaxed)))
+            .copied()
+            .unwrap_or_else(Self::from_windows)
     }
 
     pub fn from_windows() -> Self {
@@ -497,9 +402,8 @@ pub enum LimitRefreshInterval {
     Hours5,
 }
 
-impl LimitRefreshInterval {
-    /// Dropdown order.
-    pub const ALL: [Self; 10] = [
+impl Choice for LimitRefreshInterval {
+    const ALL: &'static [Self] = &[
         Self::Seconds30,
         Self::Minute1,
         Self::Minutes2,
@@ -511,11 +415,14 @@ impl LimitRefreshInterval {
         Self::Hours2,
         Self::Hours5,
     ];
+}
 
+impl LimitRefreshInterval {
     pub fn default_for(driver: ProviderKind) -> Self {
         let seconds = crate::provider_registry::descriptor(driver).default_refresh_seconds;
         Self::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|interval| interval.seconds() == seconds)
             .unwrap_or(Self::Minute1)
     }
@@ -548,20 +455,6 @@ impl LimitRefreshInterval {
             Self::Hours2 => "msg-2-hours",
             Self::Hours5 => "msg-5-hours",
         }
-    }
-
-    pub fn index(self) -> i32 {
-        Self::ALL
-            .iter()
-            .position(|interval| *interval == self)
-            .map_or(1, |index| index as i32)
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or(Self::Minute1)
     }
 }
 
@@ -607,30 +500,18 @@ impl ResetAnnouncementRefreshInterval {
             Self::Daily => 24 * 60 * 60,
         }
     }
+}
 
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Minutes15 => 0,
-            Self::Minutes30 => 1,
-            Self::Hour1 => 2,
-            Self::Hours3 => 3,
-            Self::Hours6 => 4,
-            Self::Hours12 => 5,
-            Self::Daily => 6,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            0 => Self::Minutes15,
-            1 => Self::Minutes30,
-            3 => Self::Hours3,
-            4 => Self::Hours6,
-            5 => Self::Hours12,
-            6 => Self::Daily,
-            _ => Self::Hour1,
-        }
-    }
+impl Choice for ResetAnnouncementRefreshInterval {
+    const ALL: &'static [Self] = &[
+        Self::Minutes15,
+        Self::Minutes30,
+        Self::Hour1,
+        Self::Hours3,
+        Self::Hours6,
+        Self::Hours12,
+        Self::Daily,
+    ];
 }
 
 /// How long before a banked reset credit expires Minibar spends it on the
@@ -648,9 +529,8 @@ pub enum AutoResetLead {
     Hours24,
 }
 
-impl AutoResetLead {
-    /// Dropdown order.
-    pub const ALL: [Self; 7] = [
+impl Choice for AutoResetLead {
+    const ALL: &'static [Self] = &[
         Self::Minutes5,
         Self::Minutes30,
         Self::Hour1,
@@ -659,7 +539,9 @@ impl AutoResetLead {
         Self::Hours12,
         Self::Hours24,
     ];
+}
 
+impl AutoResetLead {
     pub const fn minutes(self) -> i64 {
         match self {
             Self::Minutes5 => 5,
@@ -683,20 +565,6 @@ impl AutoResetLead {
             Self::Hours24 => "msg-24-hours",
         }
     }
-
-    pub fn index(self) -> i32 {
-        Self::ALL
-            .iter()
-            .position(|lead| *lead == self)
-            .map_or(1, |index| index as i32)
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or_default()
-    }
 }
 
 impl UsageRefreshInterval {
@@ -711,30 +579,18 @@ impl UsageRefreshInterval {
             Self::Minutes60 => 60 * 60,
         }
     }
+}
 
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Minute1 => 0,
-            Self::Minutes5 => 1,
-            Self::Minutes10 => 2,
-            Self::Minutes15 => 3,
-            Self::Minutes30 => 4,
-            Self::Minutes45 => 5,
-            Self::Minutes60 => 6,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            0 => Self::Minute1,
-            2 => Self::Minutes10,
-            3 => Self::Minutes15,
-            4 => Self::Minutes30,
-            5 => Self::Minutes45,
-            6 => Self::Minutes60,
-            _ => Self::Minutes5,
-        }
-    }
+impl Choice for UsageRefreshInterval {
+    const ALL: &'static [Self] = &[
+        Self::Minute1,
+        Self::Minutes5,
+        Self::Minutes10,
+        Self::Minutes15,
+        Self::Minutes30,
+        Self::Minutes45,
+        Self::Minutes60,
+    ];
 }
 
 /// When the app backs off to leave CPU, GPU and network to a game.
@@ -752,26 +608,17 @@ pub enum GameMode {
     Always,
 }
 
-impl GameMode {
-    pub const ALL: [Self; 3] = [Self::Off, Self::Automatic, Self::Always];
+impl Choice for GameMode {
+    const ALL: &'static [Self] = &[Self::Off, Self::Automatic, Self::Always];
+}
 
+impl GameMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => crate::i18n::tr("game-mode-off"),
             Self::Automatic => crate::i18n::tr("game-mode-automatic"),
             Self::Always => crate::i18n::tr("game-mode-always"),
         }
-    }
-
-    pub fn index(self) -> i32 {
-        Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) as i32
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or_default()
     }
 }
 
@@ -788,9 +635,11 @@ pub enum PopupTabMode {
     GroupedStacked,
 }
 
-impl PopupTabMode {
-    pub const ALL: [Self; 3] = [Self::Separate, Self::GroupedSwitcher, Self::GroupedStacked];
+impl Choice for PopupTabMode {
+    const ALL: &'static [Self] = &[Self::Separate, Self::GroupedSwitcher, Self::GroupedStacked];
+}
 
+impl PopupTabMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::Separate => crate::i18n::tr("separate-tabs"),
@@ -801,17 +650,6 @@ impl PopupTabMode {
 
     pub const fn is_grouped(self) -> bool {
         !matches!(self, Self::Separate)
-    }
-
-    pub fn index(self) -> i32 {
-        Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) as i32
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or_default()
     }
 }
 
@@ -1374,6 +1212,26 @@ pub enum TrayPresentation {
     ResetCountdown,
 }
 
+/// The picker offers the stacked designs; the single-indicator variants are
+/// the same designs.
+impl Choice for TrayPresentation {
+    const ALL: &'static [Self] = &[
+        Self::StackedNumbers,
+        Self::StackedBars,
+        Self::NestedRings,
+        Self::ResetTime,
+        Self::ResetCountdown,
+    ];
+
+    fn index(self) -> usize {
+        let canonical = self.canonical_percentage();
+        Self::ALL
+            .iter()
+            .position(|choice| *choice == canonical)
+            .unwrap_or_default()
+    }
+}
+
 impl TrayPresentation {
     pub const fn is_percentage(self) -> bool {
         matches!(
@@ -1411,20 +1269,8 @@ pub enum TotalSpendPresentation {
     ProgressBar,
 }
 
-impl TotalSpendPresentation {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Donut => 0,
-            Self::ProgressBar => 1,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::ProgressBar,
-            _ => Self::Donut,
-        }
-    }
+impl Choice for TotalSpendPresentation {
+    const ALL: &'static [Self] = &[Self::Donut, Self::ProgressBar];
 }
 
 /// How a Home provider widget lays out its quota windows.
@@ -1444,8 +1290,8 @@ pub enum HomeCardLayout {
     Classic,
 }
 
-impl HomeCardLayout {
-    pub const ALL: [Self; 5] = [
+impl Choice for HomeCardLayout {
+    const ALL: &'static [Self] = &[
         Self::Cards,
         Self::Lines,
         Self::Rings,
@@ -1507,6 +1353,16 @@ pub enum TrayColorMode {
     Provider,
     Accent,
     Monochrome,
+}
+
+impl Choice for TrayColorMode {
+    const ALL: &'static [Self] = &[
+        Self::Status,
+        Self::Fixed,
+        Self::Provider,
+        Self::Accent,
+        Self::Monochrome,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1704,9 +1560,9 @@ pub enum TaskbarWidgetStyle {
     Meters,
 }
 
-impl TaskbarWidgetStyle {
-    /// Picker order: text designs first, then by graphic.
-    pub const ALL: [Self; 6] = [
+/// Picker order: text designs first, then by graphic.
+impl Choice for TaskbarWidgetStyle {
+    const ALL: &'static [Self] = &[
         Self::Glance,
         Self::Rings,
         Self::Nested,
@@ -1714,20 +1570,15 @@ impl TaskbarWidgetStyle {
         Self::Bars,
         Self::Meters,
     ];
+}
 
+impl TaskbarWidgetStyle {
     /// How many indicators fit the taskbar height in this design.
     pub const fn max_indicators(self) -> usize {
         match self {
             Self::Glance => 2,
             Self::Rings | Self::Bars | Self::Nested | Self::Dials | Self::Meters => 3,
         }
-    }
-
-    pub fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|style| *style == self)
-            .unwrap_or_default()
     }
 
     /// Draws progress graphics, which can carry a pace marker.
@@ -1744,10 +1595,6 @@ impl TaskbarWidgetStyle {
     pub const fn has_reset(self) -> bool {
         self.has_labels()
     }
-
-    pub fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or_default()
-    }
 }
 
 /// How a taskbar widget tells when its quotas reset.
@@ -1763,15 +1610,8 @@ pub enum TaskbarResetDisplay {
     Clock,
 }
 
-impl TaskbarResetDisplay {
-    pub const ALL: [Self; 3] = [Self::Off, Self::Countdown, Self::Clock];
-
-    pub fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|display| *display == self)
-            .unwrap_or_default()
-    }
+impl Choice for TaskbarResetDisplay {
+    const ALL: &'static [Self] = &[Self::Off, Self::Countdown, Self::Clock];
 }
 
 /// The popup page a taskbar widget click opens.
@@ -1787,15 +1627,8 @@ pub enum TaskbarClick {
     Home,
 }
 
-impl TaskbarClick {
-    pub const ALL: [Self; 3] = [Self::Nearest, Self::Tab, Self::Home];
-
-    pub fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|click| *click == self)
-            .unwrap_or_default()
-    }
+impl Choice for TaskbarClick {
+    const ALL: &'static [Self] = &[Self::Nearest, Self::Tab, Self::Home];
 }
 
 /// Where the widget strip sits on the taskbar.

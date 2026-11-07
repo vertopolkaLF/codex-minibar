@@ -2160,7 +2160,7 @@ pub(crate) fn dropdown_row(
     title: impl Into<SharedString>,
     description: Option<&str>,
     labels: Vec<SharedString>,
-    selected: i32,
+    selected: usize,
     disabled: bool,
     on_select: Handler<usize>,
 ) -> AnyElement {
@@ -2168,7 +2168,7 @@ pub(crate) fn dropdown_row(
         k,
         id.to_owned(),
         labels,
-        usize::try_from(selected).ok(),
+        Some(selected),
         disabled,
         200.0,
         on_select,

@@ -43,9 +43,6 @@ use windows_sys::Win32::{
 };
 
 const SUBCLASS_ID: usize = 0x434D_4250; // "CMBP"
-pub(crate) const SHOW_MESSAGE: u32 = 0x8000 + 0x034D;
-/// A second launch finds the running popup by this title.
-pub(crate) const POPUP_TITLE: &str = "Codex Minibar";
 const DWMWCP_DONOTROUND: u32 = 1;
 const DWMNCRP_DISABLED: u32 = 1;
 
@@ -242,7 +239,7 @@ unsafe extern "system" fn popup_subclass_proc(
             finish_height_drag();
             unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
         }
-        SHOW_MESSAGE => {
+        crate::app_ids::SHOW_MESSAGE => {
             crate::popup::show_near_cursor();
             0
         }
@@ -305,7 +302,7 @@ pub(crate) fn configure(hwnd: HWND) {
     POPUP_HWND.set(hwnd);
     unsafe {
         SetWindowSubclass(hwnd, Some(popup_subclass_proc), SUBCLASS_ID, 0);
-        let title = crate::win32::wide(POPUP_TITLE);
+        let title = crate::win32::wide(crate::app_ids::POPUP_TITLE);
         SetWindowTextW(hwnd, title.as_ptr());
     }
     restyle(hwnd);

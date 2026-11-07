@@ -4,6 +4,7 @@
 //! window, previews it live. Dismissing the window restores what was there
 //! before, so it never leaves provider workers half-configured.
 
+use crate::choice::Choice;
 use std::sync::Arc;
 
 use gpui::{
@@ -486,7 +487,7 @@ impl OnboardingWindow {
                     crate::i18n::tr("language"),
                     None,
                     kit::options(&crate::i18n::Language::labels()),
-                    s.language.index() as i32,
+                    s.language.index(),
                     false,
                     Self::h(cx, |this, index: usize, _, cx| {
                         let language = crate::i18n::Language::from_index(index);
@@ -536,7 +537,7 @@ impl OnboardingWindow {
                     Self::h(cx, |this, index: usize, _, cx| {
                         this.edit(cx, move |settings| {
                             settings.usage_refresh_interval =
-                                UsageRefreshInterval::from_index(index as i32)
+                                UsageRefreshInterval::from_index(index)
                         });
                     }),
                 ),

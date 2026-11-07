@@ -1,5 +1,6 @@
 //! One provider instance's page.
 
+use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div,
     prelude::FluentBuilder, px, relative,
@@ -981,8 +982,10 @@ impl SettingsWindow {
         use crate::instances::{Capabilities, Capability};
         let provider = instance.provider_id();
         let descriptor = crate::provider_registry::descriptor(instance.driver);
-        let intervals =
-            LimitRefreshInterval::ALL.map(|interval| crate::i18n::tr(interval.label_key()));
+        let intervals = LimitRefreshInterval::ALL
+            .iter()
+            .map(|interval| crate::i18n::tr(interval.label_key()))
+            .collect::<Vec<_>>();
         let mut rows = vec![kit::dropdown_row(
             k,
             &format!("provider-{}-refresh", provider.id()),
@@ -992,7 +995,7 @@ impl SettingsWindow {
             instance.refresh_interval().index(),
             false,
             Self::h(cx, move |this, index: usize, _, cx| {
-                let value = LimitRefreshInterval::from_index(index as i32);
+                let value = LimitRefreshInterval::from_index(index);
                 this.edit_instance(cx, provider, move |instance| {
                     instance.refresh_interval = Some(value)
                 })

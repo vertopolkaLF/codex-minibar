@@ -1,5 +1,6 @@
 //! Home page: reorderable provider widgets and the Usage Stats summary.
 
+use crate::choice::Choice;
 use std::{collections::HashMap, f32::consts::PI, rc::Rc};
 
 use gpui::{

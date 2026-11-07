@@ -1,5 +1,6 @@
 //! Limit activation: automatic 5-hour sessions, quiet periods and schedules.
 
+use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div, px,
@@ -163,7 +164,10 @@ impl SettingsWindow {
             return rows;
         }
         let any_enabled = candidates.iter().any(|instance| instance.auto_reset);
-        let leads = AutoResetLead::ALL.map(|lead| crate::i18n::tr(lead.label_key()));
+        let leads = AutoResetLead::ALL
+            .iter()
+            .map(|lead| crate::i18n::tr(lead.label_key()))
+            .collect::<Vec<_>>();
         let mut card = vec![kit::dropdown_row(
             k,
             "activation-auto-reset-lead",
@@ -175,7 +179,7 @@ impl SettingsWindow {
             self.settings.auto_reset_lead.index(),
             !any_enabled,
             Self::h(cx, |this, index: usize, _, cx| {
-                let value = AutoResetLead::from_index(index as i32);
+                let value = AutoResetLead::from_index(index);
                 this.edit(cx, move |settings| settings.auto_reset_lead = value)
             }),
         )];

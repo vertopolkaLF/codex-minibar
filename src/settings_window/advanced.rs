@@ -1,6 +1,7 @@
 //! Advanced: game mode, rendering, settings import/export, clearing Usage data,
 //! factory reset.
 
+use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, div,
     px,
@@ -131,7 +132,7 @@ impl SettingsWindow {
                 game_mode.index(),
                 false,
                 Self::h(cx, |this, index: usize, _, cx| {
-                    let mode = GameMode::from_index(index as i32);
+                    let mode = GameMode::from_index(index);
                     this.edit(cx, move |settings| settings.game_mode = mode)
                 }),
             )]

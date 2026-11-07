@@ -4,6 +4,7 @@
 //! the provider mark over a title and a subtitle, so the editor offers only
 //! what reaches that text.
 
+use crate::choice::Choice;
 use futures::StreamExt;
 use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, Styled, Window, div, px};
 
@@ -488,7 +489,7 @@ impl SettingsWindow {
                     crate::i18n::tr("taskbar-reset-countdown"),
                     crate::i18n::tr("taskbar-reset-clock"),
                 ]),
-                reset.index() as i32,
+                reset.index(),
                 false,
                 Self::h(cx, move |this, choice: usize, _, cx| {
                     let reset = TaskbarResetDisplay::ALL

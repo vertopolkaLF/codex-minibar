@@ -6,6 +6,7 @@
 #[cfg(windows)]
 fn main() {
     use chrono::{Duration, Utc};
+    use codex_minibar::choice::Choice;
     use codex_minibar::{
         instances::ProviderId,
         limits::{LimitWindow, ProviderLimits, RateLimits},

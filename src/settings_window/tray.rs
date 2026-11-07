@@ -12,36 +12,38 @@ use super::window::SettingsWindow;
 use crate::popup_window::ui::theme::rgb8;
 use crate::provider_registry::ProviderKind;
 use crate::settings::{
-    LimitValue, ProviderId, TimeFormat, TrayColorMode, TrayFixedColor, TrayIndicator,
+    Choice, LimitValue, ProviderId, TimeFormat, TrayColorMode, TrayFixedColor, TrayIndicator,
     TrayPresentation, TrayWidget, TrayWidgetKind,
 };
 
-fn presentation_labels() -> [&'static str; 5] {
-    [
-        crate::i18n::tr("numbers"),
-        crate::i18n::tr("progress-bars"),
-        crate::i18n::tr("rings"),
-        crate::i18n::tr("reset-time"),
-        crate::i18n::tr("countdown"),
-    ]
+fn presentation_label(presentation: TrayPresentation) -> &'static str {
+    match presentation.canonical_percentage() {
+        TrayPresentation::StackedBars => crate::i18n::tr("progress-bars"),
+        TrayPresentation::NestedRings => crate::i18n::tr("rings"),
+        TrayPresentation::ResetTime => crate::i18n::tr("reset-time"),
+        TrayPresentation::ResetCountdown => crate::i18n::tr("countdown"),
+        _ => crate::i18n::tr("numbers"),
+    }
 }
-fn color_labels() -> [&'static str; 5] {
-    [
-        crate::i18n::tr("status"),
-        crate::i18n::tr("fixed"),
-        crate::i18n::tr("provider"),
-        crate::i18n::tr("app-accent"),
-        crate::i18n::tr("monochrome"),
-    ]
+
+fn presentation_hint(presentation: TrayPresentation) -> &'static str {
+    match presentation.canonical_percentage() {
+        TrayPresentation::StackedBars => crate::i18n::tr("one-bar-per-indicator"),
+        TrayPresentation::NestedRings => crate::i18n::tr("nested-rings-one-per-indicator"),
+        TrayPresentation::ResetTime => crate::i18n::tr("when-the-limit-resets"),
+        TrayPresentation::ResetCountdown => crate::i18n::tr("time-left-until-the-reset"),
+        _ => crate::i18n::tr("percentages-as-digits"),
+    }
 }
-fn presentation_hints() -> [&'static str; 5] {
-    [
-        crate::i18n::tr("percentages-as-digits"),
-        crate::i18n::tr("one-bar-per-indicator"),
-        crate::i18n::tr("nested-rings-one-per-indicator"),
-        crate::i18n::tr("when-the-limit-resets"),
-        crate::i18n::tr("time-left-until-the-reset"),
-    ]
+
+fn color_mode_label(mode: TrayColorMode) -> &'static str {
+    match mode {
+        TrayColorMode::Status => crate::i18n::tr("status"),
+        TrayColorMode::Fixed => crate::i18n::tr("fixed"),
+        TrayColorMode::Provider => crate::i18n::tr("provider"),
+        TrayColorMode::Accent => crate::i18n::tr("app-accent"),
+        TrayColorMode::Monochrome => crate::i18n::tr("monochrome"),
+    }
 }
 const MAX_INDICATORS: usize = 3;
 
@@ -135,50 +137,6 @@ fn provider_label(provider: ProviderId) -> String {
     }
 }
 
-fn color_mode_label(mode: TrayColorMode) -> &'static str {
-    color_labels()[color_mode_index(mode)]
-}
-
-fn color_mode_index(mode: TrayColorMode) -> usize {
-    match mode {
-        TrayColorMode::Status => 0,
-        TrayColorMode::Fixed => 1,
-        TrayColorMode::Provider => 2,
-        TrayColorMode::Accent => 3,
-        TrayColorMode::Monochrome => 4,
-    }
-}
-
-fn color_mode_from_index(index: usize) -> TrayColorMode {
-    match index {
-        1 => TrayColorMode::Fixed,
-        2 => TrayColorMode::Provider,
-        3 => TrayColorMode::Accent,
-        4 => TrayColorMode::Monochrome,
-        _ => TrayColorMode::Status,
-    }
-}
-
-fn presentation_index(presentation: TrayPresentation) -> usize {
-    match presentation.canonical_percentage() {
-        TrayPresentation::StackedBars => 1,
-        TrayPresentation::NestedRings => 2,
-        TrayPresentation::ResetTime => 3,
-        TrayPresentation::ResetCountdown => 4,
-        _ => 0,
-    }
-}
-
-fn presentation_from_index(index: usize) -> TrayPresentation {
-    match index {
-        1 => TrayPresentation::StackedBars,
-        2 => TrayPresentation::NestedRings,
-        3 => TrayPresentation::ResetTime,
-        4 => TrayPresentation::ResetCountdown,
-        _ => TrayPresentation::StackedNumbers,
-    }
-}
-
 /// Metric, value and color of an indicator, under its provider name.
 fn indicator_detail(indicator: &TrayIndicator) -> String {
     let metric = indicator.provider().map_or_else(
@@ -238,7 +196,7 @@ fn widget_short_summary(widget: &TrayWidget) -> String {
     if widget.kind == TrayWidgetKind::AppIcon {
         return crate::i18n::tr("the-codex-minibar-icon").into();
     }
-    let style = presentation_labels()[presentation_index(widget.presentation)];
+    let style = presentation_label(widget.presentation);
     let mut providers: Vec<String> = Vec::new();
     for provider in widget.indicators.iter().filter_map(TrayIndicator::provider) {
         let name = provider.qualified_name().to_string();
@@ -703,11 +661,10 @@ impl SettingsWindow {
                 ),
             ));
         } else {
-            let style = presentation_index(widget.presentation);
             body.push(dialog_section(
                 k,
                 crate::i18n::tr("style"),
-                presentation_hints()[style],
+                presentation_hint(widget.presentation),
             ));
             body.push(self.tray_style_picker(k, index, &widget, cx));
             let reset_clock = widget.presentation.is_reset_clock();
@@ -773,8 +730,8 @@ impl SettingsWindow {
             .first()
             .copied()
             .unwrap_or_default();
-        let current = presentation_index(widget.presentation);
-        let tiles = (0..presentation_labels().len())
+        let current = widget.presentation.index();
+        let tiles = (0..TrayPresentation::ALL.len())
             .map(|choice| {
                 let selected = choice == current;
                 let preview = if selected {
@@ -782,7 +739,7 @@ impl SettingsWindow {
                 } else {
                     let mut variant = widget.clone();
                     variant.id = format!("{}::style-{choice}", widget.id);
-                    variant.presentation = presentation_from_index(choice);
+                    variant.presentation = TrayPresentation::from_index(choice);
                     if variant.presentation.is_reset_clock() {
                         variant.indicators.truncate(1);
                     }
@@ -828,7 +785,7 @@ impl SettingsWindow {
                             } else {
                                 theme.text
                             })
-                            .child(presentation_labels()[choice]),
+                            .child(presentation_label(TrayPresentation::from_index(choice))),
                     );
                 kit::hover_bg(k, tile, kit::hover_key(&id), rest, hover)
                     .cursor_pointer()
@@ -852,7 +809,7 @@ impl SettingsWindow {
             let Some(widget) = widgets.get_mut(index) else {
                 return;
             };
-            widget.presentation = presentation_from_index(choice);
+            widget.presentation = TrayPresentation::from_index(choice);
             if widget.presentation.is_reset_clock() {
                 widget.indicators.truncate(1);
                 if widget.indicators.is_empty() {
@@ -1189,13 +1146,18 @@ impl SettingsWindow {
         let color_box = kit::dropdown(
             k,
             format!("{key}-color"),
-            kit::options(&color_labels()),
-            Some(color_mode_index(indicator.color_mode)),
+            kit::options(
+                &TrayColorMode::ALL
+                    .iter()
+                    .map(|mode| color_mode_label(*mode))
+                    .collect::<Vec<_>>(),
+            ),
+            Some(indicator.color_mode.index()),
             false,
             0.0,
             edit(
                 cx,
-                |indicator, choice, _, _| indicator.color_mode = color_mode_from_index(choice),
+                |indicator, choice, _, _| indicator.color_mode = TrayColorMode::from_index(choice),
                 Vec::new(),
                 Vec::new(),
             ),
@@ -1375,16 +1337,6 @@ mod tests {
         );
         assert!(parse_hex("12345").is_none());
         assert!(parse_hex("zzzzzz").is_none());
-    }
-
-    #[test]
-    fn presentation_and_color_indices_round_trip() {
-        for index in 0..presentation_labels().len() {
-            assert_eq!(presentation_index(presentation_from_index(index)), index);
-        }
-        for index in 0..color_labels().len() {
-            assert_eq!(color_mode_index(color_mode_from_index(index)), index);
-        }
     }
 
     #[test]

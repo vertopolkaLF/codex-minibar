@@ -13,6 +13,7 @@
 //! exclusive full screen, or one the user added. It lasts until that process
 //! exits, so Alt+Tab keeps it on and a full-screen video never starts it.
 
+use crate::choice::Choice;
 use std::collections::HashSet;
 use std::sync::{
     Mutex, OnceLock,
@@ -618,7 +619,7 @@ mod tests {
     #[test]
     fn mode_round_trips_through_its_index() {
         for mode in GameMode::ALL {
-            assert_eq!(GameMode::from_index(mode.index()), mode);
+            assert_eq!(GameMode::from_index(mode.index()), *mode);
         }
     }
 }

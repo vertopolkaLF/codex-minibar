@@ -15,17 +15,7 @@ use std::{
     },
 };
 
-const EN: &str = include_str!("../locales/en/app.ftl");
-const RU: &str = include_str!("../locales/ru/app.ftl");
-const PT_BR: &str = include_str!("../locales/pt-BR/app.ftl");
-const ES: &str = include_str!("../locales/es/app.ftl");
-const ZH_CN: &str = include_str!("../locales/zh-CN/app.ftl");
-const ZH_TW: &str = include_str!("../locales/zh-TW/app.ftl");
-const JA: &str = include_str!("../locales/ja/app.ftl");
-const DE: &str = include_str!("../locales/de/app.ftl");
-const FR: &str = include_str!("../locales/fr/app.ftl");
-const TR: &str = include_str!("../locales/tr/app.ftl");
-const KO_KR: &str = include_str!("../locales/ko-KR/app.ftl");
+use crate::choice::Choice;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -45,27 +35,156 @@ pub enum Language {
     Turkish,
 }
 
-static CURRENT: AtomicU8 = AtomicU8::new(Language::English.index() as u8);
+/// One supported display language and its embedded catalog.
+struct Locale {
+    language: Language,
+    /// Shown in every language selector.
+    native_name: &'static str,
+    /// The catalog's BCP 47 tag.
+    tag: &'static str,
+    /// Primary subtag of a system locale tag that selects this language.
+    primary_subtag: &'static str,
+    /// Windows primary language id that selects this language.
+    primary_langid: u16,
+    catalog: &'static str,
+}
+
+/// Native names in alphabetical (Unicode) order, shared by every selector.
+/// Simplified Chinese precedes Traditional, so a bare `zh` selects it.
+const LOCALES: [Locale; 11] = [
+    Locale {
+        language: Language::German,
+        native_name: "Deutsch",
+        tag: "de",
+        primary_subtag: "de",
+        primary_langid: 0x07,
+        catalog: include_str!("../locales/de/app.ftl"),
+    },
+    Locale {
+        language: Language::English,
+        native_name: "English",
+        tag: "en",
+        primary_subtag: "en",
+        primary_langid: 0x09,
+        catalog: include_str!("../locales/en/app.ftl"),
+    },
+    Locale {
+        language: Language::Spanish,
+        native_name: "Español",
+        tag: "es",
+        primary_subtag: "es",
+        primary_langid: 0x0a,
+        catalog: include_str!("../locales/es/app.ftl"),
+    },
+    Locale {
+        language: Language::French,
+        native_name: "Français",
+        tag: "fr",
+        primary_subtag: "fr",
+        primary_langid: 0x0c,
+        catalog: include_str!("../locales/fr/app.ftl"),
+    },
+    Locale {
+        language: Language::BrazilianPortuguese,
+        native_name: "Português (Brasil)",
+        tag: "pt-BR",
+        primary_subtag: "pt",
+        primary_langid: 0x16,
+        catalog: include_str!("../locales/pt-BR/app.ftl"),
+    },
+    Locale {
+        language: Language::Turkish,
+        native_name: "Türkçe",
+        tag: "tr",
+        primary_subtag: "tr",
+        primary_langid: 0x1f,
+        catalog: include_str!("../locales/tr/app.ftl"),
+    },
+    Locale {
+        language: Language::Russian,
+        native_name: "Русский",
+        tag: "ru",
+        primary_subtag: "ru",
+        primary_langid: 0x19,
+        catalog: include_str!("../locales/ru/app.ftl"),
+    },
+    Locale {
+        language: Language::Japanese,
+        native_name: "日本語",
+        tag: "ja",
+        primary_subtag: "ja",
+        primary_langid: 0x11,
+        catalog: include_str!("../locales/ja/app.ftl"),
+    },
+    Locale {
+        language: Language::SimplifiedChinese,
+        native_name: "简体中文",
+        tag: "zh-CN",
+        primary_subtag: "zh",
+        primary_langid: 0x04,
+        catalog: include_str!("../locales/zh-CN/app.ftl"),
+    },
+    Locale {
+        language: Language::TraditionalChinese,
+        native_name: "繁體中文",
+        tag: "zh-TW",
+        primary_subtag: "zh",
+        primary_langid: 0x04,
+        catalog: include_str!("../locales/zh-TW/app.ftl"),
+    },
+    Locale {
+        language: Language::Korean,
+        native_name: "한국어",
+        tag: "ko-KR",
+        primary_subtag: "ko",
+        primary_langid: 0x12,
+        catalog: include_str!("../locales/ko-KR/app.ftl"),
+    },
+];
+
+/// Position of `language` in [`LOCALES`]; Auto and unknown values map to English.
+const fn locale_index(language: Language) -> usize {
+    let mut index = 0;
+    while index < LOCALES.len() {
+        if LOCALES[index].language as u8 == language as u8 {
+            return index;
+        }
+        index += 1;
+    }
+    ENGLISH
+}
+
+const ENGLISH: usize = 1;
+const _: () = assert!(LOCALES[ENGLISH].language as u8 == Language::English as u8);
+const EN: &str = LOCALES[ENGLISH].catalog;
+
+/// Auto first, then [`LOCALES`] in order.
+const SELECTABLE: [Language; LOCALES.len() + 1] = {
+    let mut languages = [Language::Auto; LOCALES.len() + 1];
+    let mut index = 0;
+    while index < LOCALES.len() {
+        languages[index + 1] = LOCALES[index].language;
+        index += 1;
+    }
+    languages
+};
+
+/// Index into [`LOCALES`] of the resolved process language.
+static CURRENT: AtomicU8 = AtomicU8::new(ENGLISH as u8);
+
+impl Choice for Language {
+    const ALL: &'static [Self] = &SELECTABLE;
+}
 
 impl Language {
-    // Native names in alphabetical (Unicode) order, shared by every selector.
-    pub const SUPPORTED: [Self; 11] = [
-        Self::German,
-        Self::English,
-        Self::Spanish,
-        Self::French,
-        Self::BrazilianPortuguese,
-        Self::Turkish,
-        Self::Russian,
-        Self::Japanese,
-        Self::SimplifiedChinese,
-        Self::TraditionalChinese,
-        Self::Korean,
-    ];
+    pub fn supported() -> impl Iterator<Item = Self> {
+        LOCALES.iter().map(|locale| locale.language)
+    }
 
     pub fn apply(self) {
-        CURRENT.store(self.resolved().index() as u8, Ordering::Release);
+        CURRENT.store(locale_index(self.resolved()) as u8, Ordering::Release);
     }
+
     pub fn resolved(self) -> Self {
         if self == Self::Auto {
             system_language()
@@ -73,54 +192,24 @@ impl Language {
             self
         }
     }
-    pub const fn index(self) -> usize {
-        match self {
-            Self::Auto => 0,
-            Self::German => 1,
-            Self::English => 2,
-            Self::Spanish => 3,
-            Self::French => 4,
-            Self::BrazilianPortuguese => 5,
-            Self::Turkish => 6,
-            Self::Russian => 7,
-            Self::Japanese => 8,
-            Self::SimplifiedChinese => 9,
-            Self::TraditionalChinese => 10,
-            Self::Korean => 11,
-        }
-    }
-    pub fn from_index(index: usize) -> Self {
-        Self::SUPPORTED
-            .get(index.wrapping_sub(1))
-            .copied()
-            .unwrap_or(Self::Auto)
-    }
-    pub fn labels() -> [&'static str; 12] {
-        [
-            tr("auto-windows"),
-            "Deutsch",
-            "English",
-            "Español",
-            "Français",
-            "Português (Brasil)",
-            "Türkçe",
-            "Русский",
-            "日本語",
-            "简体中文",
-            "繁體中文",
-            "한국어",
-        ]
+
+    /// Selector labels in [`Choice::ALL`] order.
+    pub fn labels() -> Vec<&'static str> {
+        std::iter::once(tr("auto-windows"))
+            .chain(LOCALES.iter().map(|locale| locale.native_name))
+            .collect()
     }
 }
 
 pub fn current_language() -> Language {
-    Language::from_index(CURRENT.load(Ordering::Acquire) as usize)
+    LOCALES[usize::from(CURRENT.load(Ordering::Acquire))].language
 }
 
 fn language_from_tag(tag: &str) -> Language {
     let normalized = tag.to_ascii_lowercase().replace('_', "-");
     let mut subtags = normalized.split(['-', '.', '@']);
-    if subtags.next() == Some("zh") {
+    let primary = subtags.next().unwrap_or("");
+    if primary == "zh" {
         let subtags = subtags.collect::<Vec<_>>();
         // An explicit script takes precedence over a region (e.g. zh-Hans-HK).
         if subtags.contains(&"hant") {
@@ -136,24 +225,10 @@ fn language_from_tag(tag: &str) -> Language {
             return Language::TraditionalChinese;
         }
     }
-    match tag
-        .split(['-', '_', '.', '@'])
-        .next()
-        .unwrap_or("")
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "ru" => Language::Russian,
-        "pt" => Language::BrazilianPortuguese,
-        "es" => Language::Spanish,
-        "zh" => Language::SimplifiedChinese,
-        "ja" => Language::Japanese,
-        "de" => Language::German,
-        "fr" => Language::French,
-        "ko" => Language::Korean,
-        "tr" => Language::Turkish,
-        _ => Language::English,
-    }
+    LOCALES
+        .iter()
+        .find(|locale| locale.primary_subtag == primary)
+        .map_or(Language::English, |locale| locale.language)
 }
 
 #[cfg(any(windows, test))]
@@ -161,18 +236,12 @@ fn language_from_windows_langid(langid: u16) -> Language {
     if matches!(langid, 0x0404 | 0x0c04 | 0x1404 | 0x7c04) {
         return Language::TraditionalChinese;
     }
-    language_from_tag(match langid & 0x03ff {
-        0x19 => "ru",
-        0x16 => "pt",
-        0x0a => "es",
-        0x04 => "zh",
-        0x11 => "ja",
-        0x07 => "de",
-        0x0c => "fr",
-        0x12 => "ko",
-        0x1f => "tr",
-        _ => "en",
-    })
+    language_from_tag(
+        LOCALES
+            .iter()
+            .find(|locale| locale.primary_langid == langid & 0x03ff)
+            .map_or("en", |locale| locale.primary_subtag),
+    )
 }
 
 fn system_language() -> Language {
@@ -244,49 +313,21 @@ fn bundle(language: &str, source: &str) -> FluentBundle<FluentResource> {
     bundle
 }
 
+/// One bundle per [`LOCALES`] entry, in the same order.
 struct Catalogs {
-    en: FluentBundle<FluentResource>,
-    ru: FluentBundle<FluentResource>,
-    pt_br: FluentBundle<FluentResource>,
-    es: FluentBundle<FluentResource>,
-    zh_cn: FluentBundle<FluentResource>,
-    zh_tw: FluentBundle<FluentResource>,
-    ja: FluentBundle<FluentResource>,
-    de: FluentBundle<FluentResource>,
-    fr: FluentBundle<FluentResource>,
-    ko_kr: FluentBundle<FluentResource>,
-    tr: FluentBundle<FluentResource>,
+    bundles: Vec<FluentBundle<FluentResource>>,
 }
 impl Catalogs {
     fn new() -> Self {
         Self {
-            en: bundle("en", EN),
-            ru: bundle("ru", RU),
-            pt_br: bundle("pt-BR", PT_BR),
-            es: bundle("es", ES),
-            zh_cn: bundle("zh-CN", ZH_CN),
-            zh_tw: bundle("zh-TW", ZH_TW),
-            ja: bundle("ja", JA),
-            de: bundle("de", DE),
-            fr: bundle("fr", FR),
-            ko_kr: bundle("ko-KR", KO_KR),
-            tr: bundle("tr", TR),
+            bundles: LOCALES
+                .iter()
+                .map(|locale| bundle(locale.tag, locale.catalog))
+                .collect(),
         }
     }
     fn for_language(&self, language: Language) -> &FluentBundle<FluentResource> {
-        match language.resolved() {
-            Language::Russian => &self.ru,
-            Language::BrazilianPortuguese => &self.pt_br,
-            Language::Spanish => &self.es,
-            Language::SimplifiedChinese => &self.zh_cn,
-            Language::TraditionalChinese => &self.zh_tw,
-            Language::Japanese => &self.ja,
-            Language::German => &self.de,
-            Language::French => &self.fr,
-            Language::Korean => &self.ko_kr,
-            Language::Turkish => &self.tr,
-            _ => &self.en,
-        }
+        &self.bundles[locale_index(language.resolved())]
     }
     fn resolve(&self, language: Language, key: &str, args: Option<&FluentArgs>) -> Option<String> {
         let resolve = |bundle: &FluentBundle<FluentResource>| {
@@ -298,35 +339,35 @@ impl Catalogs {
                 .into_owned();
             (errors.is_empty() && !value.trim().is_empty()).then_some(value)
         };
-        resolve(self.for_language(language)).or_else(|| resolve(&self.en))
+        resolve(self.for_language(language)).or_else(|| resolve(&self.bundles[ENGLISH]))
     }
 }
 
 thread_local! { static CATALOGS: RefCell<Catalogs> = RefCell::new(Catalogs::new()); }
 
-static LABELS: LazyLock<HashMap<String, [&'static str; Language::SUPPORTED.len()]>> =
-    LazyLock::new(|| {
-        let catalogs = Catalogs::new();
-        let mut labels = HashMap::new();
-        for line in EN
-            .lines()
-            .filter(|line| !line.starts_with([' ', '#']) && line.contains(" = "))
-        {
-            let key = line.split(" = ").next().unwrap();
-            if catalogs.resolve(Language::English, key, None).is_some() {
-                let values = Language::SUPPORTED.map(|language| {
-                    Box::leak(
-                        catalogs
-                            .resolve(language, key, None)
-                            .expect("English fallback")
-                            .into_boxed_str(),
-                    ) as &'static str
-                });
-                labels.insert(key.to_owned(), values);
-            }
+/// Every static message, resolved for each [`LOCALES`] entry in order.
+static LABELS: LazyLock<HashMap<String, [&'static str; LOCALES.len()]>> = LazyLock::new(|| {
+    let catalogs = Catalogs::new();
+    let mut labels = HashMap::new();
+    for line in EN
+        .lines()
+        .filter(|line| !line.starts_with([' ', '#']) && line.contains(" = "))
+    {
+        let key = line.split(" = ").next().unwrap();
+        if catalogs.resolve(Language::English, key, None).is_some() {
+            let values = LOCALES.each_ref().map(|locale| {
+                Box::leak(
+                    catalogs
+                        .resolve(locale.language, key, None)
+                        .expect("English fallback")
+                        .into_boxed_str(),
+                ) as &'static str
+            });
+            labels.insert(key.to_owned(), values);
         }
-        labels
-    });
+    }
+    labels
+});
 
 /// Resolve a static label with English fallback. Keys are checked in tests.
 pub fn tr(key: &'static str) -> &'static str {
@@ -336,10 +377,7 @@ pub fn tr(key: &'static str) -> &'static str {
 /// Keep stored errors in the source language so login detection and future
 /// language switches are independent of the language at the time of a poll.
 pub fn english(key: &'static str) -> &'static str {
-    LABELS
-        .get(key)
-        .map(|labels| labels[Language::English.index() - 1])
-        .unwrap_or(key)
+    LABELS.get(key).map(|labels| labels[ENGLISH]).unwrap_or(key)
 }
 
 /// Resolve an explicit language without changing the process language. Also
@@ -347,19 +385,19 @@ pub fn english(key: &'static str) -> &'static str {
 pub fn tr_in(language: Language, key: &'static str) -> &'static str {
     LABELS
         .get(key)
-        .map(|labels| labels[language.resolved().index() - 1])
+        .map(|labels| labels[locale_index(language.resolved())])
         .unwrap_or(key)
 }
 
 /// This boundary is only for application error summaries, never user labels.
 pub fn localize_error(source: &str) -> String {
-    let index = current_language().index() - 1;
+    let index = usize::from(CURRENT.load(Ordering::Acquire));
     source
         .lines()
         .map(|line| {
             LABELS
                 .values()
-                .find(|labels| labels[Language::English.index() - 1] == line)
+                .find(|labels| labels[ENGLISH] == line)
                 .map(|labels| labels[index])
                 .unwrap_or(line)
         })
@@ -454,7 +492,7 @@ mod tests {
     fn native_language_names_are_sorted_and_match_their_selection_indices() {
         let labels = Language::labels();
         assert!(labels[1..].windows(2).all(|pair| pair[0] < pair[1]));
-        for (offset, language) in Language::SUPPORTED.into_iter().enumerate() {
+        for (offset, language) in Language::supported().enumerate() {
             assert_eq!(language.index(), offset + 1);
             assert_eq!(Language::from_index(offset + 1), language);
         }
@@ -570,18 +608,11 @@ mod tests {
     #[test]
     fn catalogs_cover_the_same_messages_and_parameters_and_resolve_without_errors() {
         let en = catalog_parameters(EN);
-        for (language, source) in [
-            (Language::Russian, RU),
-            (Language::BrazilianPortuguese, PT_BR),
-            (Language::Spanish, ES),
-            (Language::SimplifiedChinese, ZH_CN),
-            (Language::TraditionalChinese, ZH_TW),
-            (Language::Japanese, JA),
-            (Language::German, DE),
-            (Language::French, FR),
-            (Language::Korean, KO_KR),
-            (Language::Turkish, TR),
-        ] {
+        for locale in LOCALES
+            .iter()
+            .filter(|locale| locale.language != Language::English)
+        {
+            let (language, source) = (locale.language, locale.catalog);
             assert_eq!(
                 en,
                 catalog_parameters(source),
@@ -594,7 +625,7 @@ mod tests {
             template.keys().collect::<Vec<_>>()
         );
         let catalogs = Catalogs::new();
-        for language in Language::SUPPORTED {
+        for language in Language::supported() {
             let catalog = catalogs.for_language(language);
             for (key, parameters) in &en {
                 // Exercise every plural branch, including Portuguese zero and
@@ -689,7 +720,7 @@ mod tests {
     fn old_settings_default_to_auto_and_explicit_language_round_trips() {
         let settings: crate::settings::Settings = toml::from_str("version = 1").unwrap();
         assert_eq!(settings.language, Language::Auto);
-        for language in std::iter::once(Language::Auto).chain(Language::SUPPORTED) {
+        for language in Language::ALL.iter().copied() {
             let settings = crate::settings::Settings {
                 language,
                 ..Default::default()
@@ -710,27 +741,23 @@ mod tests {
     #[test]
     fn missing_empty_or_invalid_translation_falls_back_to_english() {
         let catalogs = Catalogs {
-            en: bundle(
-                "en",
-                "missing = English\nempty = English\nbad = Hello { $name }\n",
-            ),
-            ru: bundle("ru", "empty = { \"\" }\nbad = Привет { $unknown }\n"),
-            pt_br: bundle("pt-BR", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
-            es: bundle("es", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
-            zh_cn: bundle("zh-CN", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
-            zh_tw: bundle("zh-TW", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
-            ja: bundle("ja", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
-            de: bundle("de", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
-            fr: bundle("fr", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
-            ko_kr: bundle("ko-KR", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
-            tr: bundle("tr", "empty = { \"\" }\nbad = Hello { $unknown }\n"),
+            bundles: LOCALES
+                .iter()
+                .map(|locale| {
+                    let source = match locale.language {
+                        Language::English => {
+                            "missing = English\nempty = English\nbad = Hello { $name }\n"
+                        }
+                        Language::Russian => "empty = { \"\" }\nbad = Привет { $unknown }\n",
+                        _ => "empty = { \"\" }\nbad = Hello { $unknown }\n",
+                    };
+                    bundle(locale.tag, source)
+                })
+                .collect(),
         };
         let mut args = FluentArgs::new();
         args.set("name", "Ada");
-        for language in Language::SUPPORTED
-            .into_iter()
-            .filter(|language| *language != Language::English)
-        {
+        for language in Language::supported().filter(|language| *language != Language::English) {
             assert_eq!(
                 catalogs.resolve(language, "missing", None).as_deref(),
                 Some("English")
@@ -779,11 +806,11 @@ mod tests {
 
     #[test]
     fn language_selection_indices_and_display_language_tags() {
-        for language in std::iter::once(Language::Auto).chain(Language::SUPPORTED) {
+        for language in Language::ALL.iter().copied() {
             assert_eq!(Language::from_index(language.index()), language);
         }
         assert_eq!(Language::from_index(usize::MAX), Language::Auto);
-        assert_eq!(Language::labels().len(), Language::SUPPORTED.len() + 1);
+        assert_eq!(Language::labels().len(), Language::ALL.len());
         for (tag, expected) in [
             ("pt-BR", Language::BrazilianPortuguese),
             ("pt_PT.UTF-8", Language::BrazilianPortuguese),

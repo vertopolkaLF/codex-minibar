@@ -1,3 +1,4 @@
+use crate::choice::Choice;
 use std::collections::HashSet;
 
 use chrono::TimeZone;
@@ -1064,7 +1065,7 @@ fn every_enabled_instance_combination_has_matching_tabs() {
             instance.enabled = mask & (1 << index) != 0;
         }
         let enabled = settings.enabled_providers();
-        for mode in PopupTabMode::ALL {
+        for mode in PopupTabMode::ALL.iter().copied() {
             settings.popup_tab_mode = mode;
             let ui = ui_from(&settings);
             let tabs = provider_tabs(&ui);
@@ -1287,7 +1288,7 @@ fn popup_startup_snapshots_restore_layout_instances_and_saved_columns() {
                 HomeWidgetId::provider(id(ProviderKind::Kiro)),
             ]),
         ] {
-            for mode in PopupTabMode::ALL {
+            for mode in PopupTabMode::ALL.iter().copied() {
                 let settings = Settings {
                     popup_two_columns: enabled,
                     popup_home_right_column: right.clone(),

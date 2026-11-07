@@ -1,5 +1,6 @@
 //! Appearance: theme, accent, font, icons, time format, popup material and motion.
 
+use crate::choice::Choice;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -167,16 +168,19 @@ pub(super) enum ThemeChoice {
     VsCode(Arc<VsCodeTheme>),
 }
 
-const ACCENTS: [AccentColor; 8] = [
-    AccentColor::Windows,
-    AccentColor::Blue,
-    AccentColor::Purple,
-    AccentColor::Pink,
-    AccentColor::Red,
-    AccentColor::Orange,
-    AccentColor::Green,
-    AccentColor::Teal,
-];
+fn accent_label(accent: AccentColor) -> &'static str {
+    match accent {
+        AccentColor::Windows => crate::i18n::tr("windows"),
+        AccentColor::Custom(_) => crate::i18n::tr("custom"),
+        AccentColor::Blue => crate::i18n::tr("blue"),
+        AccentColor::Purple => crate::i18n::tr("purple"),
+        AccentColor::Pink => crate::i18n::tr("pink"),
+        AccentColor::Red => crate::i18n::tr("red"),
+        AccentColor::Orange => crate::i18n::tr("orange"),
+        AccentColor::Green => crate::i18n::tr("green"),
+        AccentColor::Teal => crate::i18n::tr("teal"),
+    }
+}
 
 /// A miniature popup painted with `palette`: two usage cards and the footer.
 pub(super) fn popup_mock(k: &Kit, palette: &Palette) -> gpui::Div {
@@ -619,37 +623,26 @@ pub(super) trait ThemePicker: ThemeHost {
         current: AccentColor,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        fn labels() -> [&'static str; 8] {
-            [
-                crate::i18n::tr("windows"),
-                crate::i18n::tr("blue"),
-                crate::i18n::tr("purple"),
-                crate::i18n::tr("pink"),
-                crate::i18n::tr("red"),
-                crate::i18n::tr("orange"),
-                crate::i18n::tr("green"),
-                crate::i18n::tr("teal"),
-            ]
-        }
         let (dark, on_accent) = (k.theme.dark, k.theme.on_accent);
         let fill = |accent| rgb8(crate::theme::accent_ramp(accent).fill(dark));
         kit::ColorSwatches {
             id: "accent".into(),
-            presets: ACCENTS
+            presets: AccentColor::PRESETS
                 .into_iter()
-                .zip(labels())
-                .map(|(accent, label)| kit::Swatch {
-                    label: label.into(),
+                .map(|accent| kit::Swatch {
+                    label: accent_label(accent).into(),
                     fill: fill(accent),
                     ink: on_accent,
                     icon: (accent == AccentColor::Windows).then_some("desktop-fill"),
                 })
                 .collect(),
-            selected: ACCENTS.iter().position(|accent| *accent == current),
+            selected: AccentColor::PRESETS
+                .iter()
+                .position(|accent| *accent == current),
             custom: matches!(current, AccentColor::Custom(_)).then(|| (fill(current), on_accent)),
             picker_rgb: crate::theme::accent_ramp(current).base,
             on_select: Self::h(cx, |this, index: usize, _, cx| {
-                let accent = ACCENTS[index];
+                let accent = AccentColor::PRESETS[index];
                 if this.settings().accent_color != accent {
                     this.edit_settings(cx, move |settings| settings.accent_color = accent);
                 }
@@ -728,10 +721,10 @@ impl SettingsWindow {
                             crate::i18n::tr("msg-12-hour"),
                             crate::i18n::tr("msg-24-hour"),
                         ],
-                        time_format.index().max(0) as usize,
+                        time_format.index(),
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {
-                            let value = TimeFormat::from_index(index as i32);
+                            let value = TimeFormat::from_index(index);
                             value.apply();
                             this.edit(cx, move |settings| settings.time_format = value)
                         }),
@@ -872,10 +865,10 @@ impl SettingsWindow {
                             crate::i18n::tr("mica"),
                             crate::i18n::tr("solid"),
                         ],
-                        material.index().max(0) as usize,
+                        material.index(),
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {
-                            let value = PopupBackgroundMaterial::from_index(index as i32);
+                            let value = PopupBackgroundMaterial::from_index(index);
                             this.edit(cx, move |settings| {
                                 settings.popup_background_material = value
                             })
@@ -887,10 +880,10 @@ impl SettingsWindow {
                         k,
                         "appearance-bar",
                         &[crate::i18n::tr("comfortable"), crate::i18n::tr("compact")],
-                        bar.index().max(0) as usize,
+                        bar.index(),
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {
-                            let value = BottomBarSize::from_index(index as i32);
+                            let value = BottomBarSize::from_index(index);
                             this.edit(cx, move |settings| settings.bottom_bar_size = value)
                         }),
                     ))

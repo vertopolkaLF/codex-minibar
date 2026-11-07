@@ -14,7 +14,7 @@ mod platform {
         },
     };
 
-    use crate::popup_window::ui::win32::POPUP_TITLE;
+    use crate::app_ids::{POPUP_TITLE, SETTINGS_TITLE_KEY, SHOW_MESSAGE};
     use crate::win32::wide;
 
     const MUTEX_NAME: &str = "Local\\CodexMinibar.9F89F5E9-770D-41AA-879F-9B15C12A2E6A";
@@ -70,11 +70,9 @@ mod platform {
 
     fn focus_existing_window() {
         // Prefer Settings: it is already an independently focusable surface.
-        let hwnd = crate::i18n::Language::SUPPORTED
-            .into_iter()
-            .find_map(|language| {
-                find_window(crate::i18n::tr_in(language, "codex-minibar-settings"))
-            })
+        // The running instance may use any display language.
+        let hwnd = crate::i18n::Language::supported()
+            .find_map(|language| find_window(crate::i18n::tr_in(language, SETTINGS_TITLE_KEY)))
             .or_else(|| find_window(POPUP_TITLE));
         let Some(hwnd) = hwnd else { return };
 
@@ -82,7 +80,7 @@ mod platform {
             if hwnd == find_window(POPUP_TITLE).unwrap_or(ptr::null_mut()) {
                 // Let the owning process restore its host, saved position and
                 // z-order instead of moving a parked 1px HWND from this process.
-                PostMessageW(hwnd, crate::popup_window::ui::win32::SHOW_MESSAGE, 0, 0);
+                PostMessageW(hwnd, SHOW_MESSAGE, 0, 0);
                 SetForegroundWindow(hwnd);
                 return;
             }
