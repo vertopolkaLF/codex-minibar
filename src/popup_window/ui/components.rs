@@ -1,8 +1,7 @@
 //! Stateless building blocks shared by every popup page.
 //!
-//! Typography mirrors the WinUI type ramp the popup used before (Caption
-//! 12/16, Body 14/20, Body Strong 14/20 semibold), so card proportions stay
-//! the same after the GPUI rewrite.
+//! Typography follows the WinUI type ramp (Caption 12/16, Body 14/20, Body
+//! Strong 14/20 semibold).
 
 use gpui::{
     AnyElement, Div, FontWeight, Hsla, IntoElement, ParentElement, SharedString, Styled, div, px,

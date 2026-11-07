@@ -59,7 +59,7 @@ pub(crate) fn segmented_track(
     wire: &mut dyn FnMut(usize, gpui::Stateful<gpui::Div>) -> gpui::Stateful<gpui::Div>,
 ) -> AnyElement {
     let selected = selected.min(segments.len().saturating_sub(1));
-    // The Settings kit retains its existing selected-cell interaction.
+    // The selected cell takes no clicks; `segmented_track_optional` wires all.
     let mut wire_unselected = |index, cell| {
         if index == selected {
             cell

@@ -247,7 +247,7 @@ impl PopupRoot {
         let tabs = self.tab_specs();
         let step = button + spacing;
         let content_width = tabs.len() as f32 * step - spacing;
-        // Restore essential controls here when the popup action bar is hidden.
+        // With the action bar hidden, the footer carries the essential controls.
         let editing = self.home_editing;
         let edit_presence = self.fx.toggle(
             fx::key("footer-edit-presence"),

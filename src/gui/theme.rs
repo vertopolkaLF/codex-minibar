@@ -2,8 +2,9 @@
 //! onboarding windows paint with, and the font families every window uses.
 //!
 //! The layering follows Windows 11 (base, content plane, cards, controls) but
-//! surfaces are separated by fill alone: strokes are reserved for dividers. Everything resolves from the live theme and accent on every
-//! frame; nothing is cached across appearance changes.
+//! surfaces are separated by fill alone: strokes are reserved for dividers.
+//! Everything resolves from the live theme and accent on every frame;
+//! nothing is cached across appearance changes.
 
 use gpui::{Hsla, SharedString, WindowAppearance};
 

@@ -568,8 +568,7 @@ impl Bridge {
             ));
             send_refresh_intervals(provider, &commands, &settings);
             // The worker reloads the selected history range immediately, so
-            // changes are reflected in the open popup without asking the
-            // user to restart the application.
+            // the open popup reflects the change.
             let _ = commands.send(WorkerCommand::SetHistoryRetentionDays(
                 settings.history_retention_days,
             ));

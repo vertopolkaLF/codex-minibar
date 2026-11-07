@@ -1,4 +1,5 @@
-//! GPUI building blocks for the Settings and onboarding windows.
+//! GPUI component kit for the Settings and onboarding windows; the popup
+//! reuses its buttons and dropdowns.
 //!
 //! GPUI is immediate-mode, so every component is a function of the current
 //! [`Kit`] (theme + animation state) and the values passed in. Ephemeral UI

@@ -1688,8 +1688,8 @@ const CARD_RADIUS: f32 = 8.0;
 
 impl Renderer {
     /// Hover card content, laid out from the card's top-left corner: one
-    /// section per provider with every quota and today's usage. Bars index
-    /// [`card_progress`] order.
+    /// section per provider with every quota and today's usage. A bar's `row`
+    /// indexes the card's rows flattened across sections.
     fn card_content(
         &mut self,
         view: &WidgetView,

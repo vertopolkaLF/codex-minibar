@@ -59,7 +59,7 @@ impl Changes {
     }
 }
 
-/// Shared startup state handed from `main` into the reactor render tree.
+/// Shared app state built by `main` and handed to the popup and tray bridge.
 pub struct AppState {
     /// The settings the app started with. Live settings reach the bridge
     /// through `settings_rx`.
@@ -70,7 +70,7 @@ pub struct AppState {
     /// tell the bridge to repaint every surface.
     pub limits: Mutex<ProviderLimits>,
     /// Latest valid public forced-reset announcements. Kept outside UiState so
-    /// hidden popups avoid a full native-tree publish on every feed poll.
+    /// a feed poll does not republish the whole popup state.
     pub forced_resets: Mutex<Vec<AnnouncedReset>>,
     /// Ongoing status-page incidents of watched drivers.
     pub provider_statuses: Mutex<Vec<ProviderStatus>>,

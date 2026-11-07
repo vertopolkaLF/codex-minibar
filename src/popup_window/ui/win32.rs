@@ -1,10 +1,10 @@
 //! Native HWND plumbing for the GPUI popup host.
 //!
 //! GPUI owns the window procedure; these helpers restyle its HWND into a
-//! borderless, topmost tool popup and clip
-//! it to the visible capsule. Anything that moves, sizes or shows the HWND
-//! sends synchronous messages that GPUI answers by borrowing the app, so those
-//! calls must run from a foreground task, never inside a render or update.
+//! borderless, topmost tool popup and clip it to the visible capsule.
+//! Anything that moves, sizes or shows the HWND sends synchronous messages
+//! that GPUI answers by borrowing the app, so those calls must run from a
+//! foreground task, never inside a render or update.
 
 #![cfg(windows)]
 

@@ -1,4 +1,4 @@
-//! Retargetable value transitions for the GPUI popup.
+//! Retargetable value transitions for the GPUI windows.
 //!
 //! GPUI is immediate-mode: every frame rebuilds the element tree from state.
 //! [`Fx`] keeps the in-flight value of every animated property between frames
@@ -17,7 +17,7 @@ use gpui::SharedString;
 pub(crate) const FASTER: Duration = Duration::from_millis(83);
 /// WinUI `ControlFastAnimationDuration`.
 pub(crate) const FAST: Duration = Duration::from_millis(167);
-/// Text crossfades in the period selector and Usage Stats title.
+/// Hover color fade of text links (the Usage Stats title, provider headings).
 pub(crate) const TEXT_FADE: Duration = Duration::from_millis(200);
 /// WinUI `ControlNormalAnimationDuration`.
 pub(crate) const NORMAL: Duration = Duration::from_millis(250);

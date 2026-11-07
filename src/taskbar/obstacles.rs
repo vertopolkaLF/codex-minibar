@@ -3,10 +3,9 @@
 //! Windows 11 does not reserve taskbar space for anyone else, so the strip
 //! measures the free span between the app buttons and its anchor, compacts
 //! widgets that do not fit and then drops those that still do not, the way
-//! the notification area overflows. UI
-//! Automation calls into Explorer synchronously; they run on their own MTA
-//! thread because the host thread shares Explorer's input queue and must
-//! never wait on it.
+//! the notification area overflows. UI Automation calls into Explorer
+//! synchronously; they run on their own MTA thread because the host thread
+//! shares Explorer's input queue and must never wait on it.
 //!
 //! The Windows 10 taskbar (also restored by ExplorerPatcher) exposes its app
 //! buttons only through MSAA, so they are read from the task list's

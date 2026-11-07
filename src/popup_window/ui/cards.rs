@@ -15,7 +15,7 @@ use super::{
 use crate::gui::{color::HslaExt, fx, mark::icon};
 use crate::popup_window::{model::*, *};
 
-/// Old WinUI estimate per expanded banked-reset row; used as the reveal cap.
+/// Upper estimate per expanded banked-reset row; used as the reveal cap.
 const RESET_ROW_HEIGHT: f32 = 58.0;
 /// Name line plus gap added when a row stacks its date under the name.
 const STACKED_ROW_EXTRA: f32 = 24.0;
@@ -284,7 +284,7 @@ impl PopupRoot {
     ) -> Vec<AnyElement> {
         let style = self.card_style();
         if matches!(layout, HomeCardLayout::Cards | HomeCardLayout::Classic) {
-            // Classic keeps the older header, thin bar and footer cards.
+            // Classic keeps the header, thin bar and footer card design.
             let style = CardStyle {
                 compact: layout == HomeCardLayout::Cards,
                 ..style
@@ -1400,8 +1400,8 @@ impl PopupRoot {
                     }));
             }
             let fits = TextMetrics::fits_split(available_width, title_width, button_width(label));
-            // Keep the height of the former two-line block (two 20 DIP line
-            // boxes pulled 3 DIP together) so the card does not shrink.
+            // Two 20 DIP line boxes pulled 3 DIP together: the card keeps the
+            // height of a two-line block when the split fits on one row.
             components::adaptive_split(fits, title, button).min_h(px(37.0))
         } else {
             title

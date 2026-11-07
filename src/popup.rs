@@ -29,7 +29,7 @@ pub const POPUP_WIDE_WIDTH: i32 = POPUP_WIDTH * 2 - 34 + 12;
 /// Inner card radius. Keep cards visibly nested without turning the whole
 /// popup into a stack of identical rounded rectangles.
 pub const CARD_CORNER_RADIUS_DIP: i32 = 10;
-/// Historical popup radius used before runtime appearance settings are loaded.
+/// Popup radius used before appearance settings are loaded.
 pub const WINDOW_CORNER_RADIUS_DIP: i32 = PopupCornerRadius::Small.dip();
 /// Gap between the capsule and the monitor/taskbar edges, in physical pixels.
 pub const EDGE_MARGIN_PX: i32 = 20;

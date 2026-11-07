@@ -130,7 +130,8 @@ pub(super) fn publish(message: Message) {
     }
 }
 
-/// Logs to the app log, and to stderr for the visual check example.
+/// Logs to the app log, and in debug builds to stderr for the
+/// `taskbar_probe` example.
 fn trace(message: impl AsRef<str>) {
     #[cfg(debug_assertions)]
     eprintln!("taskbar: {}", message.as_ref());

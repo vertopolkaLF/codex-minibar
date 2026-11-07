@@ -300,11 +300,11 @@ pub(super) fn reduce_pager(mut state: PagerState, action: PagerAction) -> PagerS
     }
 }
 
-/// Semantic identity for each independently reconciled popup section.
+/// Semantic identity of a popup card section, used in its card key.
 ///
-/// Keeping these identities separate from their position prevents the WinUI
-/// reconciler from reusing a Monthly or reset card as a Plus-plan card when the
-/// response changes the shape of the popup.
+/// Keying by meaning rather than position keeps a Monthly or reset card from
+/// inheriting another card's element state when the response changes the
+/// shape of the popup.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum PopupSection {
     Error,

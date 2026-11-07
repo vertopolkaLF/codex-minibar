@@ -1,9 +1,9 @@
-//! Single-line text input for the GPUI Settings window.
+//! Single-line text input for the GPUI windows.
 //!
 //! Adapted from GPUI's `input` example: platform IME through
 //! [`EntityInputHandler`], grapheme-aware editing, selection, clipboard,
 //! horizontal scrolling to keep the caret visible, and an optional
-//! password mask. The box around the text (border, fill, focus ring) is drawn
+//! password mask. The box around the text (fill, focus underline) is drawn
 //! by `kit::text_field`; this entity only owns the editable line.
 
 use std::ops::Range;

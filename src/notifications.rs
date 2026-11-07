@@ -524,8 +524,8 @@ pub struct LimitNotificationResult {
     pub primary_reset: bool,
 }
 
-/// Tracks previous API limit snapshots so actual reset / low-usage toasts fire
-/// once. Public reset-feed announcements use a separate info-only path.
+/// Tracks the previous limit snapshot so reset and low-usage notifications
+/// fire once per window. Public reset-feed announcements use a separate info-only path.
 #[derive(Debug, Default)]
 pub struct LimitNotificationTracker {
     primed: bool,
@@ -1325,7 +1325,7 @@ mod windows_impl {
             .map(strip_extended_path_prefix)
     }
 
-    /// `\\?\C:\...` → `C:\...` so toast/shell APIs accept the path.
+    /// `\\?\C:\...` → `C:\...` which the shell accepts as an `IconUri`.
     fn strip_extended_path_prefix(path: PathBuf) -> PathBuf {
         let raw = path.to_string_lossy();
         if let Some(stripped) = raw.strip_prefix(r"\\?\") {

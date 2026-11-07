@@ -1,9 +1,8 @@
 //! Fluent color tokens for the GPUI popup.
 //!
-//! Values mirror the WinUI 3 theme dictionaries the WinUI popup used through
-//! `ThemeRef`, so cards, strokes and text keep their exact contrast. The
-//! accent roles follow the Fluent mapping shared with the
-//! Settings window (fill = Light2/Dark1, text = Light3/Dark2).
+//! Values mirror the WinUI 3 theme dictionaries, so cards, strokes and text
+//! keep their exact contrast. The accent roles follow the Fluent mapping
+//! shared with the Settings window (fill = Light2/Dark1, text = Light3/Dark2).
 
 use std::sync::{
     Arc, Mutex,
