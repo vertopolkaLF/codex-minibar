@@ -2152,3 +2152,9 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = 包含
 
 linux-folder-with-grok-cli = 包含 grok 可执行文件的文件夹。留空以自动查找。
 linux-folder-with-command-code-cli = 包含 command-code 或 cmd 的文件夹。留空以自动查找。
+
+popup-cost-currency = 弹窗费用币种
+popup-twd-estimate = 新台币估算 · 1 美元 ≈ NT${ $rate }
+popup-twd-unavailable = 尚未获取汇率，当前以美元显示。
+daily-cost = 每日费用
+cost-by-model = 各模型费用

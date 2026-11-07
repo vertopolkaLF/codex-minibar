@@ -3053,3 +3053,9 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy �
 
 linux-folder-with-grok-cli = grok 실행 파일이 있는 폴더입니다. 비워 두면 자동으로 찾습니다.
 linux-folder-with-command-code-cli = command-code 또는 cmd가 있는 폴더입니다. 비워 두면 자동으로 찾습니다.
+
+popup-cost-currency = 팝업 비용 표시 통화
+popup-twd-estimate = 신타이완 달러 기준 추정치 · 1 USD ≈ NT${ $rate }
+popup-twd-unavailable = 환율을 가져올 수 없어 미국 달러로 표시합니다.
+daily-cost = 일일 비용
+cost-by-model = 모델별 비용

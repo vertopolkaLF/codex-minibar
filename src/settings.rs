@@ -2273,6 +2273,7 @@ pub struct Settings {
     pub onboarding_completed: bool,
     pub theme: AppTheme,
     pub language: crate::i18n::Language,
+    pub display_costs_in_twd: bool,
     pub accent_color: AccentColor,
     /// Installed font family for every window. None follows the Windows UI
     /// font (Segoe UI Variable, or Segoe UI on older systems).
@@ -2401,6 +2402,7 @@ impl Default for Settings {
             onboarding_completed: false,
             theme: AppTheme::Auto,
             language: crate::i18n::Language::Auto,
+            display_costs_in_twd: false,
             accent_color: AccentColor::Windows,
             font_family: None,
             recent_font_families: Vec::new(),

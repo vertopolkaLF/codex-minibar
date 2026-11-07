@@ -3075,3 +3075,9 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Ordner
 
 linux-folder-with-grok-cli = Ordner mit der ausführbaren Datei grok. Leer lassen, um sie automatisch zu finden.
 linux-folder-with-command-code-cli = Ordner mit command-code oder cmd. Leer lassen, um sie automatisch zu finden.
+
+popup-cost-currency = Kostenwährung im Popup
+popup-twd-estimate = Schätzung in TWD · 1 USD ≈ NT${ $rate }
+popup-twd-unavailable = Wechselkurs nicht verfügbar. Anzeige in USD.
+daily-cost = Tägliche Kosten
+cost-by-model = Kosten nach Modell

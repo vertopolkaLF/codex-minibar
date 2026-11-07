@@ -3054,3 +3054,9 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy �
 
 linux-folder-with-grok-cli = grok 実行ファイルがあるフォルダー。空欄にすると自動検索します。
 linux-folder-with-command-code-cli = command-code または cmd があるフォルダー。空欄にすると自動検索します。
+
+popup-cost-currency = ポップアップの費用表示通貨
+popup-twd-estimate = 台湾ドルでの概算 · 1 米ドル ≈ NT${ $rate }
+popup-twd-unavailable = 為替レートを取得できないため、米ドルで表示しています。
+daily-cost = 日ごとの費用
+cost-by-model = モデル別の費用

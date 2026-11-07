@@ -33,6 +33,7 @@ impl SettingsWindow {
         let s = &self.settings;
         let start_at_login = s.start_at_login;
         let (usage_enabled, usage_interval) = (s.usage_stats_enabled, s.usage_refresh_interval);
+        let display_costs_in_twd = s.display_costs_in_twd;
         let feed = s.notifications.forced_reset_feed_enabled;
         let feed_toasts = s.notifications.forced_reset_notifications;
         let feed_interval = s.reset_announcement_refresh_interval;
@@ -96,6 +97,20 @@ impl SettingsWindow {
                     }),
                 ),
                 self.usage_providers(k, usage_enabled, cx),
+                kit::dropdown_row(
+                    k,
+                    "general-cost-currency",
+                    crate::i18n::tr("popup-cost-currency"),
+                    None,
+                    kit::options(&["USD ($)", "TWD (NT$)"]),
+                    i32::from(display_costs_in_twd),
+                    false,
+                    Self::h(cx, |this, index: usize, _, cx| {
+                        this.edit(cx, move |settings| {
+                            settings.display_costs_in_twd = index == 1
+                        });
+                    }),
+                ),
                 kit::dropdown_row(
                     k,
                     "general-usage-refresh",

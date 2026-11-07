@@ -6,6 +6,7 @@ pub mod claude_desktop;
 pub mod cmdpal;
 pub mod codex;
 pub mod commandcode;
+mod currency;
 pub mod cursor;
 pub mod discovery;
 pub mod fake;

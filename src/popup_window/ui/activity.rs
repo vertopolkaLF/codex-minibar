@@ -20,6 +20,7 @@ use super::{
     theme::{HslaExt, Palette},
     tooltip::{ActivityTip, TipContent},
 };
+use crate::currency::CostDisplay;
 use crate::popup_window::*;
 use crate::usage::{DailyTokenUsage, TokenUsage, UsageStatistics};
 
@@ -187,16 +188,16 @@ pub(crate) fn visible_tokens(usage: &TokenUsage, mask: u8) -> u64 {
         })
 }
 
-pub(crate) fn cost_label(usage: &TokenUsage) -> String {
+fn cost_label(usage: &TokenUsage, display: CostDisplay) -> String {
     if usage.priced_requests > 0 {
-        let value = format_usd(usage.estimated_cost_microusd as f64 / 1_000_000.0);
+        let value = display.format_activity_cost(usage.estimated_cost_microusd);
         if usage.priced_requests < usage.requests {
             crate::i18n::format("value-partially-priced", &[("value", value.to_string())])
         } else {
             value
         }
     } else if usage.requests == 0 {
-        "$0.00".into()
+        display.format(0)
     } else {
         crate::i18n::tr("unavailable").into()
     }
@@ -458,13 +459,14 @@ impl ModelData {
         rows
     }
 
-    pub(crate) fn page_rows(
+    fn page_rows(
         &self,
         date: NaiveDate,
         cost: bool,
         dark: bool,
         page: usize,
         hidden: &BTreeSet<String>,
+        display: CostDisplay,
     ) -> (Vec<(String, String, Hsla)>, usize) {
         let all = self.sorted(date, cost, hidden);
         let page = page.min(self.pages(date, hidden).saturating_sub(1));
@@ -475,7 +477,7 @@ impl ModelData {
             .take(MODEL_PAGE_SIZE)
             .map(|(name, usage)| {
                 let amount = if cost {
-                    cost_label(usage)
+                    cost_label(usage, display)
                 } else {
                     format_token_count(usage.total_tokens())
                 };
@@ -1034,13 +1036,13 @@ impl PopupRoot {
                 } else if !available {
                     crate::i18n::tr("no-token-data-for-this-period")
                 } else if cost {
-                    crate::i18n::tr("daily-cost-in-usd")
+                    crate::i18n::tr("daily-cost")
                 } else {
                     crate::i18n::tr("daily-token-volume")
                 };
                 QuietSegment {
                     label: if cost {
-                        "$".into()
+                        self.ui.cost_display.symbol().into()
                     } else {
                         crate::i18n::tr("tokens").into()
                     },
@@ -1064,9 +1066,10 @@ impl PopupRoot {
         );
         // The metric only changes what the bars measure, so it sits with the
         // totals; the footer keeps what the colors mean and how bars split.
-        let header = usage_card_metrics(provider.kind(), statistics, &palette)
-            .items_start()
-            .child(div().flex_none().child(metric_selector));
+        let header =
+            usage_card_metrics(provider.kind(), statistics, &palette, self.ui.cost_display)
+                .items_start()
+                .child(div().flex_none().child(metric_selector));
         let footer = div()
             .flex()
             .flex_row()
@@ -1264,7 +1267,7 @@ impl PopupRoot {
         let mut entries = Vec::with_capacity(ranking.len());
         for ((model, usage), label) in ranking.iter().zip(labels) {
             let amount = if cost {
-                cost_label(usage)
+                cost_label(usage, self.ui.cost_display)
             } else {
                 format_token_count(usage.total_tokens()).to_string()
             };
@@ -1398,8 +1401,9 @@ impl PopupRoot {
     ) -> ActivityTip {
         let title = bucket_title(bucket);
         let dark = self.palette.dark;
+        let display = self.ui.cost_display;
         if by_model && let Some(models) = models {
-            let (rows, total) = models.page_rows(bucket.first, cost, dark, page, hidden);
+            let (rows, total) = models.page_rows(bucket.first, cost, dark, page, hidden, display);
             let page = page.min(models.pages(bucket.first, hidden).saturating_sub(1));
             let footer = if rows.is_empty() {
                 Some(crate::i18n::tr("no-model-data").into())
@@ -1421,7 +1425,7 @@ impl PopupRoot {
             return ActivityTip::Models {
                 title,
                 metric: if cost {
-                    crate::i18n::tr("cost-usd-by-model").into()
+                    crate::i18n::tr("cost-by-model").into()
                 } else {
                     crate::i18n::tr("tokens-by-model").into()
                 },
@@ -1431,9 +1435,9 @@ impl PopupRoot {
         }
         let usage = &bucket.usage;
         let cost = if usage.priced_requests > 0 {
-            format_usd(usage.estimated_cost_microusd as f64 / 1_000_000.0)
+            display.format_activity_cost(usage.estimated_cost_microusd)
         } else if usage.requests == 0 {
-            "$0.00".into()
+            display.format(0)
         } else {
             crate::i18n::tr("unavailable").into()
         };
@@ -1504,11 +1508,13 @@ fn usage_card_metrics(
     provider: ProviderKind,
     statistics: &UsageStatistics,
     palette: &Palette,
+    display: CostDisplay,
 ) -> gpui::Div {
     let period = statistics.history_days;
     let row = div().flex().flex_row().w_full().gap(px(8.0));
     if is_cost_provider(provider) {
-        let spend = |usage: &TokenUsage| format_usd(usage.estimated_cost_microusd as f64 / 1e6);
+        let spend =
+            |usage: &TokenUsage| display.format_activity_cost(usage.estimated_cost_microusd);
         return row
             .child(metric_cell(
                 crate::i18n::tr("today").into(),
@@ -1533,7 +1539,7 @@ fn usage_card_metrics(
             if exact { "=" } else { "≈" },
             usage
                 .estimated_api_value_usd()
-                .map(format_usd)
+                .map(|value| display.format_dollars(value))
                 .unwrap_or_else(|| crate::i18n::tr("no-data").into())
         )
     };
@@ -1656,7 +1662,12 @@ mod legend_tests {
         let hidden = BTreeSet::from(["b".to_owned()]);
         assert_eq!(models.value(day, false, &none), 40);
         assert_eq!(models.value(day, false, &hidden), 10);
-        assert_eq!(models.page_rows(day, false, true, 0, &hidden).1, 1);
+        assert_eq!(
+            models
+                .page_rows(day, false, true, 0, &hidden, CostDisplay::Usd)
+                .1,
+            1
+        );
         let ranking: Vec<_> = models.ranking(false).into_iter().map(|(m, _)| m).collect();
         assert_eq!(ranking, ["b", "a"]);
     }

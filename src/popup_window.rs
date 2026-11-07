@@ -57,7 +57,8 @@ pub(crate) use actions::*;
 use bridge::*;
 use formatting::*;
 pub(crate) use formatting::{
-    capitalize_plan_name, format_reset_in, format_token_count, format_usd,
+    capitalize_plan_name, format_money, format_reset_in, format_token_count, format_usd,
+    group_integer_digits,
 };
 pub(crate) use navigation::PopupView;
 use navigation::*;

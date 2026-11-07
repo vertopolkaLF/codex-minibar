@@ -2173,3 +2173,9 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Carpet
 
 linux-folder-with-grok-cli = Carpeta con el ejecutable grok. Déjala vacía para buscarlo automáticamente.
 linux-folder-with-command-code-cli = Carpeta con command-code o cmd. Déjala vacía para buscarlo automáticamente.
+
+popup-cost-currency = Moneda de los costes en la ventana emergente
+popup-twd-estimate = Estimación en TWD · 1 USD ≈ NT${ $rate }
+popup-twd-unavailable = Tipo de cambio no disponible. Se muestran los importes en USD.
+daily-cost = Coste diario
+cost-by-model = Coste por modelo

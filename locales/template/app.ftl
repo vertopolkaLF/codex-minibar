@@ -4500,3 +4500,14 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = { "" }
 
 linux-folder-with-grok-cli = Folder with the grok executable. Leave empty to find it automatically.
 linux-folder-with-command-code-cli = Folder with command-code or cmd. Leave empty to find it automatically.
+
+# popup-cost-currency = Popup cost currency
+popup-cost-currency = { "" }
+# popup-twd-estimate = Estimated in TWD · 1 USD ≈ NT${ $rate }
+popup-twd-estimate = { "" }
+# popup-twd-unavailable = Exchange rate unavailable. Showing USD.
+popup-twd-unavailable = { "" }
+# daily-cost = Daily cost
+daily-cost = { "" }
+# cost-by-model = Cost by model
+cost-by-model = { "" }
