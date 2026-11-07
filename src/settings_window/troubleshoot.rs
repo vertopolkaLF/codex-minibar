@@ -2,6 +2,7 @@
 
 use gpui::{AnyElement, Context, SharedString};
 
+use super::Host;
 use super::window::SettingsWindow;
 use crate::gui::kit::{self, Button, Kit};
 

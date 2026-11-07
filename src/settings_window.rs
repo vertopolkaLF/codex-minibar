@@ -10,9 +10,8 @@
 
 use std::{
     cell::RefCell,
-    collections::BTreeMap,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
 };
@@ -23,6 +22,7 @@ use gpui::{
 };
 
 use crate::app::AppState;
+use crate::gui::{kit::Handler, theme::Fonts};
 use crate::popup_window::PopupCommand;
 use crate::settings::Settings;
 
@@ -44,12 +44,11 @@ mod taskbar;
 mod tray;
 mod troubleshoot;
 mod vscode_themes;
+mod widget_list;
 mod window;
 
 #[cfg(test)]
 mod tests;
-
-pub(crate) use providers::OpenRouterSettingsSnapshot;
 
 const WINDOW_WIDTH: f32 = 1000.0;
 const WINDOW_HEIGHT: f32 = 740.0;
@@ -60,6 +59,34 @@ const WINDOW_MAX_SIZE: (f32, f32) = (1240.0, 960.0);
 const WINDOW_MIN_SIZE: (f32, f32) = (860.0, 560.0);
 const ONBOARDING_WIDTH: f32 = 780.0;
 const ONBOARDING_HEIGHT: f32 = 560.0;
+/// What the Settings and onboarding windows share: a full settings snapshot
+/// that edits apply to at once, and handlers bound to the window.
+pub(super) trait Host: Sized + 'static {
+    fn settings(&self) -> &Settings;
+    fn settings_mut(&mut self) -> &mut Settings;
+    fn fonts(&self) -> &Fonts;
+
+    /// Apply an edit to this window's snapshot right away and queue what it
+    /// changed for the settings file.
+    fn edit(&mut self, cx: &mut gpui::Context<Self>, edit: impl FnOnce(&mut Settings)) {
+        let before = crate::settings::store::edit_snapshot(self.settings_mut(), edit);
+        crate::settings_runtime::apply_presentation_changes(&before, self.settings());
+        cx.refresh_windows();
+        cx.notify();
+    }
+
+    /// Wrap a method into a component handler.
+    fn h<T: 'static>(
+        cx: &gpui::Context<Self>,
+        f: impl Fn(&mut Self, T, &mut gpui::Window, &mut gpui::Context<Self>) + 'static,
+    ) -> Handler<T> {
+        let this = cx.weak_entity();
+        std::rc::Rc::new(move |value, window, cx| {
+            let _ = this.update(cx, |this, cx| f(this, value, window, cx));
+        })
+    }
+}
+
 pub(crate) fn settings_window_title() -> &'static str {
     crate::i18n::tr(crate::app_ids::SETTINGS_TITLE_KEY)
 }
@@ -69,8 +96,6 @@ pub(crate) fn onboarding_window_title() -> &'static str {
 
 static SETTINGS_OPEN: AtomicBool = AtomicBool::new(false);
 static ONBOARDING_OPEN: AtomicBool = AtomicBool::new(false);
-static DISCOVERED_POPUP_BRICKS: Mutex<BTreeMap<String, String>> = Mutex::new(BTreeMap::new());
-static OPENROUTER_SNAPSHOT: Mutex<Option<OpenRouterSettingsSnapshot>> = Mutex::new(None);
 
 thread_local! {
     static SETTINGS_WINDOW: RefCell<Option<WindowHandle<window::SettingsWindow>>> =
@@ -85,8 +110,7 @@ pub(crate) enum Command {
     OpenOnboarding,
     SignIn(crate::instances::ProviderId),
     Sync(Box<Settings>),
-    DiscoveredBricks(BTreeMap<String, String>),
-    OpenRouter(OpenRouterSettingsSnapshot),
+    Live(providers::LiveProviderData),
     /// The popup shortcut's registration status changed.
     HotkeyStatus,
     /// Open Settings on the Taskbar page, with one widget's editor open.
@@ -153,67 +177,12 @@ pub fn sync_open_window(settings: Settings) {
     }
 }
 
-pub(crate) fn cached_discovered_popup_bricks() -> BTreeMap<String, String> {
-    DISCOVERED_POPUP_BRICKS
-        .lock()
-        .map(|labels| labels.clone())
-        .unwrap_or_default()
-}
-
-fn discovered_popup_brick_labels(
-    limits: &crate::limits::ProviderLimits,
-) -> BTreeMap<String, String> {
-    let mut labels = BTreeMap::new();
-    for (provider, snapshot) in limits.iter() {
-        for (brick_id, title) in
-            crate::provider_registry::discovered_additional_brick_labels(provider.kind(), snapshot)
-        {
-            labels.insert(brick_id, title);
-        }
-    }
-    labels
-}
-
-/// Publishes API-discovered additional windows so Settings can list them
-/// immediately, using the provider-supplied titles rather than a hardcoded catalog.
-pub fn publish_discovered_popup_bricks(limits: &crate::limits::ProviderLimits) {
-    let labels = discovered_popup_brick_labels(limits);
-    let changed = DISCOVERED_POPUP_BRICKS
-        .lock()
-        .map(|mut slot| {
-            let changed = *slot != labels;
-            *slot = labels.clone();
-            changed
-        })
-        .unwrap_or(false);
-    if changed && SETTINGS_OPEN.load(Ordering::SeqCst) {
-        post(Command::DiscoveredBricks(labels));
-    }
-}
-
-pub(crate) fn cached_openrouter_snapshot() -> OpenRouterSettingsSnapshot {
-    OPENROUTER_SNAPSHOT
-        .lock()
-        .ok()
-        .and_then(|snapshot| snapshot.clone())
-        .unwrap_or_default()
-}
-
-/// Publishes the latest OpenRouter key labels, spend and balances of every
-/// OpenRouter instance, plus each instance's signed-in account name, so
-/// provider pages can show them without fetching anything themselves.
-pub fn publish_openrouter_snapshot(limits: &crate::limits::ProviderLimits) {
-    let snapshot = OpenRouterSettingsSnapshot::from_limits(limits);
-    let changed = OPENROUTER_SNAPSHOT
-        .lock()
-        .map(|mut slot| {
-            let changed = slot.as_ref() != Some(&snapshot);
-            *slot = Some(snapshot.clone());
-            changed
-        })
-        .unwrap_or(false);
-    if changed && SETTINGS_OPEN.load(Ordering::SeqCst) {
-        post(Command::OpenRouter(snapshot));
+/// Hands the live quota snapshot to the open Settings window.
+pub fn publish_limits(limits: &crate::limits::ProviderLimits) {
+    if SETTINGS_OPEN.load(Ordering::SeqCst) {
+        post(Command::Live(providers::LiveProviderData::from_limits(
+            limits,
+        )));
     }
 }
 
@@ -250,13 +219,11 @@ pub(crate) fn handle(command: Command, state: &Arc<AppState>, cx: &mut AsyncApp)
         Command::Sync(settings) => with_settings_window(cx, |root, cx| {
             root.apply_sync(*settings, cx);
         }),
-        Command::DiscoveredBricks(labels) => with_settings_window(cx, |root, cx| {
-            root.discovered_bricks = labels;
-            cx.notify();
-        }),
-        Command::OpenRouter(snapshot) => with_settings_window(cx, |root, cx| {
-            root.openrouter = snapshot;
-            cx.notify();
+        Command::Live(live) => with_settings_window(cx, |root, cx| {
+            if root.live != live {
+                root.live = live;
+                cx.notify();
+            }
         }),
         Command::HotkeyStatus => with_settings_window(cx, |_, cx| cx.notify()),
         Command::OpenTaskbar(widget) => {
@@ -269,7 +236,7 @@ pub(crate) fn handle(command: Command, state: &Arc<AppState>, cx: &mut AsyncApp)
             with_settings_window(cx, |root, cx| {
                 root.open_tab(nav::Tab::Taskbar, cx);
                 if let Some(widget) = widget {
-                    root.open_taskbar_dialog(widget, cx);
+                    root.open_widget::<widget_list::Taskbar>(widget, cx);
                 }
             });
         }

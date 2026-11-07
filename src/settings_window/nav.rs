@@ -154,13 +154,3 @@ pub(crate) fn provider_nav_order(
             .collect(),
     )
 }
-
-/// Badges tell instances of one driver apart, so they show whenever the
-/// driver has more than one configured instance.
-pub(crate) fn shows_badge(instance: &ProviderInstance, instances: &[ProviderInstance]) -> bool {
-    instances
-        .iter()
-        .filter(|other| other.driver == instance.driver)
-        .count()
-        > 1
-}

@@ -52,7 +52,7 @@ const MANUAL_SECRET_PREFIX: &str = "claude-profile-";
 const MANUAL_CREDENTIAL_HINT: &str = "Update this instance's credential in Settings > Providers.";
 const FOLDER_SIGN_IN_HINT: &str = "Use Sign in for this instance in Settings > Providers.";
 /// Shown wherever an extra account would otherwise fall back to the app's CLI.
-pub const OTHER_ACCOUNT_NEEDS_CLI: &str = "Extra Claude accounts need the Claude Code CLI. The Claude app's built-in copy only serves the app's own account.";
+pub const OTHER_ACCOUNT_NEEDS_CLI: &str = "claude-other-account-needs-cli";
 /// How long a login whose renewal failed transiently waits before retrying.
 const REFRESH_RETRY_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// Claude Code's own OAuth client and token endpoint.
@@ -123,7 +123,7 @@ impl ClaudeActivator {
         let folder = self.config_folder.as_deref();
         let program = match self.executable.clone() {
             Some(executable) => executable,
-            None if folder.is_some() => bail!("{OTHER_ACCOUNT_NEEDS_CLI}"),
+            None if folder.is_some() => bail!(crate::i18n::english(OTHER_ACCOUNT_NEEDS_CLI)),
             // The bare name keeps the error about a missing CLI rather than
             // a missing desktop install.
             None => PathBuf::from("claude"),
@@ -241,6 +241,9 @@ fn settings_copy() -> SettingsCopy {
             crate::i18n::tr("folder-with-claude-exe-claude-cmd-or-claude-ps1-leave-empty-to-fi"),
             r"C:\Users\you\AppData\Roaming\npm",
         )],
+        config_env: "CLAUDE_CONFIG_DIR",
+        manual_credential: true,
+        config_folder_app_note: Some(crate::i18n::tr("claude-other-account-needs-cli")),
         ..SettingsCopy::new(crate::i18n::tr("reads-your-existing-claude-code-login"))
     }
 }

@@ -1,5 +1,6 @@
 //! One provider instance's page.
 
+use crate::settings_window::Host;
 use gpui::{
     AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div,
     prelude::FluentBuilder, px, relative,
@@ -10,7 +11,7 @@ use std::path::PathBuf;
 use super::super::window::SettingsWindow;
 use super::*;
 use crate::choice::Choice;
-use crate::drivers::FolderField;
+use crate::drivers::{Credential, FolderField};
 use crate::gui::fx;
 use crate::gui::input::InputEvent;
 use crate::gui::kit::{self, Button, Kit, MenuItem, Row};
@@ -25,7 +26,7 @@ enum Dot {
 
 /// One-line status shared by the page header and the sidebar dot.
 fn status_line(instance: &ProviderInstance, status: &InstallStatus) -> (String, Option<Dot>) {
-    let provider = instance.driver;
+    let copy = crate::drivers::settings_copy(instance.driver);
     if !instance.enabled {
         return (crate::i18n::tr("off").into(), None);
     }
@@ -35,7 +36,7 @@ fn status_line(instance: &ProviderInstance, status: &InstallStatus) -> (String, 
         ProviderReadiness::Ready => Some(Dot::Success),
         ProviderReadiness::NeedsSetup => Some(Dot::Caution),
     };
-    if provider == ProviderKind::OpenRouter {
+    if copy.credential == Credential::KeyAccounts {
         let keys = instance
             .openrouter
             .as_ref()
@@ -64,8 +65,8 @@ fn status_line(instance: &ProviderInstance, status: &InstallStatus) -> (String, 
     }
     let text = match readiness {
         ProviderReadiness::Checking => crate::i18n::tr("checking").to_owned(),
-        ProviderReadiness::NeedsSetup => match provider {
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
+        ProviderReadiness::NeedsSetup => match copy.credential {
+            Credential::ApiKey => {
                 if instance.is_primary() {
                     crate::i18n::tr("needs-an-api-key-or-opencode-sign-in").to_owned()
                 } else {
@@ -74,30 +75,27 @@ fn status_line(instance: &ProviderInstance, status: &InstallStatus) -> (String, 
             }
             _ => crate::i18n::tr("not-found-set-its-folder-under-runtime").to_owned(),
         },
-        ProviderReadiness::Ready => match provider {
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
+        ProviderReadiness::Ready => match copy.credential {
+            Credential::ApiKey => {
                 if crate::opencode::key_is_configured(instance.provider_id()) {
                     crate::i18n::tr("using-a-saved-api-key").to_owned()
                 } else {
                     crate::i18n::tr("using-opencode-sign-in-or-local-history").to_owned()
                 }
             }
-            _ => {
-                let copy = crate::drivers::settings_copy(provider);
-                match status.used {
-                    Some(InstallSource::Cli) => {
-                        crate::i18n::format("reading-cli", &[("cli", copy.cli.to_string())])
-                    }
-                    Some(InstallSource::Crew) => {
-                        crate::i18n::format("reading-crew", &[("crew", copy.crew.to_string())])
-                    }
-                    Some(InstallSource::App) => {
-                        crate::i18n::format("reading-app", &[("app", copy.app.to_string())])
-                    }
-                    // Read straight from the sign-in, without the app or CLI.
-                    None => crate::i18n::tr("found-on-this-pc").to_owned(),
+            _ => match status.used {
+                Some(InstallSource::Cli) => {
+                    crate::i18n::format("reading-cli", &[("cli", copy.cli.to_string())])
                 }
-            }
+                Some(InstallSource::Crew) => {
+                    crate::i18n::format("reading-crew", &[("crew", copy.crew.to_string())])
+                }
+                Some(InstallSource::App) => {
+                    crate::i18n::format("reading-app", &[("app", copy.app.to_string())])
+                }
+                // Read straight from the sign-in, without the app or CLI.
+                None => crate::i18n::tr("found-on-this-pc").to_owned(),
+            },
         },
     };
     (text, dot)
@@ -275,7 +273,7 @@ impl SettingsWindow {
             )
         });
         // The badge sits on the glyph's lower-right corner, as in the popup.
-        let badge = super::super::nav::shows_badge(instance, &self.settings.instances)
+        let badge = crate::instances::shares_driver(instance, &self.settings.instances)
             .then(|| instance.badge());
         let title = div()
             .text_size(px(26.0))
@@ -454,17 +452,17 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let provider = instance.provider_id();
-        match instance.driver {
-            ProviderKind::OpenRouter => return self.openrouter_section(instance, k, cx),
-            ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo => {
-                return self.opencode_key_section(instance, k, cx);
-            }
-            driver if !crate::provider_registry::descriptor(driver).config_folder => {
+        match crate::drivers::settings_copy(instance.driver).credential {
+            Credential::KeyAccounts => return self.openrouter_section(instance, k, cx),
+            Credential::ApiKey => return self.opencode_key_section(instance, k, cx),
+            Credential::Login
+                if !crate::provider_registry::descriptor(instance.driver).config_folder =>
+            {
                 return Vec::new();
             }
-            _ => {}
+            Credential::Login => {}
         }
-        let identity = self.openrouter.identities.get(&instance.id).cloned();
+        let identity = self.live.identities.get(&instance.id).cloned();
         let open = |kind: ProviderDialogKind| {
             Self::h(cx, move |this, (), window, cx| {
                 this.open_provider_dialog(ProviderDialog::new(kind.clone()), window, cx)
@@ -574,10 +572,10 @@ impl SettingsWindow {
     ) -> Vec<AnyElement> {
         let provider = instance.provider_id();
         let driver = instance.driver;
-        if driver == ProviderKind::OpenRouter {
+        let copy = crate::drivers::settings_copy(driver);
+        if copy.credential == Credential::KeyAccounts {
             return Vec::new();
         }
-        let copy = crate::drivers::settings_copy(driver);
         let mut out = vec![kit::section_header(
             k,
             crate::i18n::tr("runtime"),
@@ -590,7 +588,7 @@ impl SettingsWindow {
             ),
             None,
         )];
-        if matches!(driver, ProviderKind::OpenCodeZen | ProviderKind::OpenCodeGo) {
+        if copy.credential == Credential::ApiKey {
             if instance.is_primary() {
                 out.push(self.opencode_source_card(status, k));
             } else {
@@ -607,8 +605,10 @@ impl SettingsWindow {
                         .render(k),
                 );
             } else {
-                let other_claude_account =
-                    driver == ProviderKind::Claude && instance.config_folder().is_some();
+                let app_note = copy
+                    .config_folder_app_note
+                    .filter(|_| instance.config_folder().is_some());
+                let choosable = |source| copy.binary_source == Some(source);
                 if status.sources.app {
                     cards.push(self.source_row(
                         k,
@@ -618,8 +618,8 @@ impl SettingsWindow {
                         copy.app,
                         status.app.as_deref(),
                         status.used == Some(InstallSource::App),
-                        driver == ProviderKind::Cursor,
-                        other_claude_account.then_some(crate::claude::OTHER_ACCOUNT_NEEDS_CLI),
+                        choosable(InstallSource::App),
+                        app_note,
                     ));
                 }
                 if status.sources.crew {
@@ -631,7 +631,7 @@ impl SettingsWindow {
                         copy.crew,
                         status.crew.as_deref(),
                         status.used == Some(InstallSource::Crew),
-                        false,
+                        choosable(InstallSource::Crew),
                         None,
                     ));
                 }
@@ -644,7 +644,7 @@ impl SettingsWindow {
                         copy.cli,
                         status.cli.as_deref(),
                         status.used == Some(InstallSource::Cli),
-                        driver != ProviderKind::Kiro,
+                        choosable(InstallSource::Cli),
                         None,
                     ));
                 }
@@ -654,7 +654,7 @@ impl SettingsWindow {
             out.push(kit::card(k, cards));
         }
         if crate::provider_registry::descriptor(driver).config_folder {
-            out.extend(self.source_settings(instance, k, window, cx));
+            out.extend(self.source_settings(instance, &copy, k, window, cx));
         }
         for config in copy.folders {
             out.push(div().h(px(4.0)).into_any_element());
@@ -864,10 +864,12 @@ impl SettingsWindow {
         })
     }
 
-    /// Source selector (Claude) and config folder for Claude/Codex instances.
+    /// Source selector (for drivers that read a pasted credential) and the
+    /// config folder of drivers that read a CLI login folder.
     fn source_settings(
         &mut self,
         instance: &ProviderInstance,
+        copy: &crate::drivers::SettingsCopy,
         k: &mut Kit,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -875,7 +877,7 @@ impl SettingsWindow {
         let provider = instance.provider_id();
         let mut rows = Vec::new();
         let manual = instance.uses_manual_credential();
-        if instance.driver == ProviderKind::Claude {
+        if copy.manual_credential {
             rows.push(
                 Row::new("instance-source", crate::i18n::tr("source"))
                     .description(
@@ -910,11 +912,7 @@ impl SettingsWindow {
             );
         }
         if !manual {
-            let env = if instance.driver == ProviderKind::Claude {
-                "CLAUDE_CONFIG_DIR"
-            } else {
-                "CODEX_HOME"
-            };
+            let env = copy.config_env;
             let default = if instance.is_primary() {
                 crate::instances::default_folder(instance.driver)
             } else {
@@ -1187,8 +1185,8 @@ impl SettingsWindow {
             None,
         )];
         let snapshot = self
-            .openrouter
-            .accounts
+            .live
+            .openrouter_accounts
             .iter()
             .find(|snapshot| snapshot.id == account.id)
             .cloned();
@@ -1320,7 +1318,7 @@ impl SettingsWindow {
                     .into_any_element(),
             ]
         }));
-        if let Some(at) = self.openrouter.sampled_at {
+        if let Some(at) = self.live.openrouter_sampled_at {
             out.push(
                 div()
                     .pt(px(6.0))

@@ -92,11 +92,15 @@ fn submit(job: impl FnOnce() -> Reply + Send + 'static) {
 
 /// Queues an edit without waiting for it.
 pub fn queue(edit: impl FnOnce(&mut Settings) + Send + 'static) {
+    queue_result(move |settings| {
+        edit(settings);
+        Ok(())
+    });
+}
+
+fn queue_result(update: impl FnOnce(&mut Settings) -> Result<()> + Send + 'static) {
     submit(move || {
-        if let Err(error) = commit(|settings| {
-            edit(settings);
-            Ok(())
-        }) {
+        if let Err(error) = commit(update) {
             crate::logger::info(format!("failed to save settings: {error:#}"));
         }
         Box::new(|| {})
@@ -104,11 +108,62 @@ pub fn queue(edit: impl FnOnce(&mut Settings) + Send + 'static) {
 }
 
 /// Applies `edit` to a window's own snapshot at once, so the change shows
-/// before it commits, then queues the same edit for the file.
-pub fn edit_snapshot(local: &mut Settings, edit: impl Fn(&mut Settings) + Send + 'static) {
+/// before it commits, and queues the settings it changed as absolute values.
+/// The edit runs only here, so a move or a toggle lands in the file exactly
+/// as the window shows it. Returns the snapshot as it was before the edit.
+pub fn edit_snapshot(local: &mut Settings, edit: impl FnOnce(&mut Settings)) -> Settings {
+    let before = local.clone();
     edit(local);
     local.normalize_all();
-    queue(edit);
+    match Patch::between(&before, local) {
+        Ok(patch) if patch.0.is_empty() => {}
+        Ok(patch) => queue_result(move |settings| patch.apply(settings)),
+        Err(error) => crate::logger::info(format!("failed to queue a settings edit: {error:#}")),
+    }
+    before
+}
+
+/// Top-level settings an edit changed, with their new values (`None` when
+/// the value is no longer written).
+struct Patch(Vec<(String, Option<toml::Value>)>);
+
+impl Patch {
+    fn between(before: &Settings, after: &Settings) -> Result<Self> {
+        let (before, after) = (document(before)?, document(after)?);
+        let mut changes = after
+            .iter()
+            .filter(|(key, value)| before.get(*key) != Some(*value))
+            .map(|(key, value)| (key.clone(), Some(value.clone())))
+            .collect::<Vec<_>>();
+        changes.extend(
+            before
+                .keys()
+                .filter(|key| !after.contains_key(*key))
+                .map(|key| (key.clone(), None)),
+        );
+        Ok(Self(changes))
+    }
+
+    fn apply(self, settings: &mut Settings) -> Result<()> {
+        let mut document = document(settings)?;
+        for (key, value) in self.0 {
+            match value {
+                Some(value) => document.insert(key, value),
+                None => document.remove(&key),
+            };
+        }
+        let unknown = std::mem::take(&mut settings.unknown_entries);
+        *settings = toml::Value::Table(document).try_into()?;
+        settings.unknown_entries = unknown;
+        Ok(())
+    }
+}
+
+fn document(settings: &Settings) -> Result<toml::map::Map<String, toml::Value>> {
+    match toml::Value::try_from(settings)? {
+        toml::Value::Table(table) => Ok(table),
+        _ => anyhow::bail!("settings did not serialize to a table"),
+    }
 }
 
 /// Queues an edit that can fail and may return a value. The receiver yields
@@ -194,6 +249,23 @@ mod tests {
             assert_eq!(wait(outcome).unwrap(), n);
         }
         assert_eq!(*order.lock().unwrap(), (0..20).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_patch_sets_only_what_the_edit_changed() {
+        let before = Settings::default();
+        let mut window = before.clone();
+        window
+            .tray_widgets
+            .insert(0, crate::settings::TrayWidget::app_icon());
+        window.popup_two_columns = !before.popup_two_columns;
+        let patch = Patch::between(&before, &window).unwrap();
+        let mut committed = before.clone();
+        committed.show_usage_pace = !before.show_usage_pace;
+        patch.apply(&mut committed).unwrap();
+        assert_eq!(committed.tray_widgets, window.tray_widgets);
+        assert_eq!(committed.popup_two_columns, window.popup_two_columns);
+        assert_eq!(committed.show_usage_pace, !before.show_usage_pace);
     }
 
     #[test]

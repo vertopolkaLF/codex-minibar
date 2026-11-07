@@ -5,6 +5,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 
+use super::Host;
 use super::window::SettingsWindow;
 use crate::gui::kit::{self, Button, Kit, Row};
 

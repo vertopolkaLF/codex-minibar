@@ -444,8 +444,7 @@ impl Bridge {
         let limits = self.state.current_limits();
         self.sync_tray(&limits);
         crate::taskbar::publish_limits(&limits);
-        crate::settings_window::publish_discovered_popup_bricks(&limits);
-        crate::settings_window::publish_openrouter_snapshot(&limits);
+        crate::settings_window::publish_limits(&limits);
         if self
             .ui
             .settings

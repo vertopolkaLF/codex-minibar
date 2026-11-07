@@ -15,6 +15,7 @@ use gpui::{
     prelude::FluentBuilder, px, radians, relative,
 };
 
+use super::Host;
 use super::vscode_themes::{ThemeBrowserUi, ThemeHost};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
@@ -239,6 +240,42 @@ pub(super) fn popup_mock(k: &Kit, palette: &Palette) -> gpui::Div {
         )
 }
 
+/// A selectable card: a miniature preview over its title line. The caller
+/// handles clicks.
+pub(super) fn preview_card(
+    k: &Kit,
+    id: String,
+    selected: bool,
+    preview: impl IntoElement,
+    title: impl IntoElement,
+) -> gpui::Stateful<gpui::Div> {
+    let theme = &k.theme;
+    let rest = if selected {
+        theme.accent_soft
+    } else {
+        theme.card
+    };
+    let hover = if selected { rest } else { theme.card_hover };
+    kit::hover_bg(
+        k,
+        div().id(eid(id.clone())),
+        kit::hover_key(&id),
+        rest,
+        hover,
+    )
+    .flex_1()
+    .min_w_0()
+    .flex()
+    .flex_col()
+    .gap(px(8.0))
+    .p(px(8.0))
+    .rounded(px(kit::CARD_RADIUS))
+    .shadow(kit::card_shadow(theme))
+    .cursor_pointer()
+    .child(preview)
+    .child(title)
+}
+
 /// Color theme, accent and popup theme pickers, shared by every
 /// [`ThemeHost`].
 pub(super) trait ThemePicker: ThemeHost {
@@ -319,44 +356,20 @@ pub(super) trait ThemePicker: ThemeHost {
                 AppTheme::Light => el.child(mock(false)),
                 AppTheme::Dark => el.child(mock(true)),
             });
-        let hover = theme.card_hover;
-        let card_id = format!("theme-card-{label}");
-        let rest = if selected {
-            theme.accent_soft
-        } else {
-            theme.card
-        };
-        kit::hover_bg(
-            k,
-            div().id(eid(card_id.clone())),
-            kit::hover_key(&card_id),
-            rest,
-            if selected { rest } else { hover },
-        )
-        .flex_1()
-        .flex()
-        .flex_col()
-        .gap(px(8.0))
-        .p(px(8.0))
-        .rounded(px(kit::CARD_RADIUS))
-        .shadow(kit::card_shadow(theme))
-        .cursor_pointer()
-        .on_click(cx.listener(move |this, _, _, cx| {
-            if this.settings().theme != value {
-                this.edit_settings(cx, move |settings| settings.theme = value);
-            }
-        }))
-        .child(preview)
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(6.0))
-                .text_size(px(13.0))
-                .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
-                .child(label),
-        )
-        .into_any_element()
+        let title = div()
+            .flex()
+            .items_center()
+            .gap(px(6.0))
+            .text_size(px(13.0))
+            .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
+            .child(label);
+        preview_card(k, format!("theme-card-{label}"), selected, preview, title)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if this.settings().theme != value {
+                    this.edit(cx, move |settings| settings.theme = value);
+                }
+            }))
+            .into_any_element()
     }
 
     /// Built-in designs followed by every installed VS Code theme, in rows
@@ -516,15 +529,9 @@ pub(super) trait ThemePicker: ThemeHost {
         let font = palette.font_family.clone();
         let vscode_id = vscode.as_ref().map(|vscode| vscode.id.clone());
         let preview = popup_mock(k, &palette);
-        let hover = theme.card_hover;
         let card_id = match &vscode_id {
             Some(id) => format!("popup-theme-card-vscode-{id}"),
             None => format!("popup-theme-card-{label}"),
-        };
-        let rest = if selected {
-            theme.accent_soft
-        } else {
-            theme.card
         };
         let remove = vscode_id.clone().map(|id| {
             Button::icon_only(format!("{card_id}-remove"), "trash-fill")
@@ -563,34 +570,17 @@ pub(super) trait ThemePicker: ThemeHost {
                     ),
             )
             .children(remove);
-        let card = kit::hover_bg(
-            k,
-            div().id(eid(card_id.clone())),
-            kit::hover_key(&card_id),
-            rest,
-            if selected { rest } else { hover },
-        )
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(8.0))
-        .p(px(8.0))
-        .rounded(px(kit::CARD_RADIUS))
-        .shadow(kit::card_shadow(theme))
-        .cursor_pointer()
-        .on_click(cx.listener(move |this, _, _, cx| {
-            if selected {
-                return;
-            }
-            match vscode_id.clone() {
-                Some(id) => this.select_vscode_theme(id, cx),
-                None => this.edit_settings(cx, move |settings| settings.popup_theme = value),
-            }
-        }))
-        .child(preview)
-        .child(title)
-        .into_any_element();
+        let card = preview_card(k, card_id.clone(), selected, preview, title)
+            .on_click(cx.listener(move |this, _, _, cx| {
+                if selected {
+                    return;
+                }
+                match vscode_id.clone() {
+                    Some(id) => this.select_vscode_theme(id, cx),
+                    None => this.edit(cx, move |settings| settings.popup_theme = value),
+                }
+            }))
+            .into_any_element();
         // Newly installed themes fade in rather than popping into the grid;
         // cards scrolled back into view later just show. Both wrappers
         // share one id so the card keeps its element state.
@@ -633,13 +623,13 @@ pub(super) trait ThemePicker: ThemeHost {
             on_select: Self::h(cx, |this, index: usize, _, cx| {
                 let accent = AccentColor::PRESETS[index];
                 if this.settings().accent_color != accent {
-                    this.edit_settings(cx, move |settings| settings.accent_color = accent);
+                    this.edit(cx, move |settings| settings.accent_color = accent);
                 }
             }),
             on_custom: Self::h(cx, |this, rgb: (u8, u8, u8), _, cx| {
                 let next = AccentColor::custom(rgb);
                 if this.settings().accent_color != next {
-                    this.edit_settings(cx, move |settings| settings.accent_color = next);
+                    this.edit(cx, move |settings| settings.accent_color = next);
                 }
             }),
         }

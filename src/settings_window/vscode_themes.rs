@@ -15,13 +15,13 @@ use gpui::{
     Task, Transformation, Window, div, img, prelude::FluentBuilder, px, radians,
 };
 
-use super::appearance::{ThemePicker, popup_mock};
+use super::Host;
+use super::appearance::{ThemePicker, popup_mock, preview_card};
 use super::window::SettingsWindow;
 use crate::gui::fx;
 use crate::gui::input::{HasInputs, Inputs};
-use crate::gui::kit::{self, Button, ButtonSize, Handler, Kit, Row, eid};
-use crate::gui::theme::Fonts;
-use crate::settings::{PopupTheme, Settings};
+use crate::gui::kit::{self, Button, ButtonSize, Kit, Row, eid};
+use crate::settings::PopupTheme;
 use crate::vscode_themes::{self, ThemeSource, VsCodeTheme, open_vsx};
 
 const SEARCH_INPUT: &str = "appearance-open-vsx-search";
@@ -100,55 +100,20 @@ pub(super) struct ThemeBrowser {
 
 /// A window that hosts the theme pickers: the Settings Appearance page and
 /// the onboarding Theme step.
-pub(super) trait ThemeHost: HasInputs {
-    fn settings(&self) -> &Settings;
-    fn fonts(&self) -> &Fonts;
+pub(super) trait ThemeHost: Host + HasInputs {
     fn theme_browser(&self) -> &ThemeBrowser;
     fn theme_browser_mut(&mut self) -> &mut ThemeBrowser;
-    /// Apply an edit right away and persist it.
-    fn edit_settings(
-        &mut self,
-        cx: &mut Context<Self>,
-        edit: impl Fn(&mut Settings) + Send + 'static,
-    );
     /// Confirm a finished install.
     fn theme_installed(&mut self, cx: &mut Context<Self>);
-
-    /// Wrap a method into a component handler.
-    fn h<T: 'static>(
-        cx: &Context<Self>,
-        f: impl Fn(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-    ) -> Handler<T> {
-        let this = cx.weak_entity();
-        std::rc::Rc::new(move |value, window, cx| {
-            let _ = this.update(cx, |this, cx| f(this, value, window, cx));
-        })
-    }
 }
 
 impl ThemeHost for SettingsWindow {
-    fn settings(&self) -> &Settings {
-        &self.settings
-    }
-
-    fn fonts(&self) -> &Fonts {
-        &self.fonts
-    }
-
     fn theme_browser(&self) -> &ThemeBrowser {
         &self.theme_browser
     }
 
     fn theme_browser_mut(&mut self) -> &mut ThemeBrowser {
         &mut self.theme_browser
-    }
-
-    fn edit_settings(
-        &mut self,
-        cx: &mut Context<Self>,
-        edit: impl Fn(&mut Settings) + Send + 'static,
-    ) {
-        self.edit(cx, edit);
     }
 
     fn theme_installed(&mut self, cx: &mut Context<Self>) {
@@ -730,49 +695,30 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
         accent: crate::theme::AccentRamp,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let theme = &k.theme;
         let palette = self.vscode_palette(vscode.clone(), accent);
-        let tile_id = format!("open-vsx-preview-{}", vscode.id);
-        let rest = if selected {
-            theme.accent_soft
-        } else {
-            theme.card
-        };
         let target = vscode.clone();
-        kit::hover_bg(
+        let title = div()
+            .flex()
+            .items_center()
+            .gap(px(4.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.0))
+                    .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
+                    .child(vscode.label.clone()),
+            )
+            .child(self.install_one_button(k, vscode, cx));
+        preview_card(
             k,
-            div().id(eid(tile_id.clone())),
-            kit::hover_key(&tile_id),
-            rest,
-            if selected { rest } else { theme.card_hover },
+            format!("open-vsx-preview-{}", vscode.id),
+            selected,
+            popup_mock(k, &palette),
+            title,
         )
-        .flex_1()
-        .min_w_0()
-        .flex()
-        .flex_col()
-        .gap(px(8.0))
-        .p(px(8.0))
-        .rounded(px(kit::CARD_RADIUS))
-        .shadow(kit::card_shadow(theme))
-        .cursor_pointer()
         .on_click(cx.listener(move |this, _, _, cx| this.toggle_theme_preview(target.clone(), cx)))
-        .child(popup_mock(k, &palette))
-        .child(
-            div()
-                .flex()
-                .items_center()
-                .gap(px(4.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .text_size(px(13.0))
-                        .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
-                        .child(vscode.label.clone()),
-                )
-                .child(self.install_one_button(k, vscode, cx)),
-        )
         .into_any_element()
     }
 
@@ -1061,7 +1007,7 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
     }
 
     fn select_vscode_theme(&mut self, id: String, cx: &mut Context<Self>) {
-        self.edit_settings(cx, move |settings| {
+        self.edit(cx, move |settings| {
             settings.popup_theme = PopupTheme::VsCode;
             settings.popup_vscode_theme = Some(id.clone());
         });
@@ -1079,7 +1025,7 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
             return;
         }
         if selected {
-            self.edit_settings(cx, |settings| {
+            self.edit(cx, |settings| {
                 settings.popup_theme = PopupTheme::Fluent;
                 settings.popup_vscode_theme = None;
             });

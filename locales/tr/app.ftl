@@ -2958,3 +2958,6 @@ skip-automatic-reset = İptal
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Birikmiş sıfırlama uygulandı
+
+# src/settings_window/providers/page.rs
+claude-other-account-needs-cli = Ek Claude hesapları Claude Code CLI gerektirir. Claude uygulamasındaki yerleşik kopya yalnızca uygulamanın kendi hesabına hizmet eder.

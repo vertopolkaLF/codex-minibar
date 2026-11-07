@@ -5,6 +5,7 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px, relative,
 };
 
+use super::Host;
 use super::window::{SettingsWindow, install_update, open_url};
 use crate::gui::kit::{self, Button, Kit, Row, eid};
 use crate::updater::{ISSUES_URL, RELEASES_URL, REPO_URL, UpdatePhase, current_version};

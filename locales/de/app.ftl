@@ -2980,3 +2980,6 @@ skip-automatic-reset = Abbrechen
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Gespeicherter Reset angewendet
+
+# src/settings_window/providers/page.rs
+claude-other-account-needs-cli = Weitere Claude-Konten brauchen die Claude Code CLI. Die in die Claude-App eingebaute Kopie bedient nur das eigene Konto der App.

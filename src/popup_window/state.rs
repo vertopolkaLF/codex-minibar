@@ -80,11 +80,12 @@ impl UiState {
         self.settings = Arc::new(settings);
     }
 
-    /// Applies an edit to the snapshot at once and queues the same edit for
-    /// the settings file.
-    pub(crate) fn edit_settings(&mut self, edit: impl Fn(&mut Settings) + Send + 'static) {
-        crate::settings::store::edit_snapshot(Arc::make_mut(&mut self.settings), edit);
+    /// Applies an edit to the snapshot at once and queues what it changed
+    /// for the settings file. Returns the snapshot before the edit.
+    pub(crate) fn edit_settings(&mut self, edit: impl FnOnce(&mut Settings)) -> Settings {
+        let before = crate::settings::store::edit_snapshot(Arc::make_mut(&mut self.settings), edit);
         self.usage_stats_providers = self.settings.usage_stats_providers();
+        before
     }
 
     pub(super) fn compact_bar_visible(&self) -> bool {

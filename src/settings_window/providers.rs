@@ -21,43 +21,48 @@ fn not_openrouter_key() -> &'static str {
     crate::i18n::tr("that-doesn-t-look-like-an-openrouter-key-keys-start-with-sk-or")
 }
 
-/// OpenRouter usage the worker last published. Settings only reads labels,
-/// masked keys, spend and balances from it; it never holds secrets.
+/// What Settings shows from the live quota snapshot, derived once per
+/// change so pages never fetch anything themselves. Holds labels, masked
+/// keys, spend and balances, never secrets.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub(crate) struct OpenRouterSettingsSnapshot {
-    pub(crate) accounts: Vec<OpenRouterAccountSnapshot>,
-    pub(crate) sampled_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// Signed-in account name of every instance that reported one, keyed by
+pub(crate) struct LiveProviderData {
+    /// Titles of API-discovered additional windows, by brick id, so Settings
+    /// lists them with the provider's own titles.
+    pub(crate) discovered_bricks: std::collections::BTreeMap<String, String>,
+    /// Signed-in account name of every instance that reported one, by
     /// instance id. Shown in each instance's Account section.
     pub(crate) identities: std::collections::BTreeMap<String, String>,
+    pub(crate) openrouter_accounts: Vec<OpenRouterAccountSnapshot>,
+    pub(crate) openrouter_sampled_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl OpenRouterSettingsSnapshot {
-    /// Labels, spend and balances of every OpenRouter instance, plus every
-    /// instance's signed-in account name.
+impl LiveProviderData {
     pub(crate) fn from_limits(limits: &crate::limits::ProviderLimits) -> Self {
-        let mut snapshot = Self::default();
+        let mut live = Self::default();
         for (provider, limits) in limits.iter() {
+            live.discovered_bricks.extend(
+                crate::provider_registry::discovered_additional_brick_labels(
+                    provider.kind(),
+                    limits,
+                ),
+            );
             if let Some(name) = limits
                 .account_name
                 .as_deref()
                 .map(str::trim)
                 .filter(|name| !name.is_empty())
             {
-                snapshot
-                    .identities
+                live.identities
                     .insert(provider.id().to_owned(), name.to_owned());
             }
-            if provider.kind() != ProviderKind::OpenRouter || limits.openrouter_accounts.is_empty()
-            {
+            if limits.openrouter_accounts.is_empty() {
                 continue;
             }
-            snapshot
-                .accounts
+            live.openrouter_accounts
                 .extend(limits.openrouter_accounts.iter().cloned());
-            snapshot.sampled_at = snapshot.sampled_at.max(Some(limits.sampled_at));
+            live.openrouter_sampled_at = live.openrouter_sampled_at.max(Some(limits.sampled_at));
         }
-        snapshot
+        live
     }
 }
 
@@ -169,15 +174,13 @@ fn add_instance_choices(instances: &[ProviderInstance]) -> Vec<(ProviderKind, Op
         .collect()
 }
 
-/// `Claude · Work` when the driver has several instances, else the name.
+/// `Claude · Work` when the driver has several enabled instances, else the
+/// name, as every other surface labels it.
 fn provider_label(instance: &ProviderInstance, instances: &[ProviderInstance]) -> String {
-    let shared = instances
-        .iter()
-        .filter(|other| other.driver == instance.driver)
-        .count()
-        > 1;
     let name = instance.display_name();
-    if shared && name != instance.driver.display_name() {
+    if crate::instances::shares_driver(instance, instances)
+        && name != instance.driver.display_name()
+    {
         format!("{} \u{00b7} {name}", instance.driver.display_name())
     } else {
         name

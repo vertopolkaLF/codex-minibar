@@ -360,6 +360,8 @@ fn settings_copy() -> SettingsCopy {
             },
         ],
         found: crate::i18n::tr("found-kiro-ide-kiro-crew-or-a-signed-in-kiro-cli"),
+        // Each Kiro source has its own path field.
+        binary_source: None,
         not_found: crate::i18n::tr(
             "not-found-install-kiro-ide-or-kiro-crew-or-sign-in-to-kiro-cli",
         ),

@@ -41,20 +41,38 @@ pub fn start(settings: &Settings, bridge: Sender<Settings>) {
     });
 }
 
-/// Process-wide values the windows read while painting or dismissing. A
-/// window also runs this on its own unsaved snapshot, so an edit shows before
-/// it commits.
-pub fn apply_presentation(settings: &Settings) {
-    settings.language.apply();
-    crate::theme::set_animations_enabled(settings.animations_enabled);
-    settings.time_format.apply();
-    crate::provider_registry::apply_logo_settings(settings.replace_chatgpt_logo_with_codex);
-    crate::popup::set_user_pinned(settings.popup_pinned);
+/// The process-wide values the windows read while painting or dismissing
+/// that a window's own edit changed, so the edit shows before it commits.
+/// Only changed values apply: a window's snapshot can be older than another
+/// window's pending edit, and must not put that edit's value back.
+pub fn apply_presentation_changes(before: &Settings, after: &Settings) {
+    apply_presentation(Some(before), after);
+}
+
+fn apply_presentation(before: Option<&Settings>, settings: &Settings) {
+    let changed = |same: fn(&Settings, &Settings) -> bool| {
+        before.is_none_or(|before| !same(before, settings))
+    };
+    if changed(|a, b| a.language == b.language) {
+        settings.language.apply();
+    }
+    if changed(|a, b| a.animations_enabled == b.animations_enabled) {
+        crate::theme::set_animations_enabled(settings.animations_enabled);
+    }
+    if changed(|a, b| a.time_format == b.time_format) {
+        settings.time_format.apply();
+    }
+    if changed(|a, b| a.replace_chatgpt_logo_with_codex == b.replace_chatgpt_logo_with_codex) {
+        crate::provider_registry::apply_logo_settings(settings.replace_chatgpt_logo_with_codex);
+    }
+    if changed(|a, b| a.popup_pinned == b.popup_pinned) {
+        crate::popup::set_user_pinned(settings.popup_pinned);
+    }
 }
 
 /// Everything settings drive outside the windows' own snapshots.
 pub fn apply(settings: &Settings) {
-    apply_presentation(settings);
+    apply_presentation(None, settings);
     crate::theme::apply_appearance(settings.accent_color);
     // Names and badges are read by every surface; publish them first.
     crate::instances::publish(&settings.instances);

@@ -6,6 +6,7 @@ use gpui::{
     px,
 };
 
+use super::Host;
 use super::window::SettingsWindow;
 use crate::choice::Choice;
 use crate::gui::fx;

@@ -1044,6 +1044,7 @@ fn settings_copy() -> SettingsCopy {
             crate::i18n::tr("folder-with-codex-exe-codex-cmd-or-codex-ps1-leave-empty-to-find"),
             r"C:\Users\you\AppData\Roaming\npm",
         )],
+        config_env: "CODEX_HOME",
         ..SettingsCopy::new(crate::i18n::tr(
             "reads-the-signed-in-codex-cli-or-desktop-app",
         ))

@@ -70,9 +70,13 @@ fn provider_nav_keeps_identity_and_order_for_every_enabled_combination() {
             assert_eq!(listed.len(), expected.len());
             for (item, instance) in listed.into_iter().zip(expected) {
                 assert_eq!(item.id, instance.id);
+                let enabled_claudes = instances
+                    .iter()
+                    .filter(|i| i.enabled && i.driver == ProviderKind::Claude)
+                    .count();
                 assert_eq!(
-                    shows_badge(item, &instances),
-                    extra_claude && item.driver == ProviderKind::Claude
+                    crate::instances::shares_driver(item, &instances),
+                    item.driver == ProviderKind::Claude && enabled_claudes > 1
                 );
             }
         }

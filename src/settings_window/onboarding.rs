@@ -10,13 +10,14 @@ use gpui::{
     WindowControlArea, div, px,
 };
 
+use super::Host;
 use super::appearance::ThemePicker;
 use super::general::usage_refresh_labels;
 use super::vscode_themes::{ThemeBrowser, ThemeBrowserUi, ThemeHost, end_theme_preview};
 use crate::choice::Choice;
 use crate::gui::fx;
 use crate::gui::input::{HasInputs, Inputs};
-use crate::gui::kit::{self, Button, Handler, Kit, Row};
+use crate::gui::kit::{self, Button, Kit, Row};
 use crate::gui::theme::{Fonts, Theme};
 use crate::provider_registry::ProviderKind;
 use crate::settings::{ProviderInstance, Settings, TrayWidget, UsageRefreshInterval};
@@ -106,14 +107,8 @@ fn copy_choices(from: &Settings, to: &mut Settings) {
 
 /// A tray widget for every enabled provider that has default tray metrics.
 fn default_tray_widgets(settings: &Settings) -> Vec<TrayWidget> {
-    settings
-        .enabled_providers()
+    super::widget_list::widget_providers(&settings.instances, true)
         .into_iter()
-        .filter(|provider| {
-            !crate::provider_registry::descriptor(provider.kind())
-                .default_tray_metrics
-                .is_empty()
-        })
         .map(TrayWidget::for_provider)
         .collect()
 }
@@ -210,29 +205,27 @@ impl HasInputs for OnboardingWindow {
     }
 }
 
-impl ThemeHost for OnboardingWindow {
+impl Host for OnboardingWindow {
     fn settings(&self) -> &Settings {
         &self.settings
+    }
+
+    fn settings_mut(&mut self) -> &mut Settings {
+        &mut self.settings
     }
 
     fn fonts(&self) -> &Fonts {
         &self.fonts
     }
+}
 
+impl ThemeHost for OnboardingWindow {
     fn theme_browser(&self) -> &ThemeBrowser {
         &self.theme_browser
     }
 
     fn theme_browser_mut(&mut self) -> &mut ThemeBrowser {
         &mut self.theme_browser
-    }
-
-    fn edit_settings(
-        &mut self,
-        cx: &mut Context<Self>,
-        edit: impl Fn(&mut Settings) + Send + 'static,
-    ) {
-        self.edit(cx, edit);
     }
 
     /// The installed theme is selected in the grid; no notice is needed.
@@ -292,16 +285,6 @@ impl OnboardingWindow {
         onboarding
     }
 
-    /// Apply an edit locally and commit every choice so the popup follows.
-    fn edit(&mut self, cx: &mut Context<Self>, edit: impl Fn(&mut Settings)) {
-        edit(&mut self.settings);
-        self.settings.normalize_all();
-        crate::settings_runtime::apply_presentation(&self.settings);
-        cx.refresh_windows();
-        self.publish();
-        cx.notify();
-    }
-
     /// Commit the current choices (without auto-activation) for the popup.
     fn publish(&self) {
         if self.settled {
@@ -354,16 +337,6 @@ impl OnboardingWindow {
             self.ensure_open_vsx_results(cx);
         }
         cx.notify();
-    }
-
-    fn h<T: 'static>(
-        cx: &Context<Self>,
-        f: impl Fn(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-    ) -> Handler<T> {
-        let this = cx.weak_entity();
-        std::rc::Rc::new(move |value, window, cx| {
-            let _ = this.update(cx, |this, cx| f(this, value, window, cx));
-        })
     }
 
     fn finish(&mut self, window: &mut Window, cx: &mut Context<Self>) {

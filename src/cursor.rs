@@ -82,6 +82,7 @@ fn settings_copy() -> SettingsCopy {
             crate::i18n::tr("folder-with-cursor-exe-leave-empty-to-find-it-automatically-usage"),
             r"C:\Users\you\AppData\Local\Programs\Cursor",
         )],
+        binary_source: Some(InstallSource::App),
         ..SettingsCopy::new(crate::i18n::tr(
             "reads-the-signed-in-cursor-app-for-this-billing-cycle",
         ))

@@ -2979,3 +2979,6 @@ skip-automatic-reset = Cancel
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Banked reset applied
+
+# src/settings_window/providers/page.rs
+claude-other-account-needs-cli = Extra Claude accounts need the Claude Code CLI. The Claude app's built-in copy only serves the app's own account.

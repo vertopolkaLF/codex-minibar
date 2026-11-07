@@ -1694,14 +1694,10 @@ impl PopupRoot {
     /// Applies a popup-owned settings change at once, then persists it on
     /// the serial settings writer, off the render thread. Process-wide
     /// values such as the pin take effect before the write round-trips.
-    pub(super) fn persist(
-        &mut self,
-        cx: &mut Context<Self>,
-        edit: impl Fn(&mut Settings) + Send + 'static,
-    ) {
+    pub(super) fn persist(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Settings)) {
         let ui = Rc::make_mut(&mut self.ui);
-        ui.edit_settings(edit);
-        crate::settings_runtime::apply_presentation(&ui.settings);
+        let before = ui.edit_settings(edit);
+        crate::settings_runtime::apply_presentation_changes(&before, &ui.settings);
         cx.notify();
     }
 

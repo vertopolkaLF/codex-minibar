@@ -11,7 +11,7 @@ use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone
 use serde::Deserialize;
 
 use crate::{
-    drivers::{Driver, InstallSource, InstallStatus, SettingsCopy, Sources},
+    drivers::{Credential, Driver, InstallSource, InstallStatus, SettingsCopy, Sources},
     instances::{ProviderId, ProviderInstance},
     limits::{
         LimitWindow, OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, RateLimits,
@@ -821,6 +821,7 @@ fn settings_copy() -> SettingsCopy {
     SettingsCopy {
         found: crate::i18n::tr("account-credentials-are-already-set"),
         not_found: crate::i18n::tr("optional-add-accounts-later-in-providers"),
+        credential: Credential::KeyAccounts,
         ..SettingsCopy::new(crate::i18n::tr(
             "reads-api-key-usage-and-spend-limits-a-management-key-also-enable",
         ))

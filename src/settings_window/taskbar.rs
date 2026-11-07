@@ -4,18 +4,19 @@
 use std::{collections::HashMap, sync::Arc};
 
 use gpui::{
-    AnyElement, Context, FontWeight, ImageFormat, InteractiveElement, IntoElement, ParentElement,
-    StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
+    AnyElement, Context, ImageFormat, IntoElement, ParentElement, StatefulInteractiveElement,
+    Styled, Window, div, img, px,
 };
 
-use super::tray::{IndicatorOwner, TrayDialog, dialog_section, preview_limits};
+use super::Host;
+use super::widget_list::{Taskbar, dialog_section, style_tile, widget_providers};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
 use crate::gui::color::rgb8;
-use crate::gui::kit::{self, Button, Kit, Row, eid};
+use crate::gui::kit::{self, Button, Kit, Row};
 use crate::settings::{
-    ProviderId, TaskbarAlignment, TaskbarClick, TaskbarResetDisplay, TaskbarWidget,
-    TaskbarWidgetStyle, TrayIndicator,
+    TaskbarAlignment, TaskbarClick, TaskbarResetDisplay, TaskbarWidget, TaskbarWidgetStyle,
+    TrayIndicator,
 };
 
 /// Height of the previewed taskbar, in DIPs: the Windows 11 default.
@@ -207,7 +208,7 @@ impl SettingsWindow {
                 };
                 let preview = crate::taskbar::preview(
                     widgets,
-                    &preview_limits(),
+                    &super::widget_list::preview_limits(&self.settings.instances),
                     appearance,
                     scale,
                     TASKBAR_HEIGHT,
@@ -289,53 +290,6 @@ impl SettingsWindow {
         .into_any_element()
     }
 
-    /// Opens the editor of the widget `id`, if it still exists.
-    pub(crate) fn open_taskbar_dialog(&mut self, id: String, cx: &mut Context<Self>) {
-        if self
-            .settings
-            .taskbar
-            .widgets
-            .iter()
-            .any(|widget| widget.id == id)
-        {
-            self.taskbar_dialog = Some(TrayDialog::new(id));
-            cx.notify();
-        }
-    }
-
-    fn set_taskbar_widgets(&mut self, mut widgets: Vec<TaskbarWidget>, cx: &mut Context<Self>) {
-        for widget in &mut widgets {
-            widget.normalize();
-        }
-        self.edit(cx, move |settings| {
-            settings.taskbar.widgets = widgets.clone()
-        });
-    }
-
-    pub(super) fn update_taskbar_widgets(
-        &mut self,
-        cx: &mut Context<Self>,
-        f: impl FnOnce(&mut Vec<TaskbarWidget>),
-    ) {
-        let mut next = self.settings.taskbar.widgets.clone();
-        f(&mut next);
-        self.set_taskbar_widgets(next, cx);
-    }
-
-    fn enabled_taskbar_providers(&self) -> Vec<ProviderId> {
-        self.settings
-            .instances
-            .iter()
-            .filter(|instance| instance.enabled)
-            .filter(|instance| {
-                !crate::provider_registry::descriptor(instance.driver)
-                    .default_tray_metrics
-                    .is_empty()
-            })
-            .map(|instance| instance.provider_id())
-            .collect()
-    }
-
     pub(super) fn taskbar_page(
         &mut self,
         k: &mut Kit,
@@ -343,7 +297,7 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let taskbar = self.settings.taskbar.clone();
-        let enabled_providers = self.enabled_taskbar_providers();
+        let enabled_providers = widget_providers(&self.settings.instances, true);
         let mut rows = vec![kit::caption(k, crate::i18n::tr("taskbar-page-caption"))];
 
         let alignment_index = match taskbar.alignment {
@@ -359,20 +313,15 @@ impl SettingsWindow {
                     Some(crate::i18n::tr("taskbar-show-widgets-description").into()),
                     taskbar.enabled,
                     Self::h(cx, |this, value: bool, _, cx| {
-                        // Turning widgets on for the first time shows one. It
-                        // is built once: `edit` runs for the snapshot and the
-                        // writer, and both must see the same widget id.
-                        let seed = this
-                            .enabled_taskbar_providers()
-                            .first()
-                            .copied()
-                            .filter(|_| value && this.settings.taskbar.widgets.is_empty())
-                            .map(TaskbarWidget::for_provider);
                         this.edit(cx, move |settings| {
                             settings.taskbar.enabled = value;
-                            if let Some(widget) = seed.clone()
+                            // Turning widgets on for the first time shows one.
+                            if value
                                 && settings.taskbar.widgets.is_empty()
+                                && let Some(provider) =
+                                    widget_providers(&settings.instances, true).first()
                             {
+                                let widget = TaskbarWidget::for_provider(*provider);
                                 settings.taskbar.widgets.push(widget);
                             }
                         })
@@ -445,63 +394,25 @@ impl SettingsWindow {
         }
 
         rows.push(kit::section_heading(k, crate::i18n::tr("taskbar-widgets")));
-        if let Some((index, removed)) = self.removed_taskbar_widget.clone() {
-            let undo = Self::h(cx, move |this, (), _, cx| {
-                let removed = removed.clone();
-                this.update_taskbar_widgets(cx, |widgets| {
-                    widgets.insert(index.min(widgets.len()), removed)
-                });
-                this.removed_taskbar_widget = None;
-            });
-            rows.push(kit::appear(
-                k,
-                "taskbar-undo",
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.0))
-                    .px(px(16.0))
-                    .py(px(8.0))
-                    .rounded(px(kit::CARD_RADIUS))
-                    .bg(k.theme.accent_soft)
-                    .child(
-                        kit::text(crate::i18n::tr("widget-removed"), 13.0, k.theme.text).flex_1(),
-                    )
-                    .child(
-                        Button::new("taskbar-undo", crate::i18n::tr("undo"))
-                            .on_click(undo)
-                            .render(k),
-                    )
-                    .into_any_element(),
-            ));
-        }
-        if taskbar.widgets.is_empty() {
-            rows.push(kit::row_card(
-                k,
-                Row::new("taskbar-empty", crate::i18n::tr("taskbar-no-widgets"))
-                    .description(k, crate::i18n::tr("taskbar-no-widgets-description")),
-            ));
-        } else {
-            let count = taskbar.widgets.len();
-            let items = taskbar
-                .widgets
-                .iter()
-                .enumerate()
-                .map(|(index, widget)| {
-                    let row = self.taskbar_widget_row(k, index, count, widget, window, cx);
-                    kit::appear(k, format!("taskbar-widget-{}", widget.id), row)
-                })
-                .collect();
-            rows.push(kit::card(k, items));
-        }
+        let empty = Row::new("taskbar-empty", crate::i18n::tr("taskbar-no-widgets"))
+            .description(k, crate::i18n::tr("taskbar-no-widgets-description"));
+        rows.extend(
+            self.widget_list::<Taskbar>(k, cx, empty, |this, k, index, widget| {
+                let tile = this.taskbar_tile(
+                    format!("row-{}", widget.id),
+                    std::slice::from_ref(widget),
+                    window,
+                );
+                Row::new(format!("taskbar-row-{}", widget.id), widget_title(index))
+                    .icon(tile)
+                    .description(k, widget_summary(widget))
+            }),
+        );
         let first = enabled_providers.first().copied();
         let add_widget = Self::h(cx, move |this, (), _, cx| {
-            let Some(provider) = first else {
-                return;
-            };
-            let widget = TaskbarWidget::for_provider(provider);
-            this.taskbar_dialog = Some(TrayDialog::new(widget.id.clone()));
-            this.update_taskbar_widgets(cx, |widgets| widgets.push(widget));
+            if let Some(provider) = first {
+                this.add_widget::<Taskbar>(TaskbarWidget::for_provider(provider), cx);
+            }
         });
         rows.push(
             div()
@@ -521,92 +432,6 @@ impl SettingsWindow {
         rows
     }
 
-    fn taskbar_widget_row(
-        &mut self,
-        k: &Kit,
-        index: usize,
-        count: usize,
-        widget: &TaskbarWidget,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
-        let id = widget.id.clone();
-        let open_id = id.clone();
-        let open = Self::h(cx, move |this, (), _, cx| {
-            this.taskbar_dialog = Some(TrayDialog::new(open_id.clone()));
-            cx.notify();
-        });
-        let menu_id = id.clone();
-        let mut up = kit::MenuItem::new(crate::i18n::tr("move-up")).icon("arrow-up-bold");
-        up.disabled = index == 0;
-        let mut down = kit::MenuItem::new(crate::i18n::tr("move-down")).icon("arrow-down-bold");
-        down.disabled = index + 1 >= count;
-        let menu = kit::more_menu(
-            k,
-            format!("taskbar-{id}-menu"),
-            vec![
-                kit::MenuItem::new(crate::i18n::tr("edit")).icon("pencil-simple-fill"),
-                up,
-                down,
-                kit::MenuItem::new(crate::i18n::tr("duplicate")).icon("copy"),
-                kit::MenuItem::new(crate::i18n::tr("remove"))
-                    .icon("trash-fill")
-                    .danger(),
-            ],
-            Self::h(cx, move |this, choice: usize, _, cx| match choice {
-                0 => {
-                    this.taskbar_dialog = Some(TrayDialog::new(menu_id.clone()));
-                    cx.notify();
-                }
-                1 => this.move_taskbar_widget(index, -1, cx),
-                2 => this.move_taskbar_widget(index, 1, cx),
-                3 => this.update_taskbar_widgets(cx, |widgets| {
-                    if let Some(widget) = widgets.get(index) {
-                        widgets.insert(index + 1, widget.duplicate_with_new_id());
-                    }
-                }),
-                _ => this.remove_taskbar_widget(index, cx),
-            }),
-        );
-        let tile = self.taskbar_tile(format!("row-{id}"), std::slice::from_ref(widget), window);
-        Row::new(format!("taskbar-row-{id}"), widget_title(index))
-            .icon(tile)
-            .description(k, widget_summary(widget))
-            .trailing(menu)
-            .trailing(
-                crate::gui::mark::icon("caret-right", 12.0, k.theme.text_secondary)
-                    .into_any_element(),
-            )
-            .on_click(open)
-            .render(k)
-    }
-
-    fn move_taskbar_widget(&mut self, index: usize, delta: isize, cx: &mut Context<Self>) {
-        self.update_taskbar_widgets(cx, |widgets| {
-            let target = index as isize + delta;
-            if index < widgets.len() && target >= 0 && (target as usize) < widgets.len() {
-                widgets.swap(index, target as usize);
-            }
-        });
-    }
-
-    fn remove_taskbar_widget(&mut self, index: usize, cx: &mut Context<Self>) {
-        let mut next = self.settings.taskbar.widgets.clone();
-        if index >= next.len() {
-            return;
-        }
-        let removed = next.remove(index);
-        if self
-            .taskbar_dialog
-            .as_ref()
-            .is_some_and(|dialog| dialog.widget_id == removed.id)
-        {
-            self.taskbar_dialog = None;
-        }
-        self.removed_taskbar_widget = Some((index, removed));
-        self.set_taskbar_widgets(next, cx);
-    }
-
     /// The widget editor: preview, style, provider mark and indicators.
     /// Every choice applies to the taskbar immediately.
     pub(super) fn taskbar_dialog_overlay(
@@ -615,24 +440,7 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
-        let current = self.taskbar_dialog.clone().and_then(|dialog| {
-            self.settings
-                .taskbar
-                .widgets
-                .iter()
-                .cloned()
-                .enumerate()
-                .find(|(_, widget)| widget.id == dialog.widget_id)
-                .map(|(index, widget)| (dialog, index, widget))
-        });
-        if current.is_none() {
-            self.taskbar_dialog = None;
-        }
-        let ((dialog, index, widget), phase) = self.overlays.taskbar.track(k, current)?;
-        let close = Self::h(cx, |this, (), _, cx| {
-            this.taskbar_dialog = None;
-            cx.notify();
-        });
+        let (dialog, index, widget, phase) = self.widget_dialog::<Taskbar>(k)?;
         let tile = self.taskbar_tile(
             format!("dialog-{}", widget.id),
             std::slice::from_ref(&widget),
@@ -681,7 +489,7 @@ impl SettingsWindow {
                             Some(crate::i18n::tr(toggle.description).into()),
                             toggle.value,
                             Self::h(cx, move |this, value: bool, _, cx| {
-                                this.update_taskbar_widgets(cx, |widgets| {
+                                this.update_widgets::<Taskbar>(cx, |widgets| {
                                     if let Some(widget) = widgets.get_mut(index) {
                                         set(widget, value);
                                     }
@@ -706,7 +514,7 @@ impl SettingsWindow {
                                 .get(choice)
                                 .copied()
                                 .unwrap_or_default();
-                            this.update_taskbar_widgets(cx, |widgets| {
+                            this.update_widgets::<Taskbar>(cx, |widgets| {
                                 if let Some(widget) = widgets.get_mut(index) {
                                     widget.reset = reset;
                                 }
@@ -725,9 +533,8 @@ impl SettingsWindow {
                 &[("max_indicators", max.to_string())],
             ),
         ));
-        let indicators = self.tray_indicators(
+        let indicators = self.indicator_editor::<Taskbar>(
             k,
-            IndicatorOwner::Taskbar,
             index,
             &widget.id,
             &widget.indicators,
@@ -742,32 +549,14 @@ impl SettingsWindow {
             format!("taskbar-dlg-{}-{max}", widget.id),
             indicators,
         ));
-        let remove = Button::new("taskbar-dlg-remove", crate::i18n::tr("remove-widget"))
-            .danger()
-            .with_icon("trash-fill")
-            .full_width()
-            .on_click(Self::h(cx, move |this, (), _, cx| {
-                this.remove_taskbar_widget(index, cx)
-            }));
-        let done = Button::new("taskbar-dlg-done", crate::i18n::tr("done"))
-            .accent()
-            .full_width()
-            .on_click(close.clone());
-        // The body scrolls once it outgrows the window; without this the
-        // flex column squeezes its sections (cards, the picker) to nothing
-        // instead.
-        let body = body
-            .into_iter()
-            .map(|section| div().flex_none().child(section).into_any_element())
-            .collect();
-        Some(kit::dialog(
+        Some(self.widget_dialog_frame::<Taskbar>(
             k,
-            format!("taskbar-dialog-{}", widget.id),
+            cx,
+            &widget.id,
+            index,
             phase,
             DIALOG_WIDTH,
             body,
-            vec![remove.render(k), done.render(k)],
-            Some(close),
         ))
     }
 
@@ -806,71 +595,38 @@ impl SettingsWindow {
                             .h(px(height * fit))
                             .flex_none()
                     });
-                let id = format!("taskbar-style-{}", style.index());
-                let theme = &k.theme;
-                let rest = if selected {
-                    theme.accent_soft
-                } else {
-                    theme.control
-                };
-                let hover = if selected { rest } else { theme.control_hover };
-                let tile = div()
-                    .id(eid(id.clone()))
-                    .w(px(STYLE_TILE))
+                let plate = div()
+                    .w_full()
+                    .h(px(TASKBAR_HEIGHT))
                     .flex_none()
+                    .px(px(PLATE_PAD))
                     .flex()
-                    .flex_col()
-                    .gap(px(8.0))
-                    .p(px(STYLE_PAD))
-                    .pb(px(8.0))
-                    .rounded(px(kit::CARD_RADIUS))
-                    .border_1()
-                    .border_color(if selected {
-                        theme.accent
-                    } else {
-                        gpui::transparent_black()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .bg(taskbar_plate(light))
+                    .overflow_hidden()
+                    .children(preview)
+                    .into_any_element();
+                style_tile(
+                    k,
+                    format!("taskbar-style-{}", style.index()),
+                    selected,
+                    plate,
+                    style_label(style),
+                )
+                .w(px(STYLE_TILE))
+                .flex_none()
+                .p(px(STYLE_PAD))
+                .pb(px(8.0))
+                .on_click(cx.listener(move |this, _, _, cx| {
+                    this.update_widgets::<Taskbar>(cx, |widgets| {
+                        if let Some(widget) = widgets.get_mut(index) {
+                            widget.style = style;
+                        }
                     })
-                    .child(
-                        div()
-                            .w_full()
-                            .h(px(TASKBAR_HEIGHT))
-                            .flex_none()
-                            .px(px(PLATE_PAD))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(px(6.0))
-                            .bg(taskbar_plate(light))
-                            .overflow_hidden()
-                            .children(preview),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .text_center()
-                            .text_size(px(12.0))
-                            .line_height(px(16.0))
-                            .whitespace_nowrap()
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .when(selected, |el| el.font_weight(FontWeight::SEMIBOLD))
-                            .text_color(if selected {
-                                theme.accent_text
-                            } else {
-                                theme.text
-                            })
-                            .child(style_label(style)),
-                    );
-                kit::hover_bg(k, tile, kit::hover_key(&id), rest, hover)
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        this.update_taskbar_widgets(cx, |widgets| {
-                            if let Some(widget) = widgets.get_mut(index) {
-                                widget.style = style;
-                            }
-                        })
-                    }))
-                    .into_any_element()
+                }))
+                .into_any_element()
             })
             .collect::<Vec<_>>();
         let mut rows = Vec::new();

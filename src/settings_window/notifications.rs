@@ -4,6 +4,7 @@
 
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
 
+use super::Host;
 use super::window::SettingsWindow;
 use crate::gui::fx;
 use crate::gui::kit::{self, Kit, Row, SliderRange};

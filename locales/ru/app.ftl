@@ -2986,3 +2986,6 @@ skip-automatic-reset = Отменить
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = Запасной сброс применён
+
+# src/settings_window/providers/page.rs
+claude-other-account-needs-cli = Дополнительным аккаунтам Claude нужен Claude Code CLI. Встроенная копия в приложении Claude обслуживает только аккаунт самого приложения.

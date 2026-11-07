@@ -2060,3 +2060,6 @@ skip-automatic-reset = 取消
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = 已应用已储备重置
+
+# src/settings_window/providers/page.rs
+claude-other-account-needs-cli = 额外的 Claude 账户需要 Claude Code CLI。Claude 应用内置的副本只服务于应用自己的账户。

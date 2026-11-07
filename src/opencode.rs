@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
-    drivers::{Driver, InstallSource, InstallStatus, SettingsCopy, Sources},
+    drivers::{Credential, Driver, InstallSource, InstallStatus, SettingsCopy, Sources},
     instances::{ProviderId, ProviderInstance},
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     provider_registry::ProviderKind,
@@ -326,6 +326,7 @@ fn settings_copy(description: &'static str) -> SettingsCopy {
     SettingsCopy {
         found: crate::i18n::tr("found-in-opencode-auth-or-local-history"),
         not_found: crate::i18n::tr("not-found-turn-it-on-if-it-s-set-up-elsewhere"),
+        credential: Credential::ApiKey,
         ..SettingsCopy::new(description)
     }
 }

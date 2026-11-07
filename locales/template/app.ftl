@@ -4375,3 +4375,7 @@ skip-automatic-reset = { "" }
 # English source:
 # banked-reset-applied = Banked reset applied
 banked-reset-applied = { "" }
+
+# English source:
+# claude-other-account-needs-cli = Extra Claude accounts need the Claude Code CLI. The Claude app's built-in copy only serves the app's own account.
+claude-other-account-needs-cli = { "" }

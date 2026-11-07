@@ -2,8 +2,7 @@
 //! state and the helpers every page uses to read and edit settings.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
-    rc::Rc,
+    collections::{HashMap, HashSet},
     sync::Arc,
     time::Duration,
 };
@@ -15,11 +14,11 @@ use gpui::{
     WindowControlArea, div, point, prelude::FluentBuilder, px,
 };
 
+use super::widget_list::ListEditor;
 use super::{
-    nav::{NavMode, Page, Tab, first_provider_page, provider_nav_order, shows_badge},
-    providers::{
-        OpenRouterSettingsSnapshot, ProviderDialog, ProviderReadiness, provider_readiness,
-    },
+    Host,
+    nav::{NavMode, Page, Tab, first_provider_page, provider_nav_order},
+    providers::{LiveProviderData, ProviderDialog, ProviderReadiness, provider_readiness},
 };
 use crate::app::AppState;
 use crate::drivers::InstallStatus;
@@ -30,8 +29,7 @@ use crate::gui::{
     mark::icon,
     theme::{Fonts, Theme},
 };
-use crate::provider_registry::ProviderKind;
-use crate::settings::{ProviderId, ProviderInstance, Settings, TrayWidget, store};
+use crate::settings::{ProviderId, ProviderInstance, Settings, TaskbarWidget, TrayWidget, store};
 use crate::updater::UpdatePhase;
 
 const SIDEBAR_WIDTH: f32 = 264.0;
@@ -83,8 +81,7 @@ pub(crate) struct SettingsWindow {
     pub(super) status_revision: u64,
     language: crate::i18n::Language,
     pub(super) provider_dialog: Option<ProviderDialog>,
-    pub(super) openrouter: OpenRouterSettingsSnapshot,
-    pub(super) discovered_bricks: BTreeMap<String, String>,
+    pub(super) live: LiveProviderData,
     // Expanded cards (expanders, rules, tray widgets), by id.
     pub(super) expanded: HashSet<String>,
     // Notices, live data and modal state.
@@ -94,12 +91,9 @@ pub(crate) struct SettingsWindow {
     pub(super) log: SharedString,
     pub(super) streamdeck_phase: crate::streamdeck::InstallPhase,
     pub(super) troubleshoot: Option<crate::troubleshoot::ToolPickerState>,
-    pub(super) tray_dialog: Option<super::tray::TrayDialog>,
-    pub(super) removed_widget: Option<(usize, TrayWidget)>,
-    pub(super) taskbar_dialog: Option<super::tray::TrayDialog>,
-    pub(super) removed_taskbar_widget: Option<(usize, crate::settings::TaskbarWidget)>,
-    pub(super) dock_dialog: Option<super::tray::TrayDialog>,
-    pub(super) removed_dock_widget: Option<(usize, crate::settings::TaskbarWidget)>,
+    pub(super) tray_list: ListEditor<TrayWidget>,
+    pub(super) taskbar_list: ListEditor<TaskbarWidget>,
+    pub(super) dock_list: ListEditor<TaskbarWidget>,
     pub(super) cmdpal_phase: crate::cmdpal::InstallPhase,
     /// Whether the Command Palette extension package is registered.
     pub(super) cmdpal_installed: bool,
@@ -115,6 +109,20 @@ pub(crate) struct SettingsWindow {
     pub(super) theme_browser: super::vscode_themes::ThemeBrowser,
     _poll: Task<()>,
     _subscriptions: Vec<Subscription>,
+}
+
+impl Host for SettingsWindow {
+    fn settings(&self) -> &Settings {
+        &self.settings
+    }
+
+    fn settings_mut(&mut self) -> &mut Settings {
+        &mut self.settings
+    }
+
+    fn fonts(&self) -> &Fonts {
+        &self.fonts
+    }
 }
 
 impl HasInputs for SettingsWindow {
@@ -191,6 +199,7 @@ impl SettingsWindow {
         });
         Self {
             update_phase: state.updates.snapshot(),
+            live: LiveProviderData::from_limits(&state.current_limits()),
             backdrop: super::backdrop::Backdrop::install(window),
             state,
             settings,
@@ -215,20 +224,15 @@ impl SettingsWindow {
             status_revision: 0,
             language: crate::i18n::current_language(),
             provider_dialog: None,
-            openrouter: super::cached_openrouter_snapshot(),
-            discovered_bricks: super::cached_discovered_popup_bricks(),
             expanded: HashSet::new(),
             notice: None,
             notice_task: None,
             log: SharedString::default(),
             streamdeck_phase: crate::streamdeck::InstallPhase::Idle,
             troubleshoot: None,
-            tray_dialog: None,
-            removed_widget: None,
-            taskbar_dialog: None,
-            removed_taskbar_widget: None,
-            dock_dialog: None,
-            removed_dock_widget: None,
+            tray_list: ListEditor::default(),
+            taskbar_list: ListEditor::default(),
+            dock_list: ListEditor::default(),
             cmdpal_phase: crate::cmdpal::InstallPhase::Idle,
             cmdpal_installed: crate::cmdpal::is_installed(),
             confirm_reset: false,
@@ -248,26 +252,9 @@ impl SettingsWindow {
     /// Adopt a committed snapshot unless more local edits are still queued;
     /// those keep showing until their own commit lands.
     pub(crate) fn apply_sync(&mut self, settings: Settings, cx: &mut Context<Self>) {
-        if store::has_pending() {
-            crate::settings_runtime::apply_presentation(&self.settings);
-        } else {
+        if !store::has_pending() {
             self.settings = settings;
         }
-        cx.refresh_windows();
-        cx.notify();
-    }
-
-    /// Apply an edit locally right away and queue it for the settings file.
-    ///
-    /// `edit` runs twice, on this snapshot and on the freshly loaded file, so
-    /// it must set absolute values, never move or toggle relative to them.
-    pub(super) fn edit(
-        &mut self,
-        cx: &mut Context<Self>,
-        edit: impl Fn(&mut Settings) + Send + 'static,
-    ) {
-        store::edit_snapshot(&mut self.settings, edit);
-        crate::settings_runtime::apply_presentation(&self.settings);
         cx.refresh_windows();
         cx.notify();
     }
@@ -277,7 +264,7 @@ impl SettingsWindow {
         &mut self,
         cx: &mut Context<Self>,
         provider: ProviderId,
-        edit: impl Fn(&mut ProviderInstance) + Send + 'static,
+        edit: impl FnOnce(&mut ProviderInstance),
     ) {
         self.edit(cx, move |settings| {
             if let Some(instance) = settings.instance_mut(provider) {
@@ -285,17 +272,6 @@ impl SettingsWindow {
                 instance.normalize();
             }
         });
-    }
-
-    /// Wrap a method into a component handler.
-    pub(super) fn h<T: 'static>(
-        cx: &Context<Self>,
-        f: impl Fn(&mut Self, T, &mut Window, &mut Context<Self>) + 'static,
-    ) -> Handler<T> {
-        let this = cx.weak_entity();
-        Rc::new(move |value, window, cx| {
-            let _ = this.update(cx, |this, cx| f(this, value, window, cx));
-        })
     }
 
     pub(super) fn is_expanded(&self, id: &str) -> bool {
@@ -552,13 +528,7 @@ impl SettingsWindow {
             self.dismiss_provider_dialog(cx);
         } else if self.troubleshoot.is_some() {
             self.troubleshoot = None;
-        } else if self.tray_dialog.is_some() {
-            self.tray_dialog = None;
-        } else if self.taskbar_dialog.is_some() {
-            self.taskbar_dialog = None;
-        } else if self.dock_dialog.is_some() {
-            self.dock_dialog = None;
-        } else if self.close_open_vsx(cx) {
+        } else if self.close_widget_dialog() || self.close_open_vsx(cx) {
         } else if self.confirm_reset {
             self.confirm_reset = false;
         } else if self.mode == NavMode::Providers {
@@ -979,26 +949,24 @@ impl SettingsWindow {
         } else {
             theme.glyph()
         };
-        let badge = shows_badge(instance, instances).then(|| instance.badge());
+        let badge = crate::instances::shares_driver(instance, instances).then(|| instance.badge());
         let mut trailing = Vec::new();
         if instance.enabled {
-            if instance.driver == ProviderKind::OpenRouter {
-                let keys = instance
-                    .openrouter
-                    .as_ref()
-                    .map_or(0, |account| account.api_key_ids.len());
-                if keys > 0 {
-                    trailing.push(
-                        div()
-                            .px(px(6.0))
-                            .rounded_full()
-                            .bg(theme.accent)
-                            .text_size(px(11.0))
-                            .text_color(theme.on_accent)
-                            .child(keys.to_string())
-                            .into_any_element(),
-                    );
-                }
+            let keys = instance
+                .openrouter
+                .as_ref()
+                .map_or(0, |account| account.api_key_ids.len());
+            if keys > 0 {
+                trailing.push(
+                    div()
+                        .px(px(6.0))
+                        .rounded_full()
+                        .bg(theme.accent)
+                        .text_size(px(11.0))
+                        .text_color(theme.on_accent)
+                        .child(keys.to_string())
+                        .into_any_element(),
+                );
             }
             match self.readiness(provider) {
                 ProviderReadiness::Ready => trailing.push(kit::status_dot(theme.success)),
@@ -1070,7 +1038,7 @@ impl SettingsWindow {
         } else {
             theme.glyph()
         };
-        let badge = shows_badge(instance, instances).then(|| instance.badge());
+        let badge = crate::instances::shares_driver(instance, instances).then(|| instance.badge());
         let tile_id = format!("nav-provider-{}", instance.id);
         let (rest, target) = if is_selected {
             (theme.accent_soft, theme.accent_soft)
@@ -1427,17 +1395,6 @@ fn sidebar_width(width: f32) -> f32 {
 pub(super) struct Overlays {
     pub(super) provider: kit::Presence<ProviderDialog>,
     pub(super) troubleshoot: kit::Presence<crate::troubleshoot::ToolPickerState>,
-    pub(super) tray: kit::Presence<(super::tray::TrayDialog, usize, TrayWidget)>,
-    pub(super) taskbar: kit::Presence<(
-        super::tray::TrayDialog,
-        usize,
-        crate::settings::TaskbarWidget,
-    )>,
-    pub(super) dock: kit::Presence<(
-        super::tray::TrayDialog,
-        usize,
-        crate::settings::TaskbarWidget,
-    )>,
     pub(super) reset: kit::Presence<()>,
     pub(super) open_vsx: kit::Presence<()>,
 }

@@ -5,6 +5,7 @@ use gpui::{
     AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px,
 };
 
+use super::Host;
 use super::window::SettingsWindow;
 use crate::choice::Choice;
 use crate::gui::kit::{self, Button, Kit, Row};
@@ -276,7 +277,7 @@ impl SettingsWindow {
         let extra_ids = visibility
             .bricks
             .keys()
-            .chain(self.discovered_bricks.keys())
+            .chain(self.live.discovered_bricks.keys())
             .cloned()
             .collect::<Vec<_>>();
         let theme = k.theme.clone();
@@ -311,7 +312,7 @@ impl SettingsWindow {
             let label = crate::provider_registry::settings_brick_label(
                 provider,
                 &brick_id,
-                &self.discovered_bricks,
+                &self.live.discovered_bricks,
             );
             let make = |all_tab: Option<bool>| {
                 let brick_id = brick_id.clone();

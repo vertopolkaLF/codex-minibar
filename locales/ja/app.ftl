@@ -2959,3 +2959,6 @@ skip-automatic-reset = キャンセル
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = 保存済みリセットを適用しました
+
+# src/settings_window/providers/page.rs
+claude-other-account-needs-cli = 追加の Claude アカウントには Claude Code CLI が必要です。Claude アプリに内蔵されたコピーはアプリ自身のアカウントにしか使えません。

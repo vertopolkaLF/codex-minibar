@@ -5,6 +5,7 @@ use gpui::{
     div, px, relative,
 };
 
+use super::Host;
 use super::window::SettingsWindow;
 use crate::choice::Choice;
 use crate::gui::kit::{self, Button, Kit, Row};

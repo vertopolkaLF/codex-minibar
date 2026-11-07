@@ -189,25 +189,29 @@ fn labels() -> std::sync::RwLockReadGuard<'static, HashMap<&'static str, Instanc
     LABELS.read().unwrap_or_else(|error| error.into_inner())
 }
 
+/// Whether `instance` is told apart by its badge and driver-qualified name:
+/// its driver has more than one enabled instance, so several of them show
+/// side by side in the popup, the tray and the other surfaces.
+pub fn shares_driver(instance: &ProviderInstance, instances: &[ProviderInstance]) -> bool {
+    instances
+        .iter()
+        .filter(|other| other.enabled && other.driver == instance.driver)
+        .count()
+        > 1
+}
+
 /// Publishes names and badges for every configured instance. Called whenever
 /// settings are loaded or changed so all surfaces label instances alike.
 pub fn publish(instances: &[ProviderInstance]) {
-    let mut enabled_per_driver = HashMap::<ProviderKind, usize>::new();
-    for instance in instances.iter().filter(|instance| instance.enabled) {
-        *enabled_per_driver.entry(instance.driver).or_default() += 1;
-    }
     let next = instances
         .iter()
         .map(|instance| {
-            let shared = enabled_per_driver
-                .get(&instance.driver)
-                .is_some_and(|count| *count > 1);
             (
                 intern(&instance.id),
                 InstanceLabel {
                     kind: instance.driver,
                     name: instance.display_name(),
-                    badge: shared.then(|| instance.badge()),
+                    badge: shares_driver(instance, instances).then(|| instance.badge()),
                 },
             )
         })

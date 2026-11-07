@@ -188,6 +188,20 @@ pub(crate) fn display_path(path: &Path) -> String {
     }
 }
 
+/// How an instance proves who it is, which picks its Account section and
+/// the wording of its status.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Credential {
+    /// A login on this PC: a CLI config folder, which Settings can sign in
+    /// to, or whatever the installed app or CLI holds.
+    Login,
+    /// An API key Minibar keeps, or the provider's own sign-in on the
+    /// primary instance.
+    ApiKey,
+    /// API keys grouped into accounts, plus an optional management key.
+    KeyAccounts,
+}
+
 /// How Settings and onboarding describe a driver.
 pub(crate) struct SettingsCopy {
     /// What the driver reads, shown under the Runtime heading.
@@ -200,6 +214,16 @@ pub(crate) struct SettingsCopy {
     /// Onboarding's note when detection found the provider or not.
     pub(crate) found: &'static str,
     pub(crate) not_found: &'static str,
+    pub(crate) credential: Credential,
+    /// The source whose folder is the instance's binary path, offered a
+    /// folder picker when it is not found.
+    pub(crate) binary_source: Option<InstallSource>,
+    /// Environment variable that hands a config folder to the CLI.
+    pub(crate) config_env: &'static str,
+    /// Whether an instance can read a pasted credential instead of a login.
+    pub(crate) manual_credential: bool,
+    /// Shown on the app source when an instance reads its own config folder.
+    pub(crate) config_folder_app_note: Option<&'static str>,
 }
 
 impl SettingsCopy {
@@ -212,6 +236,11 @@ impl SettingsCopy {
             folders: Vec::new(),
             found: crate::i18n::tr("found-on-this-pc"),
             not_found: crate::i18n::tr("not-found-turn-it-on-if-it-s-installed-somewhere-else"),
+            credential: Credential::Login,
+            binary_source: Some(InstallSource::Cli),
+            config_env: "",
+            manual_credential: false,
+            config_folder_app_note: None,
         }
     }
 }

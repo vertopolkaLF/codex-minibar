@@ -2958,3 +2958,6 @@ skip-automatic-reset = 취소
 
 # src/popup_window/auto_reset.rs
 banked-reset-applied = 적립된 재설정이 적용됨
+
+# src/settings_window/providers/page.rs
+claude-other-account-needs-cli = 추가 Claude 계정에는 Claude Code CLI가 필요합니다. Claude 앱에 내장된 사본은 앱 자체 계정에만 사용됩니다.

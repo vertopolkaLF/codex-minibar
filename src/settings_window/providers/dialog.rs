@@ -5,6 +5,7 @@
 //! the dialog shows "Checking…" until they finish, then closes with a toast
 //! or returns with the error.
 
+use crate::settings_window::Host;
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, Window, div, px, relative};
 
