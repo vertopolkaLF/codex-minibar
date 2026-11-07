@@ -4,13 +4,13 @@
 //! the provider mark over a title and a subtitle, so the editor offers only
 //! what reaches that text.
 
-use crate::choice::Choice;
 use futures::StreamExt;
 use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, Styled, Window, div, px};
 
 use super::kit::{self, Button, Kit, Row};
 use super::tray::{IndicatorOwner, TrayDialog, dialog_section, preview_limits};
 use super::window::SettingsWindow;
+use crate::choice::Choice;
 use crate::cmdpal::InstallPhase;
 use crate::popup_window::ui::theme::rgb8;
 use crate::settings::{ProviderId, TaskbarResetDisplay, TaskbarWidget, TaskbarWidgetStyle};

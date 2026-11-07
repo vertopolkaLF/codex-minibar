@@ -39,6 +39,7 @@ pub mod reset_feed;
 pub mod scheduler;
 pub mod secrets;
 pub mod settings;
+pub mod settings_runtime;
 pub mod settings_window;
 pub mod shell;
 pub mod single_instance;

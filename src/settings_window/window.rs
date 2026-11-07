@@ -19,7 +19,6 @@ use super::{
     input::{HasInputs, InputEvent, Inputs, TextInput},
     kit::{self, Button, Handler, Kit, eid, icon},
     nav::{NavMode, Page, Tab, first_provider_page, provider_nav_order, shows_badge},
-    persistence,
     providers::{
         OpenRouterSettingsSnapshot, ProviderDialog, ProviderReadiness, provider_readiness,
     },
@@ -29,7 +28,7 @@ use crate::drivers::InstallStatus;
 use crate::popup_window::AppState;
 use crate::popup_window::ui::fx;
 use crate::provider_registry::ProviderKind;
-use crate::settings::{ProviderId, ProviderInstance, Settings, TrayWidget};
+use crate::settings::{ProviderId, ProviderInstance, Settings, TrayWidget, store};
 use crate::updater::UpdatePhase;
 
 const SIDEBAR_WIDTH: f32 = 264.0;
@@ -135,7 +134,7 @@ impl SettingsWindow {
     pub(crate) fn new(state: Arc<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
         // Always reload from disk so tray/popup open paths share the same
         // live values after an earlier toggle.
-        let settings = persistence::load_settings_for_window();
+        let settings = store::read();
         let fonts = Fonts::resolve(cx);
         let page = Page::Root(Tab::General);
         let mut subscriptions = vec![cx.observe_window_appearance(window, |_, _, cx| cx.notify())];
@@ -243,33 +242,32 @@ impl SettingsWindow {
 
     // ----- settings ----------------------------------------------------------
 
-    /// Adopt a committed snapshot unless more local edits are still queued.
+    /// Adopt a committed snapshot unless more local edits are still queued;
+    /// those keep showing until their own commit lands.
     pub(crate) fn apply_sync(&mut self, settings: Settings, cx: &mut Context<Self>) {
-        if persistence::has_pending() {
-            return;
+        if store::has_pending() {
+            crate::settings_runtime::apply_presentation(&self.settings);
+        } else {
+            self.settings = settings;
         }
-        self.settings = settings;
-        self.settings.language.apply();
         cx.refresh_windows();
         cx.notify();
     }
 
     /// Apply an edit locally right away and queue it for the settings file.
+    ///
+    /// `edit` runs twice, on this snapshot and on the freshly loaded file, so
+    /// it must set absolute values, never move or toggle relative to them.
     pub(super) fn edit(
         &mut self,
         cx: &mut Context<Self>,
         edit: impl Fn(&mut Settings) + Send + 'static,
     ) {
         edit(&mut self.settings);
-        self.settings.language.apply();
+        self.settings.normalize_all();
+        crate::settings_runtime::apply_presentation(&self.settings);
         cx.refresh_windows();
-        self.settings.normalize_tray_widgets();
-        self.settings.taskbar.normalize();
-        self.settings.command_palette.normalize();
-        self.settings.normalize_popup_visibility();
-        persistence::queue(self.state.settings_tx.clone(), move |settings| {
-            edit(settings)
-        });
+        store::queue(move |settings| edit(settings));
         cx.notify();
     }
 
@@ -286,10 +284,6 @@ impl SettingsWindow {
                 instance.normalize();
             }
         });
-    }
-
-    pub(super) fn settings_tx(&self) -> std::sync::mpsc::Sender<Settings> {
-        self.state.settings_tx.clone()
     }
 
     /// Wrap a method into a component handler.

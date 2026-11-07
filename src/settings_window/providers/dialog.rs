@@ -1007,7 +1007,6 @@ impl SettingsWindow {
             return;
         }
         let instances = self.settings.instances.clone();
-        let settings_tx = self.settings_tx();
         let name = self.input_text(FIELD_NAME, cx).trim().to_owned();
         let key = self.input_text(FIELD_KEY, cx).trim().to_owned();
         let second = self.input_text(FIELD_SECOND, cx).trim().to_owned();
@@ -1045,7 +1044,7 @@ impl SettingsWindow {
                 self.run_dialog_then(
                     cx,
                     move || {
-                        try_persist_update_fallible(settings_tx, move |settings| {
+                        crate::settings::store::update_blocking(move |settings| {
                             let mut instance = settings.new_instance(driver, name);
                             instance.badge = badge;
                             instance.badge_color = badge_color;
@@ -1080,13 +1079,13 @@ impl SettingsWindow {
             }
             ProviderDialogKind::SignIn { provider } => {
                 let control = dialog.login_control.clone();
-                self.run_dialog_work(cx, move || sign_in(provider, control, settings_tx));
+                self.run_dialog_work(cx, move || sign_in(provider, control));
             }
             ProviderDialogKind::DeleteInstance { provider } => {
                 self.run_dialog_then(
                     cx,
                     move || {
-                        try_persist_update_fallible(settings_tx, move |settings| {
+                        crate::settings::store::update_blocking(move |settings| {
                             let removed = settings.remove_instance(provider);
                             anyhow::ensure!(
                                 removed.is_some(),
@@ -1138,7 +1137,7 @@ impl SettingsWindow {
                 }
                 self.run_dialog_work(cx, move || {
                     crate::claude::verify_credential(&credential)?;
-                    persist_claude_manual_credential(settings_tx, provider, &credential)?;
+                    persist_claude_manual_credential(provider, &credential)?;
                     Ok(DialogOutcome {
                         notice: crate::i18n::tr("credential-saved-in-windows-user-storage").into(),
                     })
@@ -1160,7 +1159,6 @@ impl SettingsWindow {
                     let key_id = key_id.unwrap_or_else(OpenRouterAccount::new_api_key_id);
                     let saved_key = key_id.clone();
                     persist_openrouter_credentials(
-                        settings_tx,
                         account_id.clone(),
                         vec![crate::openrouter::AccountSecretChange::api_key(
                             account_id,
@@ -1198,7 +1196,6 @@ impl SettingsWindow {
                 self.run_dialog_work(cx, move || {
                     crate::openrouter::verify_management_key(&key)?;
                     persist_openrouter_credentials(
-                        settings_tx,
                         account_id.clone(),
                         vec![crate::openrouter::AccountSecretChange::management(
                             account_id,
@@ -1219,24 +1216,18 @@ impl SettingsWindow {
                 self.run_dialog_then(
                     cx,
                     move || {
-                        persist_openrouter_account(
-                            settings_tx,
-                            account_id,
-                            false,
-                            None,
-                            move |account| {
-                                anyhow::ensure!(
-                                    account.api_key_ids.contains(&key_id),
-                                    crate::i18n::tr("openrouter-api-key-no-longer-exists")
-                                );
-                                if name.is_empty() {
-                                    account.api_key_names.remove(&key_id);
-                                } else {
-                                    account.api_key_names.insert(key_id, name);
-                                }
-                                Ok(())
-                            },
-                        )
+                        persist_openrouter_account(account_id, false, None, move |account| {
+                            anyhow::ensure!(
+                                account.api_key_ids.contains(&key_id),
+                                crate::i18n::tr("openrouter-api-key-no-longer-exists")
+                            );
+                            if name.is_empty() {
+                                account.api_key_names.remove(&key_id);
+                            } else {
+                                account.api_key_names.insert(key_id, name);
+                            }
+                            Ok(())
+                        })
                         .map_err(|error| {
                             anyhow::anyhow!(crate::i18n::format(
                                 "could-not-rename-the-key-error",
@@ -1264,21 +1255,16 @@ impl SettingsWindow {
                 self.run_dialog_then(
                     cx,
                     move || {
-                        persist_openrouter_credentials(
-                            settings_tx,
-                            account_id,
-                            vec![change],
-                            move |account| {
-                                let before = account.api_key_ids.len();
-                                account.api_key_ids.retain(|id| id != &key_id);
-                                account.api_key_names.remove(&key_id);
-                                anyhow::ensure!(
-                                    account.api_key_ids.len() != before,
-                                    crate::i18n::tr("openrouter-api-key-no-longer-exists")
-                                );
-                                Ok(())
-                            },
-                        )
+                        persist_openrouter_credentials(account_id, vec![change], move |account| {
+                            let before = account.api_key_ids.len();
+                            account.api_key_ids.retain(|id| id != &key_id);
+                            account.api_key_names.remove(&key_id);
+                            anyhow::ensure!(
+                                account.api_key_ids.len() != before,
+                                crate::i18n::tr("openrouter-api-key-no-longer-exists")
+                            );
+                            Ok(())
+                        })
                         .map_err(|error| {
                             anyhow::anyhow!(crate::i18n::format(
                                 "could-not-remove-the-key-error",
@@ -1302,7 +1288,6 @@ impl SettingsWindow {
                     cx,
                     move || {
                         persist_openrouter_credentials(
-                            settings_tx,
                             account_id.clone(),
                             vec![crate::openrouter::AccountSecretChange::management(
                                 account_id, None,
@@ -1334,14 +1319,12 @@ impl SettingsWindow {
                 self.run_dialog_then(
                     cx,
                     move || {
-                        persist_opencode_manual_key(settings_tx, provider, Some(key)).map_err(
-                            |error| {
-                                anyhow::anyhow!(crate::i18n::format(
-                                    "could-not-save-the-key-error",
-                                    &[("error", format!("{:#}", error))],
-                                ))
-                            },
-                        )
+                        persist_opencode_manual_key(provider, Some(key)).map_err(|error| {
+                            anyhow::anyhow!(crate::i18n::format(
+                                "could-not-save-the-key-error",
+                                &[("error", format!("{:#}", error))],
+                            ))
+                        })
                     },
                     |this, (), cx| {
                         this.reload_settings();
@@ -1358,7 +1341,7 @@ impl SettingsWindow {
                 self.run_dialog_then(
                     cx,
                     move || {
-                        persist_opencode_manual_key(settings_tx, provider, None).map_err(|error| {
+                        persist_opencode_manual_key(provider, None).map_err(|error| {
                             anyhow::anyhow!(crate::i18n::format(
                                 "could-not-remove-the-key-error",
                                 &[("error", format!("{:#}", error))],
@@ -1380,9 +1363,12 @@ impl SettingsWindow {
     }
 
     /// Adopt the settings file after a synchronous commit, before the live
-    /// sync arrives, so the page never shows the previous state.
+    /// sync arrives, so the page never shows the previous state. Edits still
+    /// queued keep this window's snapshot until their own commit syncs.
     fn reload_settings(&mut self) {
-        self.settings = super::super::persistence::load_settings_for_window();
+        if !crate::settings::store::has_pending() {
+            self.settings = crate::settings::store::read();
+        }
     }
 }
 
@@ -1391,9 +1377,8 @@ impl SettingsWindow {
 fn sign_in(
     provider: ProviderId,
     control: crate::provider_support::LoginControl,
-    settings_tx: Sender<Settings>,
 ) -> anyhow::Result<DialogOutcome> {
-    let settings = Settings::load_or_create(&crate::app_paths::settings()?)?;
+    let settings = Settings::read(&crate::app_paths::settings()?)?;
     let instance = settings
         .instance(provider)
         .cloned()
@@ -1426,14 +1411,14 @@ fn sign_in(
         // Pin the managed folder so later changes to the default location
         // never move an existing login.
         let managed = folder.clone();
-        persist_instance(settings_tx.clone(), provider, move |instance| {
+        persist_instance(provider, move |instance| {
             instance.source = InstanceSource::ConfigFolder {
                 path: Some(managed),
             };
             Ok(())
         })?;
     }
-    bump_credentials(settings_tx, provider)?;
+    bump_credentials(provider)?;
     Ok(DialogOutcome {
         notice: crate::i18n::format(
             "signed-in-its-cli-keeps-the-login-fresh-in-its-config-folder",

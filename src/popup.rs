@@ -14,12 +14,12 @@
 //! After hiding, the host parks at 1x1 pixels to release its large DirectX
 //! surfaces. Its full monitor geometry is restored before the next show.
 
-use crate::choice::Choice;
 use std::{
     sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU8, Ordering},
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use crate::choice::Choice;
 use crate::settings::{BottomBarSize, PopupBackgroundMaterial, PopupCornerRadius};
 
 /// Popup client width in DIP — height adapts to content.

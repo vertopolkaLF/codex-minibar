@@ -1,6 +1,5 @@
 //! One provider instance's page.
 
-use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, Window, div,
     prelude::FluentBuilder, px, relative,
@@ -12,6 +11,7 @@ use super::super::input::InputEvent;
 use super::super::kit::{self, Button, Kit, MenuItem, Row};
 use super::super::window::SettingsWindow;
 use super::*;
+use crate::choice::Choice;
 use crate::drivers::FolderField;
 use crate::instances::PathField;
 use crate::popup_window::ui::fx;
@@ -207,7 +207,6 @@ impl SettingsWindow {
                     None,
                     self.settings.replace_chatgpt_logo_with_codex,
                     Self::h(cx, |this, value: bool, _, cx| {
-                        crate::provider_registry::apply_logo_settings(value);
                         this.edit(cx, move |s| s.replace_chatgpt_logo_with_codex = value)
                     }),
                 )]

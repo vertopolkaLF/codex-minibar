@@ -954,14 +954,9 @@ impl PopupRoot {
                         this.keys
                             .untracked
                             .insert((row.account.clone(), key_id.clone()));
-                        let (account, settings_tx) =
-                            (row.account.clone(), this.state.settings_tx.clone());
+                        let account = row.account.clone();
                         std::thread::spawn(move || {
-                            crate::popup_window::remove_openrouter_api_key(
-                                account,
-                                key_id,
-                                settings_tx,
-                            )
+                            crate::popup_window::remove_openrouter_api_key(account, key_id)
                         });
                     }
                     this.after_key_change(provider, &row.account);
@@ -990,17 +985,12 @@ impl PopupRoot {
             }
             _ => return,
         }
-        let settings_tx = self.state.settings_tx.clone();
         let (account, removed) = (row.account.clone(), key_id.clone());
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    crate::popup_window::try_remove_openrouter_api_key(
-                        account,
-                        removed,
-                        settings_tx,
-                    )
+                    crate::popup_window::try_remove_openrouter_api_key(account, removed)
                 })
                 .await;
             let _ = this.update(cx, |this, cx| {
@@ -1195,7 +1185,6 @@ impl PopupRoot {
         secret: Zeroizing<String>,
         cx: &mut Context<Self>,
     ) {
-        let settings_tx = self.state.settings_tx.clone();
         let account_for_task = account.clone();
         cx.spawn(async move |this, cx| {
             let result = cx
@@ -1204,7 +1193,6 @@ impl PopupRoot {
                     let key_id = OpenRouterAccount::new_api_key_id();
                     let saved = key_id.clone();
                     crate::settings_window::persist_openrouter_credentials(
-                        settings_tx,
                         account_for_task.clone(),
                         vec![crate::openrouter::AccountSecretChange::api_key(
                             account_for_task,

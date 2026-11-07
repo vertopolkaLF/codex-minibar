@@ -246,7 +246,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
         .lock()
         .ok()
         .and_then(|mut slot| slot.take());
-    let settings_tx = state.settings_tx.clone();
     let updates = Arc::clone(&state.updates);
     let mut check_for_updates = state.settings.check_for_updates;
     let mut notify_on_update = state.settings.notifications.update_available;
@@ -257,7 +256,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
         // Registered from this thread so WM_HOTKEY reaches its message pump.
         let mut hotkey = crate::hotkey::Registration::default();
         let fallback_attempt = state.last_activation_at;
-        let mut notification_settings = state.settings.notifications.clone();
         // Keyed by instance id.
         let mut limit_notifications = HashMap::<String, LimitNotificationTracker>::new();
         // Credential revision each tracker was primed with. A tracker primed
@@ -292,28 +290,18 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
 
         crate::taskbar::register_bridge_thread();
         crate::taskbar::publish_limits(&state.current_limits());
-        crate::taskbar::publish_settings(&state.settings);
-        crate::cmdpal::publish_settings(&state.settings);
 
         // First frame: the renderer seeds itself from settings, then takes
         // this complete snapshot (errors, activation text, update state).
         publish_ui(&ui);
 
         let apply_settings = |ui: &mut UiState,
-                              notification_settings: &mut NotificationSettings,
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
                               settings: Settings,
                               live_settings: &mut Settings| {
-            if !crate::settings_window::has_pending_edits() {
-                settings.language.apply();
-            }
-            crate::settings_window::sync_open_window(settings.clone());
             let phase = updates.snapshot();
             ui.settings_revision = ui.settings_revision.wrapping_add(1);
-            // Names and badges are read by every surface; publish them
-            // before anything repaints.
-            crate::instances::publish(&settings.instances);
             let providers_changed = ui.enabled_providers() != settings.enabled_providers()
                 || ui.instances.len() != settings.instances.len();
             let restart = instances_needing_restart(&ui.instances, &settings.instances);
@@ -331,9 +319,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 ui.observe_limits_update();
                 crate::settings_window::publish_openrouter_snapshot(&state.current_limits());
             }
-            crate::theme::apply_appearance(settings.accent_color);
             ui.apply_settings(&settings);
-            *notification_settings = settings.notifications.clone();
             state.sync_reset_feed(&settings);
             state.sync_provider_status(&settings);
             if !settings.notifications.provider_status_enabled {
@@ -385,8 +371,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 ui.set_popup_error(error.to_string());
             }
             crate::taskbar::publish_limits(&state.current_limits());
-            crate::taskbar::publish_settings(&settings);
-            crate::cmdpal::publish_settings(&settings);
             for (provider, commands) in state.worker_commands() {
                 let _ = commands.send(WorkerCommand::SetAutomaticActivation(
                     crate::provider::automatic_activation(provider, &settings),
@@ -413,7 +397,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
         };
 
         let drain_settings = |ui: &mut UiState,
-                              notification_settings: &mut NotificationSettings,
                               widgets: &mut Vec<TrayWidget>,
                               tray: &mut TrayManager,
                               check_for_updates: &mut bool,
@@ -429,18 +412,11 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 }
                 *check_for_updates = settings.check_for_updates;
                 *notify_on_update = settings.notifications.update_available;
-                apply_settings(
-                    ui,
-                    notification_settings,
-                    widgets,
-                    tray,
-                    settings,
-                    live_settings,
-                );
+                apply_settings(ui, widgets, tray, settings, live_settings);
                 notify_new_forced_reset_info(
                     &state.current_forced_resets(),
                     forced_reset_notified_ids,
-                    notification_settings,
+                    &live_settings.notifications,
                     &state,
                 );
             }
@@ -552,7 +528,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 }
                 drain_settings(
                     &mut ui,
-                    &mut notification_settings,
                     &mut widgets,
                     &mut tray,
                     &mut check_for_updates,
@@ -562,7 +537,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 );
                 drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
                 pump_popup_hotkey(&mut hotkey, &live_settings, &mut ui);
-                let exit = pump_taskbar_actions(&settings_tx, &mut ui);
+                let exit = pump_taskbar_actions(&mut ui);
                 if exit || pump_tray_and_dismiss(&tray, &mut ui) {
                     drop(tray);
                     AppState::flush_limits_persistence();
@@ -589,7 +564,6 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             }
             drain_settings(
                 &mut ui,
-                &mut notification_settings,
                 &mut widgets,
                 &mut tray,
                 &mut check_for_updates,
@@ -605,7 +579,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 }
             }
             pump_popup_hotkey(&mut hotkey, &live_settings, &mut ui);
-            let exit = pump_taskbar_actions(&settings_tx, &mut ui);
+            let exit = pump_taskbar_actions(&mut ui);
             if exit || pump_tray_and_dismiss(&tray, &mut ui) {
                 drop(tray);
                 AppState::flush_limits_persistence();
@@ -636,7 +610,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             match next_event {
                 Ok(AppEvent::ForcedResetsUpdated(snapshot)) => {
                     forced_reset_notified_ids.extend(snapshot.notified_ids);
-                    if notification_settings.forced_reset_feed_enabled {
+                    if live_settings.notifications.forced_reset_feed_enabled {
                         state.replace_forced_resets(snapshot.resets.clone());
                     } else {
                         state.replace_forced_resets(Vec::new());
@@ -645,14 +619,14 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     notify_new_forced_reset_info(
                         &snapshot.resets,
                         &mut forced_reset_notified_ids,
-                        &notification_settings,
+                        &live_settings.notifications,
                         &state,
                     );
                     publish_ui(&ui);
                 }
                 Ok(AppEvent::ProviderStatusUpdated(snapshot)) => {
                     incident_notified_ids.extend(snapshot.notified_ids);
-                    let statuses = if notification_settings.provider_status_enabled {
+                    let statuses = if live_settings.notifications.provider_status_enabled {
                         snapshot.statuses
                     } else {
                         Vec::new()
@@ -660,7 +634,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     notify_new_provider_incidents(
                         &statuses,
                         &mut incident_notified_ids,
-                        &notification_settings,
+                        &live_settings.notifications,
                         &state,
                     );
                     state.replace_provider_statuses(statuses);
@@ -736,14 +710,11 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             crate::settings_window::publish_openrouter_snapshot(&limits);
                             if ui.popup_visibility.absorb_discovered_bricks(&limits) {
                                 let limits_for_settings = limits.clone();
-                                crate::settings_window::persist_update(
-                                    settings_tx.clone(),
-                                    move |settings| {
-                                        settings
-                                            .popup_visibility
-                                            .absorb_discovered_bricks(&limits_for_settings);
-                                    },
-                                );
+                                crate::settings::store::queue(move |settings| {
+                                    settings
+                                        .popup_visibility
+                                        .absorb_discovered_bricks(&limits_for_settings);
+                                });
                             }
                             let combine_activation_notification =
                                 pending_auto_activation_successes.remove(&provider);
@@ -757,13 +728,13 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             let notification_result = if combine_activation_notification {
                                 tracker.observe_with_primary_reset_deferred(
                                     limits.get(provider),
-                                    &notification_settings,
+                                    &live_settings.notifications,
                                     provider,
                                 )
                             } else {
                                 tracker.observe(
                                     limits.get(provider),
-                                    &notification_settings,
+                                    &live_settings.notifications,
                                     provider,
                                 )
                             };
@@ -773,7 +744,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                                         provider,
                                         limits.get(provider),
                                     );
-                                } else if notification_settings.activation_success {
+                                } else if live_settings.notifications.activation_success {
                                     notifications::show_activation_succeeded(
                                         provider,
                                         Some(limits.get(provider)),
@@ -894,11 +865,11 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                             );
                             let combine_activation_notification =
                                 crate::provider::automatic_activation(provider, &live_settings)
-                                    && notification_settings.limits_changed
-                                    && notification_settings.activation_success;
+                                    && live_settings.notifications.limits_changed
+                                    && live_settings.notifications.activation_success;
                             if combine_activation_notification {
                                 pending_auto_activation_successes.insert(provider);
-                            } else if notification_settings.activation_success {
+                            } else if live_settings.notifications.activation_success {
                                 notifications::show_activation_succeeded(provider, None);
                             }
                             publish_ui(&ui);
@@ -966,7 +937,7 @@ fn pump_popup_hotkey(
 
 /// Clicks and menu choices from the taskbar widgets.
 /// Performs the widgets' actions; returns whether the app should exit.
-fn pump_taskbar_actions(settings_tx: &Sender<Settings>, ui: &mut UiState) -> bool {
+fn pump_taskbar_actions(ui: &mut UiState) -> bool {
     for action in crate::taskbar::take_actions() {
         match action {
             crate::taskbar::Action::Open {
@@ -1007,7 +978,7 @@ fn pump_taskbar_actions(settings_tx: &Sender<Settings>, ui: &mut UiState) -> boo
                 crate::settings_window::open();
             }
             crate::taskbar::Action::Hide => {
-                crate::settings_window::persist_update(settings_tx.clone(), |settings| {
+                crate::settings::store::queue(|settings| {
                     settings.taskbar.enabled = false;
                 });
             }

@@ -1,6 +1,5 @@
 //! Usage tab: local API usage overview across providers.
 
-use crate::choice::Choice;
 use std::{
     cell::Cell,
     collections::{BTreeMap, BTreeSet},
@@ -24,6 +23,7 @@ use super::{
     theme::Palette,
     tooltip::{ChartTip, TipContent},
 };
+use crate::choice::Choice;
 use crate::popup_window::*;
 use crate::{
     usage::TokenUsage,

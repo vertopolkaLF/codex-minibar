@@ -13,16 +13,15 @@
 //! exclusive full screen, or one the user added. It lasts until that process
 //! exits, so Alt+Tab keeps it on and a full-screen video never starts it.
 
-use crate::choice::Choice;
 use std::collections::HashSet;
 use std::sync::{
-    Mutex, OnceLock,
+    Mutex,
     atomic::{AtomicBool, AtomicU8, Ordering},
-    mpsc::Sender,
 };
 use std::time::{Duration, Instant};
 
-use crate::settings::{GameMode, Settings};
+use crate::choice::Choice;
+use crate::settings::GameMode;
 
 /// How often Automatic looks at the foreground window and whether the game
 /// it follows still runs. A few seconds is invisible next to a game launch.
@@ -69,8 +68,6 @@ static LISTS: Mutex<Lists> = Mutex::new(Lists::new());
 /// and settings commits never race on it.
 static TRACKED: Mutex<Option<Game>> = Mutex::new(None);
 static CATALOG: Mutex<Option<(Instant, HashSet<String>)>> = Mutex::new(None);
-/// The serial settings writer, for "Not a game" on the card.
-static SETTINGS_TX: OnceLock<Sender<Settings>> = OnceLock::new();
 
 /// User overrides, as [`path_key`]s.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -110,13 +107,6 @@ fn mode() -> GameMode {
         .get(usize::from(MODE.load(Ordering::Relaxed)))
         .copied()
         .unwrap_or_default()
-}
-
-/// Lets "Not a game" on the card persist its choice. Called once at startup.
-pub fn set_settings_writer(settings_tx: Sender<Settings>) {
-    if SETTINGS_TX.set(settings_tx).is_err() {
-        crate::logger::info("game mode settings writer was already installed");
-    }
 }
 
 /// Applies the settings immediately; called on startup and every commit.
@@ -168,10 +158,7 @@ pub fn ignore_game(path: String) {
         }
         crate::logger::info(format!("Game mode: {path} is not a game"));
         evaluate();
-        let Some(settings_tx) = SETTINGS_TX.get() else {
-            return;
-        };
-        crate::settings_window::persist_update(settings_tx.clone(), move |settings| {
+        crate::settings::store::queue(move |settings| {
             settings
                 .game_mode_games
                 .retain(|game| path_key(game) != key);

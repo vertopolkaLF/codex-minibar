@@ -6,12 +6,12 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
     app_event::AppEvent,
-    app_paths, notifications,
+    app_paths, logger, notifications,
     popup_window::AppState,
     provider::start_enabled_workers,
     provider_status, reset_feed,
     scheduler::ActivationState,
-    settings::Settings,
+    settings_runtime,
     single_instance::{self, SingleInstance},
     store, troubleshoot,
     updater::{
@@ -27,19 +27,43 @@ fn run() -> Result<()> {
     if app_paths::fake_sandbox() {
         codex_minibar::fake::seed_settings()?;
     }
-    codex_minibar::logger::initialize(&app_paths::log()?)?;
+    // Bootstrap order: logger, settings and every process-wide effect of
+    // them (language first), then workers, then windows.
+    logger::initialize(&app_paths::log()?)?;
+    if let Err(error) = codex_minibar::claude::cleanup_abandoned_logins() {
+        logger::info(format!(
+            "could not clean abandoned Claude sign-in directories: {error:#}"
+        ));
+    }
+    if let Err(error) = codex_minibar::codex::cleanup_abandoned_logins() {
+        logger::info(format!(
+            "could not clean abandoned Codex sign-in directories: {error:#}"
+        ));
+    }
     if let Err(error) = codex_minibar::pricing::initialize() {
-        eprintln!("failed to hydrate pricing catalog: {error:#}");
+        logger::info(format!("failed to hydrate pricing catalog: {error:#}"));
     }
-    let mut settings = Settings::load_or_create(&path)?;
-    settings.language.apply();
+    let settings = settings_runtime::load_at_startup(&path)?;
+    let hydrated_limits = store::shared()
+        .and_then(|shared| {
+            let store = shared
+                .lock()
+                .map_err(|_| anyhow!("provider store lock poisoned"))?;
+            // Drop rows of removed instances; disabled instances keep their data.
+            if let Err(error) = store.prune_unknown_providers(&settings.provider_ids()) {
+                logger::info(format!("failed to prune unknown providers: {error:#}"));
+            }
+            store.hydrate_provider_limits(&settings.provider_ids(), settings.history_retention_days)
+        })
+        .unwrap_or_else(|error| {
+            logger::info(format!("failed to hydrate provider store: {error:#}"));
+            Default::default()
+        });
+    // Settings start the taskbar widgets; they open on the stored quotas.
+    codex_minibar::taskbar::publish_limits(&hydrated_limits);
+    let (settings_tx, settings_rx) = mpsc::channel();
+    settings_runtime::start(&settings, settings_tx);
     let just_updated = show_post_update_success_if_needed();
-    if let Err(error) = settings.reconcile_startup_from_registry(&path) {
-        eprintln!("failed to reconcile startup setting: {error:#}");
-    }
-    if let Err(error) = settings.apply_runtime_effects() {
-        eprintln!("failed to apply startup registration: {error:#}");
-    }
     std::thread::spawn(|| {
         // Let the update helper that relaunched us finish and drop its own
         // staging before the install directory is swept.
@@ -48,7 +72,7 @@ fn run() -> Result<()> {
     });
     std::thread::spawn(|| {
         if let Err(error) = codex_minibar::codex::discovery::cleanup() {
-            codex_minibar::logger::info(format!(
+            logger::info(format!(
                 "Codex CLI startup cache cleanup deferred: {error:#}"
             ));
         }
@@ -58,7 +82,7 @@ fn run() -> Result<()> {
         match ActivationState::load_or_default(&activation_path) {
             Ok(state) => state.last_attempt_at,
             Err(error) => {
-                codex_minibar::logger::info(format!("failed to load activation state: {error:#}"));
+                logger::info(format!("failed to load activation state: {error:#}"));
                 None
             }
         };
@@ -77,28 +101,12 @@ fn run() -> Result<()> {
                 let _ = events.send(AppEvent::ProviderStatusUpdated(snapshot));
             }
         });
-    let hydrated_limits = store::shared()
-        .and_then(|shared| {
-            let store = shared
-                .lock()
-                .map_err(|_| anyhow!("provider store lock poisoned"))?;
-            // Drop rows of removed instances; disabled instances keep their data.
-            if let Err(error) = store.prune_unknown_providers(&settings.provider_ids()) {
-                eprintln!("failed to prune unknown providers: {error:#}");
-            }
-            store.hydrate_provider_limits(&settings.provider_ids(), settings.history_retention_days)
-        })
-        .unwrap_or_else(|error| {
-            eprintln!("failed to hydrate provider store: {error:#}");
-            Default::default()
-        });
     let (workers, startup_provider_errors) =
         start_enabled_workers(&settings, activation_path.clone(), worker_events_tx.clone());
     let commands = workers
         .iter()
         .map(|(provider, worker)| (*provider, worker.commands.clone()))
         .collect();
-    let (settings_tx, settings_rx) = mpsc::channel();
     let (usage_actions_tx, usage_actions_rx) = mpsc::channel();
     let updates = UpdateController::new();
     if settings.check_for_updates {
@@ -119,20 +127,16 @@ fn run() -> Result<()> {
         activation_path,
         startup_provider_errors,
         last_activation_at,
-        settings_tx,
         settings_rx: Mutex::new(Some(settings_rx)),
         usage_actions_tx,
         usage_actions_rx: Mutex::new(Some(usage_actions_rx)),
         updates: Arc::clone(&updates),
     });
-    codex_minibar::game_mode::set_settings_writer(state.settings_tx.clone());
     codex_minibar::updater::install_runtime(Arc::clone(&updates), {
         let state = Arc::clone(&state);
         move || state.shutdown_worker()
     });
 
-    // Initializes the tray accent before any popup can be shown.
-    codex_minibar::theme::apply_appearance(state.settings.accent_color);
     codex_minibar::popup_window::start(Arc::clone(&state));
     codex_minibar::whats_new::start(&state.settings, just_updated);
     if onboarding_needed {
@@ -189,12 +193,6 @@ fn main() {
         }
     };
     single_instance::SingleInstance::hold(instance);
-    if let Err(error) = codex_minibar::claude::cleanup_abandoned_logins() {
-        eprintln!("could not clean abandoned Claude sign-in directories: {error:#}");
-    }
-    if let Err(error) = codex_minibar::codex::cleanup_abandoned_logins() {
-        eprintln!("could not clean abandoned Codex sign-in directories: {error:#}");
-    }
     if let Err(error) = run() {
         show_error(&format!("Codex Minibar failed: {error:#}"));
     }

@@ -1,7 +1,6 @@
 //! Taskbar: widgets drawn inside the Windows taskbar, with live previews
 //! rendered by the same Direct2D code the taskbar uses.
 
-use crate::choice::Choice;
 use std::{collections::HashMap, sync::Arc};
 
 use gpui::{
@@ -12,6 +11,7 @@ use gpui::{
 use super::kit::{self, Button, Kit, Row, eid};
 use super::tray::{IndicatorOwner, TrayDialog, dialog_section, preview_limits};
 use super::window::SettingsWindow;
+use crate::choice::Choice;
 use crate::popup_window::ui::theme::rgb8;
 use crate::settings::{
     ProviderId, TaskbarAlignment, TaskbarClick, TaskbarResetDisplay, TaskbarWidget,

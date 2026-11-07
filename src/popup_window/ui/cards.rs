@@ -1216,7 +1216,6 @@ impl PopupRoot {
             hovered,
             fx::FASTER,
         );
-        let settings_tx = self.state.settings_tx.clone();
         let mut button = div()
             .id(eid(format!("openrouter-delete-{account_id}-{key_id}")))
             .relative()
@@ -1229,9 +1228,8 @@ impl PopupRoot {
             .on_click(move |_: &ClickEvent, _, _| {
                 let account_id = account_id.clone();
                 let key_id = key_id.clone();
-                let settings_tx = settings_tx.clone();
                 std::thread::spawn(move || {
-                    crate::popup_window::remove_openrouter_api_key(account_id, key_id, settings_tx)
+                    crate::popup_window::remove_openrouter_api_key(account_id, key_id)
                 });
             });
         if let Some(layer) = components::hover_layer(&palette, hover, 4.0) {

@@ -4,8 +4,9 @@
 //! thread can request them through the functions below; the request is
 //! posted to the GPUI thread as a [`crate::popup_window::PopupCommand`].
 //! Each window keeps a full [`Settings`] snapshot: edits apply to it
-//! immediately and are committed by a serial writer, and every committed
-//! change (from any surface) is synced back through [`sync_open_window`].
+//! immediately and are committed by [`crate::settings::store`], and every
+//! committed change (from any surface) is synced back through
+//! [`sync_open_window`].
 
 use std::{
     cell::RefCell,
@@ -39,7 +40,6 @@ mod log;
 mod nav;
 mod notifications;
 mod onboarding;
-mod persistence;
 mod providers;
 mod taskbar;
 pub(crate) mod theme;
@@ -51,7 +51,6 @@ mod window;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use persistence::{persist_update, try_persist_update_fallible};
 pub(crate) use providers::{OpenRouterSettingsSnapshot, persist_openrouter_credentials};
 
 const WINDOW_WIDTH: f32 = 1000.0;
@@ -120,12 +119,6 @@ pub fn open_command_palette() {
 /// Open Settings on the editor of the taskbar widget `id`.
 pub fn open_taskbar_widget(id: String) {
     post(Command::OpenTaskbar(Some(id)));
-}
-
-/// Optimistic local edits own the displayed settings while the serial writer
-/// commits earlier snapshots. Do not roll the UI language back mid-queue.
-pub(crate) fn has_pending_edits() -> bool {
-    persistence::has_pending()
 }
 
 /// Open Settings on one account's page with its sign-in already started.
@@ -260,7 +253,7 @@ pub(crate) fn handle(command: Command, state: &Arc<AppState>, cx: &mut AsyncApp)
                 return;
             }
             close_existing(&SETTINGS_WINDOW, cx);
-            open_onboarding_window(Arc::clone(state), cx);
+            open_onboarding_window(cx);
         }
         Command::Sync(settings) => with_settings_window(cx, |root, cx| {
             root.apply_sync(*settings, cx);
@@ -395,7 +388,7 @@ fn open_settings_window(state: Arc<AppState>, cx: &mut AsyncApp) {
     }
 }
 
-fn open_onboarding_window(state: Arc<AppState>, cx: &mut AsyncApp) {
+fn open_onboarding_window(cx: &mut AsyncApp) {
     let result = cx.update(|cx| {
         let options = window_options(
             onboarding_window_title(),
@@ -406,7 +399,7 @@ fn open_onboarding_window(state: Arc<AppState>, cx: &mut AsyncApp) {
             cx,
         );
         cx.open_window(options, |window, cx| {
-            cx.new(|cx| onboarding::OnboardingWindow::new(state, window, cx))
+            cx.new(|cx| onboarding::OnboardingWindow::new(window, cx))
         })
     });
     match result {

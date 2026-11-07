@@ -497,8 +497,6 @@ impl PopupRoot {
         if accent_changed {
             self.accent = theme::accent_ramp(self.ui.accent_color);
         }
-        crate::theme::set_animations_enabled(self.ui.animations_enabled);
-        self.ui.time_format.apply();
         self.refresh_palette(window);
         if self.ui.refreshing && self.refresh_started.is_none() {
             self.refresh_started = Some(Instant::now());
@@ -1746,10 +1744,9 @@ impl PopupRoot {
         local(&mut ui);
         self.ui = Rc::new(ui);
         cx.notify();
-        let settings_tx = self.state.settings_tx.clone();
         // Disk I/O and the settings broadcast run on the serial settings
         // writer, off the render thread and ordered with every other write.
-        crate::settings_window::persist_update(settings_tx, update);
+        crate::settings::store::queue(update);
     }
 
     // ----- snapshots ------------------------------------------------------------

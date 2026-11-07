@@ -1,6 +1,5 @@
 //! Appearance: theme, accent, font, icons, time format, popup material and motion.
 
-use crate::choice::Choice;
 use std::{
     cell::{Cell, RefCell},
     collections::HashMap,
@@ -20,6 +19,7 @@ use super::input::{InputEvent, TextInput};
 use super::kit::{self, Button, ButtonSize, Kit, Row, SliderRange, eid};
 use super::vscode_themes::{ThemeBrowserUi, ThemeHost};
 use super::window::SettingsWindow;
+use crate::choice::Choice;
 use crate::popup_window::ui::fx;
 use crate::popup_window::ui::theme::{self as popup_theme, Palette, rgb8};
 use crate::settings::{
@@ -725,7 +725,6 @@ impl SettingsWindow {
                         false,
                         Self::h(cx, |this, index: usize, _, cx| {
                             let value = TimeFormat::from_index(index);
-                            value.apply();
                             this.edit(cx, move |settings| settings.time_format = value)
                         }),
                     ))
@@ -966,7 +965,6 @@ impl SettingsWindow {
                 ),
                 animations,
                 Self::h(cx, |this, value: bool, _, cx| {
-                    crate::theme::set_animations_enabled(value);
                     this.edit(cx, move |settings| settings.animations_enabled = value)
                 }),
             )]

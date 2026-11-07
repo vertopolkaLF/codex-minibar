@@ -788,7 +788,7 @@ pub const fn descriptor(provider: ProviderKind) -> &'static ProviderDescriptor {
 }
 
 /// Install live logo overrides from settings. Call this from
-/// [`crate::settings::Settings::apply_runtime_effects`] so UI, tray, and
+/// [`crate::settings_runtime::apply`] so UI, tray, and
 /// plugins all see the same marks without threading a bool through every page.
 pub fn apply_logo_settings(replace_chatgpt_logo_with_codex: bool) {
     REPLACE_CHATGPT_LOGO_WITH_CODEX.store(replace_chatgpt_logo_with_codex, Ordering::Relaxed);

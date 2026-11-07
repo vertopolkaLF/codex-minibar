@@ -1,6 +1,5 @@
 //! Limit activation: automatic 5-hour sessions, quiet periods and schedules.
 
-use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, div, px,
@@ -8,6 +7,7 @@ use gpui::{
 
 use super::kit::{self, Button, Kit, Row, eid};
 use super::window::SettingsWindow;
+use crate::choice::Choice;
 use crate::settings::{
     AutoActivationPause, AutoResetLead, ProviderId, ProviderInstance, ScheduledActivation,
     TimeFormat,

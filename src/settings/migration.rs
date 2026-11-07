@@ -2,8 +2,8 @@
 //!
 //! The document-level part runs inside [`super::migrate`] and is pure. Moving
 //! credentials out of protected storage into instance folders needs the
-//! secret store and the file system, so it runs once afterwards from
-//! [`super::Settings::load_or_create`] through [`finish_instance_migration`].
+//! secret store and the file system, so startup supplies those to
+//! [`finish_instance_migration`], which runs once after the load.
 
 use std::{collections::BTreeMap, path::PathBuf};
 
@@ -425,24 +425,11 @@ fn codex_secret(id: &str) -> String {
 
 /// Moves saved sign-in sessions into the instances' config folders, where the
 /// CLI keeps and refreshes them from now on. Pasted Claude credentials stay in
-/// protected storage as manual credentials. Returns whether settings changed.
-pub(super) fn finish_instance_migration(settings: &mut Settings) -> bool {
-    finish_with(
-        settings,
-        |name| crate::secrets::load(name).ok().flatten(),
-        |name| {
-            if let Err(error) = crate::secrets::save(name, None) {
-                crate::logger::info(format!(
-                    "failed to remove migrated secret {name}: {error:#}"
-                ));
-            }
-        },
-        crate::openrouter::key_is_configured(),
-        |instance| crate::instances::managed_folder(&instance.id),
-    )
-}
-
-fn finish_with(
+/// protected storage as manual credentials. `load` and `forget` reach the
+/// former secrets, `legacy_openrouter_key` says whether a pre-accounts key is
+/// stored, and `folder` names an instance's managed folder. Returns whether
+/// settings changed.
+pub(crate) fn finish_instance_migration(
     settings: &mut Settings,
     load: impl Fn(&str) -> Option<String>,
     forget: impl Fn(&str),
@@ -722,7 +709,7 @@ profile_id = "acct"
         settings.add_instance(codex);
         let root = tempfile::tempdir().unwrap();
         let forgotten = std::cell::RefCell::new(Vec::new());
-        let changed = finish_with(
+        let changed = finish_instance_migration(
             &mut settings,
             |name| {
                 if name == claude_secret(&session_id) {

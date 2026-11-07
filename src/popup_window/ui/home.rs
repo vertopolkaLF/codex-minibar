@@ -1,6 +1,5 @@
 //! Home page: reorderable provider widgets and the Usage Stats summary.
 
-use crate::choice::Choice;
 use std::{collections::HashMap, f32::consts::PI, rc::Rc};
 
 use gpui::{
@@ -15,6 +14,7 @@ use super::{
     root::{PopupRoot, SnapshotSlot, eid},
     theme::{HslaExt, Palette},
 };
+use crate::choice::Choice;
 use crate::popup_window::{model::*, *};
 
 pub(super) const COLUMN_GAP: f32 = 20.0;

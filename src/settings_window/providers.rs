@@ -1,9 +1,6 @@
 //! Provider pages: credential persistence and the
 //! shared model behind the page (`page`) and its dialogs (`dialog`).
 
-use std::sync::mpsc::Sender;
-
-use super::persistence::try_persist_update_fallible;
 use crate::drivers::{InstallSource, InstallStatus};
 use crate::limits::{OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, SpendingSummary};
 use crate::provider_registry::ProviderKind;
@@ -103,11 +100,10 @@ fn find_account_instance<'a>(
 /// Blocks on the serial writer: call from worker threads only, never the
 /// GPUI thread.
 fn persist_instance(
-    settings_tx: Sender<Settings>,
     provider: ProviderId,
     mutate: impl FnOnce(&mut ProviderInstance) -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    try_persist_update_fallible(settings_tx, move |settings| {
+    crate::settings::store::update_blocking(move |settings| {
         let instance = settings
             .instance_mut(provider)
             .ok_or_else(|| anyhow::anyhow!(crate::i18n::tr("this-provider-no-longer-exists")))?;
@@ -121,13 +117,12 @@ fn persist_instance(
 /// id so list shifts cannot move keys between instances. Renaming key labels
 /// must not bump the credentials revision; popup headings overlay names.
 fn persist_openrouter_account(
-    settings_tx: Sender<Settings>,
     account_id: String,
     bump_credentials: bool,
     previous_availability: Option<bool>,
     mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    try_persist_update_fallible(settings_tx, move |settings| {
+    crate::settings::store::update_blocking(move |settings| {
         let provider = find_account_instance(&settings.instances, &account_id)
             .map(ProviderInstance::provider_id)
             .ok_or_else(|| {
@@ -156,7 +151,6 @@ fn persist_openrouter_account(
 /// matching account metadata. If the settings write fails, protected storage
 /// is restored to its exact previous values so neither side can be orphaned.
 pub(crate) fn persist_openrouter_credentials(
-    settings_tx: Sender<Settings>,
     account_id: String,
     changes: Vec<crate::openrouter::AccountSecretChange>,
     mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()> + Send + 'static,
@@ -165,9 +159,7 @@ pub(crate) fn persist_openrouter_credentials(
     // (and no race with queued writes) is needed to know the previous state.
     let before = crate::openrouter::management_key_is_configured(&account_id);
     let rollback = crate::openrouter::apply_account_secret_changes(&changes)?;
-    if let Err(error) =
-        persist_openrouter_account(settings_tx, account_id, true, Some(before), mutate)
-    {
+    if let Err(error) = persist_openrouter_account(account_id, true, Some(before), mutate) {
         return match rollback.restore() {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(anyhow::anyhow!(
@@ -178,20 +170,16 @@ pub(crate) fn persist_openrouter_credentials(
     Ok(())
 }
 
-fn bump_credentials(settings_tx: Sender<Settings>, provider: ProviderId) -> anyhow::Result<()> {
-    persist_instance(settings_tx, provider, |instance| {
+fn bump_credentials(provider: ProviderId) -> anyhow::Result<()> {
+    persist_instance(provider, |instance| {
         instance.credentials_revision = instance.credentials_revision.wrapping_add(1);
         Ok(())
     })
 }
 
-fn persist_opencode_manual_key(
-    settings_tx: Sender<Settings>,
-    provider: ProviderId,
-    value: Option<String>,
-) -> anyhow::Result<()> {
+fn persist_opencode_manual_key(provider: ProviderId, value: Option<String>) -> anyhow::Result<()> {
     let rollback = crate::opencode::apply_manual_key(provider, value.as_deref())?;
-    if let Err(error) = bump_credentials(settings_tx, provider) {
+    if let Err(error) = bump_credentials(provider) {
         return match crate::opencode::restore_manual_key(rollback) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(anyhow::anyhow!(
@@ -203,14 +191,10 @@ fn persist_opencode_manual_key(
 }
 
 /// Keep the existing credential when validation or the settings commit fails.
-fn persist_claude_manual_credential(
-    settings_tx: Sender<Settings>,
-    provider: ProviderId,
-    credential: &str,
-) -> anyhow::Result<()> {
+fn persist_claude_manual_credential(provider: ProviderId, credential: &str) -> anyhow::Result<()> {
     let previous = crate::claude::load_manual_credential(provider.id())?;
     crate::claude::save_manual_credential(provider.id(), Some(credential))?;
-    if let Err(error) = bump_credentials(settings_tx, provider) {
+    if let Err(error) = bump_credentials(provider) {
         return match crate::claude::save_manual_credential(provider.id(), previous.as_deref()) {
             Ok(()) => Err(error),
             Err(rollback_error) => Err(anyhow::anyhow!(

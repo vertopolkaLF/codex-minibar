@@ -1,6 +1,5 @@
 //! General: startup, Usage Stats, the reset feed and provider status pages.
 
-use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, SharedString, Styled, Window,
     div, px, relative,
@@ -8,6 +7,7 @@ use gpui::{
 
 use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
+use crate::choice::Choice;
 use crate::settings::{ResetAnnouncementRefreshInterval, UsageRefreshInterval};
 
 pub(super) fn usage_refresh_labels() -> [&'static str; 7] {

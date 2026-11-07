@@ -74,7 +74,6 @@ pub struct AppState {
     pub last_activation_at: Option<DateTime<Utc>>,
     /// Live settings pushes from the settings window; drained by the tray bridge.
     pub settings_rx: Mutex<Option<Receiver<Settings>>>,
-    pub settings_tx: Sender<Settings>,
     /// Destructive usage actions are serialized by the tray bridge and then
     /// fanned out to every provider usage worker.
     pub usage_actions_rx: Mutex<Option<Receiver<UsageAction>>>,

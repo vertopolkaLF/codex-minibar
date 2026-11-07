@@ -1,15 +1,14 @@
 //! Advanced: game mode, rendering, settings import/export, clearing Usage data,
 //! factory reset.
 
-use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, IntoElement, ParentElement, PathPromptOptions, SharedString, Styled, div,
     px,
 };
 
 use super::kit::{self, Button, Kit, Row};
-use super::persistence;
 use super::window::SettingsWindow;
+use crate::choice::Choice;
 use crate::popup_window::ui::fx;
 use crate::settings::{GameMode, Settings};
 use crate::worker::UsageAction;
@@ -272,7 +271,7 @@ impl SettingsWindow {
                 return;
             };
             let result = crate::app_paths::settings()
-                .and_then(|current| Settings::load_or_create(&current))
+                .and_then(|current| Settings::read(&current))
                 .and_then(|settings| settings.save(&path));
             let _ = this.update(cx, |this, cx| match result {
                 Ok(()) => this.show_notice(crate::i18n::tr("settings-exported"), cx),
@@ -302,16 +301,17 @@ impl SettingsWindow {
             let Some(path) = paths.into_iter().next() else {
                 return;
             };
-            let Ok(settings_tx) = this.update(cx, |this, _| this.settings_tx()) else {
-                return;
-            };
             // Read-only decode of the chosen file, then commit through the
             // serial writer; neither step runs on the UI thread.
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let settings = Settings::load_from_import(&path)?;
-                    persistence::wait(persistence::queue_replace(settings_tx, settings.clone()))?;
+                    let settings = Settings::read(&path)?;
+                    let replacement = settings.clone();
+                    crate::settings::store::update_blocking(move |current| {
+                        *current = replacement;
+                        Ok(())
+                    })?;
                     anyhow::Ok(settings)
                 })
                 .await;
@@ -348,11 +348,15 @@ impl SettingsWindow {
         let reset = Self::h(cx, |this, (), window, cx| {
             this.confirm_reset = false;
             let settings = Settings::default();
-            let outcome = persistence::queue_replace(this.settings_tx(), settings.clone());
+            let replacement = settings.clone();
+            let outcome = crate::settings::store::queue_fallible(move |current| {
+                *current = replacement;
+                Ok(())
+            });
             cx.spawn_in(window, async move |this, cx| {
                 let result = cx
                     .background_executor()
-                    .spawn(async move { persistence::wait(outcome) })
+                    .spawn(async move { crate::settings::store::wait(outcome) })
                     .await;
                 let _ = this.update_in(cx, |this, window, cx| {
                     match result {

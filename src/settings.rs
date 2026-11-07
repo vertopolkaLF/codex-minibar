@@ -14,6 +14,9 @@ pub const SETTINGS_VERSION: u32 = 41;
 const TASKBAR_DEFAULT_VERSION: u32 = 41;
 
 mod migration;
+pub mod store;
+
+pub(crate) use migration::finish_instance_migration;
 pub(crate) mod unknown;
 
 pub use crate::choice::Choice;
@@ -2111,6 +2114,16 @@ impl Settings {
     }
 
     pub fn load_or_create(path: &Path) -> Result<Self> {
+        Self::load_or_create_with(path, |_| false)
+    }
+
+    /// [`Self::load_or_create`] for startup. When the file predates provider
+    /// instances, `finish_instance_migration` runs the side-effecting half of
+    /// that migration once and reports whether it changed the settings.
+    pub fn load_or_create_with(
+        path: &Path,
+        finish_instance_migration: impl FnOnce(&mut Self) -> bool,
+    ) -> Result<Self> {
         if !path.exists() {
             let settings = Self::default();
             settings.save(path)?;
@@ -2130,10 +2143,10 @@ impl Settings {
         let (mut settings, dirty) = match Self::decode_raw(&raw) {
             Ok((settings, dirty)) => (settings, dirty),
             Err(error) => {
-                eprintln!(
+                crate::logger::info(format!(
                     "settings at {} could not be decoded ({error:#}); recreating usable defaults",
                     path.display()
-                );
+                ));
                 if let Err(error) = backup_corrupt_settings(path) {
                     crate::logger::info(format!("failed to back up corrupt settings: {error:#}"));
                 }
@@ -2143,6 +2156,7 @@ impl Settings {
                 // back through first-run onboarding.
                 settings.onboarding_completed = true;
                 settings.repair_inplace();
+                settings.normalize_all();
                 if let Err(error) = settings.save(path) {
                     crate::logger::info(format!("failed to save recovered settings: {error:#}"));
                 }
@@ -2150,47 +2164,34 @@ impl Settings {
             }
         };
         let moved_credentials = original_version < migration::INSTANCES_VERSION
-            && migration::finish_instance_migration(&mut settings);
+            && finish_instance_migration(&mut settings);
         // Existing installs get the taskbar widget once, so they learn of it.
         let taskbar_introduced =
             original_version < TASKBAR_DEFAULT_VERSION && settings.enable_taskbar_by_default();
         let repaired = settings.repair_inplace();
-        let tray_widgets_normalized = settings.normalize_tray_widgets()
-            | settings.taskbar.normalize()
-            | settings.command_palette.normalize();
-        let popup_visibility_normalized = settings.normalize_popup_visibility();
-        if dirty
-            || moved_credentials
-            || taskbar_introduced
-            || repaired
-            || tray_widgets_normalized
-            || popup_visibility_normalized
-        {
+        let normalized = settings.normalize_all();
+        if dirty || moved_credentials || taskbar_introduced || repaired || normalized {
             settings.save(path)?;
         }
         Ok(settings)
     }
 
-    /// Read-only decode of a user-chosen settings file for Import.
+    /// Read-only decode of a settings file: the live one for a window that
+    /// opens, or a user-chosen one for Import.
     ///
     /// Migrates, repairs and normalizes entirely in memory. It never writes,
     /// backs up, or otherwise touches `path`, and an undecodable file is an
     /// error instead of being replaced by salvaged defaults.
     ///
-    /// `migration::finish_instance_migration` is deliberately NOT run: it
-    /// moves credentials between this machine's secret store and managed
-    /// folders based on the local install's state, not on the imported file,
-    /// so applying it to a foreign file would have side effects unrelated to
-    /// what is being imported. The live install already ran it at startup.
-    pub fn load_from_import(path: &Path) -> Result<Self> {
+    /// The instance migration's credential moves are deliberately NOT run:
+    /// they act on this machine's secret store and managed folders, not on
+    /// the file being read. The live install already ran them at startup.
+    pub fn read(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         let (mut settings, _dirty) = Self::decode_raw(&raw)
             .with_context(|| format!("{} is not a valid settings file", path.display()))?;
         settings.repair_inplace();
-        settings.normalize_tray_widgets();
-        settings.taskbar.normalize();
-        settings.command_palette.normalize();
-        settings.normalize_popup_visibility();
+        settings.normalize_all();
         Ok(settings)
     }
 
@@ -2219,10 +2220,10 @@ impl Settings {
                 if !unknown.is_empty()
                     && let Ok(mut settings) = pruned.try_into::<Self>()
                 {
-                    eprintln!(
+                    crate::logger::info(format!(
                         "settings entries this build cannot read were skipped and will be kept ({error}): {}",
                         unknown.describe().join(", ")
-                    );
+                    ));
                     settings.unknown_entries = unknown;
                     return Ok((settings, dirty));
                 }
@@ -2232,9 +2233,9 @@ impl Settings {
                     .as_table_mut()
                     .is_some_and(|root| root.remove("time_format").is_some());
                 if stripped_time_format && let Ok(settings) = document.clone().try_into::<Self>() {
-                    eprintln!(
+                    crate::logger::info(format!(
                         "settings time_format was invalid ({error}); using the Windows clock"
-                    );
+                    ));
                     return Ok((settings, true));
                 }
                 if let Some(root) = document.as_table_mut() {
@@ -2250,9 +2251,9 @@ impl Settings {
                 }
                 match document.try_into::<Self>() {
                     Ok(settings) => {
-                        eprintln!(
+                        crate::logger::info(format!(
                             "settings tray_widgets were invalid ({error}); resetting that section"
-                        );
+                        ));
                         Ok((settings, true))
                     }
                     Err(retry_error) => Err(retry_error).context("decode migrated settings"),
@@ -2345,7 +2346,6 @@ impl Settings {
                 changed = true;
             }
         }
-        changed |= self.normalize_instances();
         if self.version < SETTINGS_VERSION {
             self.version = SETTINGS_VERSION;
             changed = true;
@@ -2448,10 +2448,21 @@ impl Settings {
         changed
     }
 
-    pub fn normalize_popup_visibility(&mut self) -> bool {
+    fn normalize_popup_visibility(&mut self) -> bool {
         let ids: Vec<&str> = self.instances.iter().map(|i| i.id.as_str()).collect();
         let retained = self.popup_visibility.retain_instances(&ids);
         self.popup_visibility.normalize() | retained
+    }
+
+    /// Restores every cross-reference invariant after an edit: unique ids,
+    /// no references to removed instances, valid widget lists. Returns
+    /// whether anything changed.
+    pub fn normalize_all(&mut self) -> bool {
+        self.normalize_instances()
+            | self.normalize_tray_widgets()
+            | self.taskbar.normalize()
+            | self.command_palette.normalize()
+            | self.normalize_popup_visibility()
     }
 
     /// Every configured instance, enabled or not, in display order.
@@ -2695,103 +2706,6 @@ impl Settings {
         }
         changed
     }
-
-    /// Applies settings whose effect lives outside the render tree.
-    pub fn apply_runtime_effects(&self) -> Result<()> {
-        if !crate::settings_window::has_pending_edits() {
-            self.language.apply();
-        }
-        crate::theme::set_animations_enabled(self.animations_enabled);
-        #[cfg(windows)]
-        gpui::set_software_rendering(self.software_rendering);
-        crate::notifications::set_sound_enabled(self.notifications.sound);
-        crate::notifications::set_follow_do_not_disturb(self.notifications.follow_do_not_disturb);
-        crate::game_mode::apply(
-            self.game_mode,
-            self.notifications.game_mode_changes,
-            &self.game_mode_games,
-            &self.game_mode_ignored,
-        );
-        crate::popup::set_user_pinned(self.popup_pinned);
-        crate::popup::apply_popup_appearance(
-            self.bottom_bar_size,
-            self.popup_corner_radius,
-            self.popup_background_material,
-        );
-        crate::provider_registry::apply_logo_settings(self.replace_chatgpt_logo_with_codex);
-        crate::instances::publish(&self.instances);
-        crate::codex::discovery::protect_configured_paths(
-            self.instances
-                .iter()
-                .filter(|instance| instance.driver == ProviderKind::Codex)
-                .filter_map(|instance| instance.binary_path.as_deref()),
-        );
-        self.time_format.apply();
-        // The sandbox must never rewrite the real install's login entry.
-        if crate::app_paths::fake_sandbox() {
-            return Ok(());
-        }
-        apply_startup_registration(self.start_at_login)
-    }
-
-    /// If the installer (or another tool) registered us in HKCU Run while
-    /// settings still say off, adopt that into settings before we apply them —
-    /// otherwise `apply_runtime_effects` would delete the Run value on launch.
-    pub fn reconcile_startup_from_registry(&mut self, path: &Path) -> Result<()> {
-        if crate::app_paths::fake_sandbox()
-            || self.start_at_login
-            || !startup_registration_present()?
-        {
-            return Ok(());
-        }
-        self.start_at_login = true;
-        self.save(path)
-    }
-}
-
-#[cfg(windows)]
-const STARTUP_RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-#[cfg(windows)]
-const STARTUP_VALUE: &str = "Codex Minibar";
-
-#[cfg(windows)]
-fn startup_registration_present() -> Result<bool> {
-    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
-    Ok(
-        crate::win32::RegKey::open(HKEY_CURRENT_USER, STARTUP_RUN_KEY)
-            .is_some_and(|key| key.string(STARTUP_VALUE).is_some()),
-    )
-}
-
-#[cfg(not(windows))]
-fn startup_registration_present() -> Result<bool> {
-    Ok(false)
-}
-
-#[cfg(windows)]
-fn apply_startup_registration(enabled: bool) -> Result<()> {
-    let key = crate::win32::RegKey::create_hkcu(STARTUP_RUN_KEY)
-        .context("open Windows startup registry key")?;
-    let result = if enabled {
-        let executable =
-            std::env::current_exe().context("resolve current executable for startup")?;
-        key.set_string(STARTUP_VALUE, format!("\"{}\"", executable.display()))
-    } else {
-        key.delete_value(STARTUP_VALUE)
-    };
-    // Deleting an already-absent Run value is success: the desired end state is
-    // "not registered", whether we removed it now or it was never there.
-    const ERROR_FILE_NOT_FOUND: u32 = 2;
-    match result {
-        Ok(()) => Ok(()),
-        Err(ERROR_FILE_NOT_FOUND) if !enabled => Ok(()),
-        Err(status) => anyhow::bail!("update Windows startup registration: {status}"),
-    }
-}
-
-#[cfg(not(windows))]
-fn apply_startup_registration(_enabled: bool) -> Result<()> {
-    Ok(())
 }
 
 /// The `version` a raw settings file claims, or 0 when it has none.
@@ -3591,9 +3505,9 @@ mod tests {
         let old_bytes = std::fs::read(&old).unwrap();
         let bad_bytes = std::fs::read(&bad).unwrap();
 
-        let imported = Settings::load_from_import(&old).unwrap();
+        let imported = Settings::read(&old).unwrap();
         assert!((1..=365).contains(&imported.history_retention_days));
-        assert!(Settings::load_from_import(&bad).is_err());
+        assert!(Settings::read(&bad).is_err());
 
         assert_eq!(std::fs::read(&old).unwrap(), old_bytes);
         assert_eq!(std::fs::read(&bad).unwrap(), bad_bytes);

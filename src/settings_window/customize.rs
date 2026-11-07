@@ -1,13 +1,13 @@
 //! Customize: popup layout, tabs, card presentation and the Usage widget,
 //! plus the per-instance popup card table shown on provider pages.
 
-use crate::choice::Choice;
 use gpui::{
     AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px,
 };
 
 use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
+use crate::choice::Choice;
 use crate::settings::{PopupTabMode, ProviderInstance, Settings, TotalSpendPresentation};
 
 fn bool_row(

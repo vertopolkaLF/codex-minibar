@@ -4,9 +4,6 @@
 //! window, previews it live. Dismissing the window restores what was there
 //! before, so it never leaves provider workers half-configured.
 
-use crate::choice::Choice;
-use std::sync::Arc;
-
 use gpui::{
     AnyElement, App, Context, FocusHandle, Focusable, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
@@ -17,10 +14,9 @@ use super::appearance::ThemePicker;
 use super::general::usage_refresh_labels;
 use super::input::{HasInputs, Inputs};
 use super::kit::{self, Button, Handler, Kit, Row};
-use super::persistence::load_settings_for_window;
 use super::theme::{Fonts, Theme};
 use super::vscode_themes::{ThemeBrowser, ThemeBrowserUi, ThemeHost, end_theme_preview};
-use crate::popup_window::AppState;
+use crate::choice::Choice;
 use crate::popup_window::ui::fx;
 use crate::provider_registry::ProviderKind;
 use crate::settings::{ProviderInstance, Settings, TrayWidget, UsageRefreshInterval};
@@ -184,7 +180,6 @@ impl Step {
 }
 
 pub(crate) struct OnboardingWindow {
-    state: Arc<AppState>,
     backdrop: super::backdrop::Backdrop,
     settings: Settings,
     /// Settings as they were when the window opened; dismissing restores them.
@@ -253,8 +248,8 @@ impl Focusable for OnboardingWindow {
 }
 
 impl OnboardingWindow {
-    pub(crate) fn new(state: Arc<AppState>, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let settings = load_settings_for_window();
+    pub(crate) fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let settings = crate::settings::store::read();
         let detected = detected_providers(&settings);
         let automatic = settings
             .instances
@@ -274,7 +269,6 @@ impl OnboardingWindow {
         let focus = cx.focus_handle();
         window.focus(&focus);
         let onboarding = Self {
-            state,
             backdrop: super::backdrop::Backdrop::install(window),
             original: settings.clone(),
             settings,
@@ -301,7 +295,8 @@ impl OnboardingWindow {
     /// Apply an edit locally and commit every choice so the popup follows.
     fn edit(&mut self, cx: &mut Context<Self>, edit: impl Fn(&mut Settings)) {
         edit(&mut self.settings);
-        self.settings.language.apply();
+        self.settings.normalize_all();
+        crate::settings_runtime::apply_presentation(&self.settings);
         cx.refresh_windows();
         self.publish();
         cx.notify();
@@ -314,7 +309,7 @@ impl OnboardingWindow {
         }
         let choices = self.settings.clone();
         let enabled = self.enabled;
-        super::persistence::queue(self.state.settings_tx.clone(), move |settings| {
+        crate::settings::store::queue(move |settings| {
             copy_choices(&choices, settings);
             apply_onboarding_choices(settings, enabled, None);
             settings.tray_widgets = default_tray_widgets(settings);
@@ -339,7 +334,7 @@ impl OnboardingWindow {
             return;
         }
         let original = self.original.clone();
-        super::persistence::queue(self.state.settings_tx.clone(), move |settings| {
+        crate::settings::store::queue(move |settings| {
             for instance in restore(&original, settings) {
                 crate::drivers::forget_secrets(&instance);
             }
@@ -380,18 +375,17 @@ impl OnboardingWindow {
         cx.notify();
         let choices = self.settings.clone();
         let (enabled, automatic) = (self.enabled, self.automatic);
-        let outcome =
-            super::persistence::queue_fallible(self.state.settings_tx.clone(), move |settings| {
-                copy_choices(&choices, settings);
-                apply_onboarding_choices(settings, enabled, Some(automatic));
-                settings.tray_widgets = default_tray_widgets(settings);
-                settings.onboarding_completed = true;
-                Ok(())
-            });
+        let outcome = crate::settings::store::queue_fallible(move |settings| {
+            copy_choices(&choices, settings);
+            apply_onboarding_choices(settings, enabled, Some(automatic));
+            settings.tray_widgets = default_tray_widgets(settings);
+            settings.onboarding_completed = true;
+            Ok(())
+        });
         cx.spawn_in(window, async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { super::persistence::wait(outcome) })
+                .spawn(async move { crate::settings::store::wait(outcome) })
                 .await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.finishing = false;
