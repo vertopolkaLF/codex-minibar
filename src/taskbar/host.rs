@@ -53,7 +53,7 @@ use super::{
     obstacles::Obstacles,
     render::{CARD_MARGIN, Item, Metrics, Renderer},
 };
-use crate::{limits::ProviderLimits, settings::TaskbarAlignment, win32::wide};
+use crate::{limits::ProviderLimits, settings::TaskbarAlignment, tray::MenuCommand, win32::wide};
 
 pub(super) enum Message {
     Config(Config),
@@ -79,9 +79,8 @@ const MENU_OPEN: usize = 1;
 const MENU_SETTINGS: usize = 2;
 const MENU_HIDE: usize = 3;
 const MENU_EDIT: usize = 4;
-const MENU_UPDATE: usize = 5;
-const MENU_APP_SETTINGS: usize = 6;
-const MENU_EXIT: usize = 7;
+/// First id of the app's own commands, one per [`MenuCommand::ALL`] entry.
+const MENU_APP: usize = 16;
 
 /// Space between the strip and its anchor, in DIPs.
 const TRAY_MARGIN: f32 = 2.0;
@@ -333,8 +332,7 @@ fn context_menu(owner: HWND, target: MenuTarget) -> Option<Action> {
             let text = wide(text);
             AppendMenuW(menu, flags, id, text.as_ptr());
         };
-        let header = format!("Codex Minibar - {}", env!("CARGO_PKG_VERSION"));
-        append(MF_STRING | MF_GRAYED, 0, &header);
+        append(MF_STRING | MF_GRAYED, 0, &crate::tray::menu_header());
         AppendMenuW(menu, MF_SEPARATOR, 0, null_mut());
         if target.widget.is_some() {
             append(MF_STRING, MENU_OPEN, crate::i18n::tr("taskbar-menu-open"));
@@ -347,15 +345,9 @@ fn context_menu(owner: HWND, target: MenuTarget) -> Option<Action> {
         );
         append(MF_STRING, MENU_HIDE, crate::i18n::tr("taskbar-menu-hide"));
         AppendMenuW(menu, MF_SEPARATOR, 0, null_mut());
-        if super::update_available() {
-            append(
-                MF_STRING,
-                MENU_UPDATE,
-                crate::i18n::tr("update-available-67fd3a"),
-            );
+        for command in MenuCommand::menu(super::update_available()) {
+            append(MF_STRING, MENU_APP + command as usize, command.label());
         }
-        append(MF_STRING, MENU_APP_SETTINGS, crate::i18n::tr("settings"));
-        append(MF_STRING, MENU_EXIT, crate::i18n::tr("exit"));
         let mut cursor = POINT { x: 0, y: 0 };
         GetCursorPos(&mut cursor);
         // The menu dismisses on an outside click only while its owner's
@@ -387,10 +379,10 @@ fn context_menu(owner: HWND, target: MenuTarget) -> Option<Action> {
             MENU_EDIT => id.map(Action::Edit),
             MENU_SETTINGS => Some(Action::Settings),
             MENU_HIDE => Some(Action::Hide),
-            MENU_UPDATE => Some(Action::Update),
-            MENU_APP_SETTINGS => Some(Action::AppSettings),
-            MENU_EXIT => Some(Action::Exit),
-            _ => None,
+            command => command
+                .checked_sub(MENU_APP)
+                .and_then(|index| MenuCommand::ALL.get(index))
+                .map(|command| Action::App(*command)),
         }
     }
 }

@@ -60,16 +60,14 @@ pub enum Action {
     Settings,
     /// Turn the widgets off.
     Hide,
-    /// The tray menu's own commands.
-    AppSettings,
-    Update,
-    Exit,
+    /// The app's own menu commands, as in the tray menu.
+    App(crate::tray::MenuCommand),
 }
 
 static ACTIONS: Mutex<Vec<Action>> = Mutex::new(Vec::new());
 static UPDATE_AVAILABLE: AtomicBool = AtomicBool::new(false);
 
-/// Mirrors the tray menu's update item into the widgets' menu.
+/// Whether the widgets' menu offers to install an update.
 pub fn set_update_available(available: bool) {
     UPDATE_AVAILABLE.store(available, Ordering::SeqCst);
 }

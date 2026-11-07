@@ -416,24 +416,10 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
         .map(|provider| {
             let kind = provider.kind();
             let descriptor = provider_registry::descriptor(kind);
-            let live_limits = limits.get(provider);
-            let mut metrics = descriptor
-                .metrics
-                .iter()
-                .map(|metric| MetricInfo {
-                    id: metric.id.into(),
-                    label: metric.label.into(),
-                })
-                .collect::<Vec<_>>();
-            for additional in &live_limits.additional_limits {
-                let metric_id = provider_registry::additional_limit_brick_id(kind, &additional.id);
-                if metrics.iter().all(|metric| metric.id != metric_id) {
-                    metrics.push(MetricInfo {
-                        id: metric_id,
-                        label: additional.title.clone(),
-                    });
-                }
-            }
+            let metrics = widget_data::metric_catalog(kind, limits.get(provider))
+                .into_iter()
+                .map(|(id, label)| MetricInfo { id, label })
+                .collect();
             ProviderInfo {
                 id: provider.id().into(),
                 kind: descriptor.id.into(),

@@ -135,14 +135,7 @@ pub fn payload(limits: &ProviderLimits) -> Payload {
     let enabled = crate::instances::published_enabled_providers();
     let bands = widgets
         .iter()
-        // Like the taskbar, a band shows while any of its instances is on.
-        .filter(|widget| {
-            widget
-                .indicators
-                .iter()
-                .filter_map(crate::settings::TrayIndicator::provider)
-                .any(|provider| enabled.contains(&provider))
-        })
+        .filter(|widget| model::is_visible(widget, &enabled))
         .filter_map(|widget| {
             let light = model::resolve(widget, limits, appearance(true));
             let dark = model::resolve(widget, limits, appearance(false));
@@ -331,7 +324,7 @@ fn summary(
                 },
                 progress: row.progress,
                 reset_in: reset.map(|at| crate::format::countdown(at, now)),
-                reset_at: reset.map(model::reset_clock),
+                reset_at: reset.map(crate::format::reset_clock),
             }
         })
         .collect();
@@ -414,22 +407,9 @@ fn icon_file(icon: &model::Icon) -> Option<String> {
 
 /// Straight-alpha RGBA PNG of a monochrome mark in `tint`.
 fn rasterize_icon(name: &str, pixels: u32, tint: model::Rgb) -> Option<Vec<u8>> {
-    use resvg::{tiny_skia, usvg};
-    let source = crate::gui::assets::svg_source(name)?;
-    let svg = crate::gui::assets::normalize_svg(source);
-    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
-    let size = tree.size();
-    let scale = pixels as f32 / size.width().max(size.height());
-    let mut pixmap = tiny_skia::Pixmap::new(pixels, pixels)?;
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
-    let rgba = pixmap
-        .pixels()
-        .iter()
-        .flat_map(|pixel| [tint[0], tint[1], tint[2], pixel.alpha()])
+    let rgba = crate::icons::rasterize_alpha(name, pixels)?
+        .into_iter()
+        .flat_map(|alpha| [tint[0], tint[1], tint[2], alpha])
         .collect::<Vec<_>>();
     let mut png = Vec::new();
     {

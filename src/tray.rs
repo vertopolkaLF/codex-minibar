@@ -9,14 +9,46 @@ use fontdue::{
 
 use crate::{
     instances::ProviderId,
-    limits::{LimitWindow, ProviderLimits},
+    limits::ProviderLimits,
     provider_registry,
-    settings::{
-        LimitValue, TimeFormat, TrayColorMode, TrayPresentation, TrayWidget, TrayWidgetKind,
-    },
+    settings::{TimeFormat, TrayPresentation, TrayWidget, TrayWidgetKind},
+    widget_data::IndicatorPalette,
 };
 
 const ICON_SIZE: usize = 32;
+
+/// The app's own menu commands, offered by the tray icons and the taskbar
+/// widgets alike.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuCommand {
+    Update,
+    Settings,
+    Exit,
+}
+
+impl MenuCommand {
+    pub const ALL: [Self; 3] = [Self::Update, Self::Settings, Self::Exit];
+
+    /// The commands in menu order, `Update` only while one is available.
+    pub fn menu(update_available: bool) -> impl Iterator<Item = Self> {
+        Self::ALL
+            .into_iter()
+            .filter(move |command| *command != Self::Update || update_available)
+    }
+
+    pub fn label(self) -> &'static str {
+        crate::i18n::tr(match self {
+            Self::Update => "update-available-67fd3a",
+            Self::Settings => "settings",
+            Self::Exit => "exit",
+        })
+    }
+}
+
+/// The disabled first item of the app's menus.
+pub fn menu_header() -> String {
+    format!("Codex Minibar - {}", env!("CARGO_PKG_VERSION"))
+}
 
 fn truncate_tooltip(value: &str) -> String {
     const MAX_UNITS: usize = 127;
@@ -53,9 +85,10 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
         ) else {
             continue;
         };
-        let value = percent(&metric.window, indicator.limit_value)
-            .map(|value| format!("{value}%"))
-            .unwrap_or_else(|| "?".into());
+        let value = crate::widget_data::percent_text(crate::widget_data::displayed_percent(
+            &metric.window,
+            indicator.limit_value,
+        ));
         let item = format!("{} {value}", metric.label);
         let source_id = provider.id();
         let title = provider.qualified_name();
@@ -78,13 +111,6 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
             .collect::<Vec<_>>()
             .join("\n"),
     )
-}
-
-fn percent(window: &LimitWindow, value: LimitValue) -> Option<u8> {
-    match value {
-        LimitValue::Remaining => window.remaining_percent(),
-        LimitValue::Used => window.used_percent.map(|value| value.min(100)),
-    }
 }
 
 fn stacked_reset_label(reset: Option<DateTime<Utc>>, countdown: bool) -> String {
@@ -137,25 +163,15 @@ fn indicator_color(
     remaining: Option<u8>,
     accent: [u8; 3],
 ) -> [u8; 3] {
-    match indicator.color_mode {
-        TrayColorMode::Status => match remaining {
-            Some(0..=15) => [230, 74, 72],
-            Some(16..=50) => [245, 158, 11],
-            Some(_) => [49, 196, 141],
-            None => tray_text_color(crate::win32::shell_uses_light_theme()),
-        },
-        TrayColorMode::Fixed => [
-            indicator.fixed_color.red,
-            indicator.fixed_color.green,
-            indicator.fixed_color.blue,
-        ],
-        TrayColorMode::Provider => {
-            let (red, green, blue) = provider_registry::descriptor(provider.kind()).brand_rgb;
-            [red, green, blue]
-        }
-        TrayColorMode::Accent => accent,
-        TrayColorMode::Monochrome => tray_text_color(crate::win32::shell_uses_light_theme()),
-    }
+    let palette = IndicatorPalette {
+        critical: [230, 74, 72],
+        warning: [245, 158, 11],
+        healthy: [49, 196, 141],
+        text: tray_text_color(crate::win32::shell_uses_light_theme()),
+        accent,
+    };
+    let (red, green, blue) = provider_registry::descriptor(provider.kind()).brand_rgb;
+    palette.color(indicator, remaining, [red, green, blue]).0
 }
 
 fn resolve_indicators(
@@ -177,7 +193,10 @@ fn resolve_indicators(
             let window = metric.map(|metric| metric.window).unwrap_or_default();
             let remaining = window.remaining_percent();
             Some(ResolvedIndicator {
-                displayed_percent: percent(&window, indicator.limit_value),
+                displayed_percent: crate::widget_data::displayed_percent(
+                    &window,
+                    indicator.limit_value,
+                ),
                 reset: window.resets_at,
                 color: indicator_color(indicator, provider, remaining, accent),
             })
@@ -502,13 +521,6 @@ mod platform {
         next_theme_check: Instant,
     }
 
-    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    pub enum TrayMenuAction {
-        Update,
-        Settings,
-        Exit,
-    }
-
     impl TrayManager {
         pub fn new() -> Self {
             Self {
@@ -530,7 +542,6 @@ mod platform {
         ) -> Result<()> {
             self.uses_light_theme = crate::win32::shell_uses_light_theme();
             self.next_theme_check = Instant::now() + Duration::from_millis(250);
-            crate::taskbar::set_update_available(update_available);
             let language = crate::i18n::current_language();
             let menu_changed =
                 self.update_available != update_available || self.language != language;
@@ -632,15 +643,14 @@ mod platform {
             self.icons.is_empty()
         }
 
-        pub fn drain_menu_actions(&self) -> Vec<TrayMenuAction> {
+        pub fn drain_menu_actions(&self) -> Vec<MenuCommand> {
             let mut actions = Vec::new();
             while let Ok(event) = MenuEvent::receiver().try_recv() {
-                match event.id.as_ref() {
-                    "update" => actions.push(TrayMenuAction::Update),
-                    "settings" => actions.push(TrayMenuAction::Settings),
-                    "exit" => actions.push(TrayMenuAction::Exit),
-                    _ => {}
-                }
+                actions.extend(
+                    MenuCommand::ALL
+                        .into_iter()
+                        .find(|command| menu_id(*command) == event.id.as_ref()),
+                );
             }
             actions
         }
@@ -672,40 +682,35 @@ mod platform {
             .context("create RGBA tray icon")
     }
 
+    fn menu_id(command: MenuCommand) -> &'static str {
+        match command {
+            MenuCommand::Update => "update",
+            MenuCommand::Settings => "settings",
+            MenuCommand::Exit => "exit",
+        }
+    }
+
     fn make_menu(update_available: bool) -> Result<Menu> {
-        let header = IconMenuItem::new(
-            format!("Codex Minibar - {}", env!("CARGO_PKG_VERSION")),
-            false,
-            None,
-            None,
-        );
-        let settings = MenuItem::with_id("settings", crate::i18n::tr("settings"), true, None);
-        let exit = MenuItem::with_id("exit", crate::i18n::tr("exit"), true, None);
-        if update_available {
-            let update = MenuItem::with_id(
-                "update",
-                crate::i18n::tr("update-available-67fd3a"),
+        let menu = Menu::with_items(&[
+            &IconMenuItem::new(menu_header(), false, None, None),
+            &PredefinedMenuItem::separator(),
+        ])
+        .context("create tray menu")?;
+        for command in MenuCommand::menu(update_available) {
+            menu.append(&MenuItem::with_id(
+                menu_id(command),
+                command.label(),
                 true,
                 None,
-            );
-            return Menu::with_items(&[
-                &header,
-                &PredefinedMenuItem::separator(),
-                &update,
-                &settings,
-                &exit,
-            ])
-            .context("create tray menu");
+            ))
+            .context("create tray menu")?;
         }
-        Menu::with_items(&[&header, &PredefinedMenuItem::separator(), &settings, &exit])
-            .context("create tray menu")
+        Ok(menu)
     }
 }
 
 #[cfg(windows)]
 pub use platform::TrayManager;
-#[cfg(windows)]
-pub use platform::TrayMenuAction;
 
 #[cfg(not(windows))]
 pub struct TrayManager;
@@ -742,7 +747,7 @@ impl TrayManager {
         true
     }
 
-    pub fn drain_menu_actions(&self) -> Vec<TrayMenuAction> {
+    pub fn drain_menu_actions(&self) -> Vec<MenuCommand> {
         Vec::new()
     }
 
@@ -755,20 +760,15 @@ impl TrayManager {
     }
 }
 
-#[cfg(not(windows))]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum TrayMenuAction {
-    Update,
-    Settings,
-    Exit,
-}
-
 #[cfg(test)]
 mod tests {
     use chrono::TimeZone;
 
     use super::*;
-    use crate::{limits::RateLimits, provider_registry::ProviderKind};
+    use crate::{
+        limits::{LimitWindow, RateLimits},
+        provider_registry::ProviderKind,
+    };
 
     #[test]
     fn tray_instances_resolve_independently_and_missing_instances_keep_their_slot() {

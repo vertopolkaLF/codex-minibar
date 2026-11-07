@@ -65,6 +65,18 @@ pub fn countdown(until: DateTime<Utc>, now: DateTime<Utc>) -> String {
     format_minutes((until - now).num_minutes().max(0))
 }
 
+/// Local wall-clock time of a reset, with the weekday once it is not today.
+pub fn reset_clock(reset: DateTime<Utc>) -> String {
+    use chrono::Local;
+    let local = reset.with_timezone(&Local);
+    let time = crate::settings::TimeFormat::current().format_hm(local);
+    if local.date_naive() == Local::now().date_naive() {
+        time
+    } else {
+        format!("{} {time}", local.format("%a"))
+    }
+}
+
 pub fn format_reset_in(reset: Option<DateTime<Utc>>) -> String {
     match reset {
         Some(reset) => countdown(reset, Utc::now()),

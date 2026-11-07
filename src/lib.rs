@@ -19,6 +19,7 @@ pub mod grok;
 mod gui;
 pub mod hotkey;
 pub mod i18n;
+pub mod icons;
 pub mod instances;
 pub mod kiro;
 pub mod limits;

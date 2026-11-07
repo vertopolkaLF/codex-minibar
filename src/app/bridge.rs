@@ -32,7 +32,7 @@ use crate::{
     },
     provider_registry::ProviderKind,
     settings::{NotificationSettings, Settings, TimeFormat, TrayWidget},
-    tray::{TrayManager, TrayMenuAction},
+    tray::{MenuCommand, TrayManager},
     updater::UpdatePhase,
     worker::{UsageAction, WorkerCommand, WorkerEvent},
 };
@@ -464,6 +464,7 @@ impl Bridge {
     /// Explorer animate a remove/add sequence and causes a visible flash.
     fn sync_tray(&mut self, limits: &ProviderLimits) {
         let update_available = matches!(self.update_phase, UpdatePhase::Available(_));
+        crate::taskbar::set_update_available(update_available);
         match self.tray.sync(&self.widgets, limits, update_available) {
             Ok(()) => self.ui.error = None,
             Err(error) => self.ui.set_popup_error(error.to_string()),
@@ -682,20 +683,16 @@ impl Bridge {
                     show_settings_preview();
                     crate::settings_window::open_taskbar();
                 }
-                crate::taskbar::Action::AppSettings => {
-                    show_settings_preview();
-                    crate::settings_window::open();
-                }
                 crate::taskbar::Action::Hide => {
                     crate::settings::store::queue(|settings| {
                         settings.taskbar.enabled = false;
                     });
                 }
-                crate::taskbar::Action::Update => {
-                    // Failures are reported on the update card.
-                    let _ = crate::updater::apply_pending_update();
+                crate::taskbar::Action::App(command) => {
+                    if run_menu_command(command) {
+                        return true;
+                    }
                 }
-                crate::taskbar::Action::Exit => return true,
             }
         }
         false
@@ -724,17 +721,9 @@ impl Bridge {
             }
         }
 
-        for action in self.tray.drain_menu_actions() {
-            match action {
-                TrayMenuAction::Update => {
-                    // Failures are reported on the update card.
-                    let _ = crate::updater::apply_pending_update();
-                }
-                TrayMenuAction::Settings => {
-                    show_settings_preview();
-                    crate::settings_window::open();
-                }
-                TrayMenuAction::Exit => return true,
+        for command in self.tray.drain_menu_actions() {
+            if run_menu_command(command) {
+                return true;
             }
         }
 
@@ -993,6 +982,23 @@ impl Bridge {
 /// live preview, like Settings opened from the popup's footer.
 fn show_settings_preview() {
     crate::popup_window::ensure_shown(Origin::Cursor);
+}
+
+/// The app's own menu commands, from a tray icon or a taskbar widget.
+/// Returns whether the app should exit.
+fn run_menu_command(command: MenuCommand) -> bool {
+    match command {
+        MenuCommand::Update => {
+            // Failures are reported on the update card.
+            let _ = crate::updater::apply_pending_update();
+        }
+        MenuCommand::Settings => {
+            show_settings_preview();
+            crate::settings_window::open();
+        }
+        MenuCommand::Exit => return true,
+    }
+    false
 }
 
 /// Runs the single usage-data wipe on a dedicated thread so the bridge never

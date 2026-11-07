@@ -13,7 +13,86 @@ use crate::{
     limits::{LimitWindow, ProviderLimits, RateLimits},
     provider_registry,
     provider_registry::ProviderKind,
+    settings::{LimitValue, TrayColorMode, TrayIndicator},
 };
+
+pub type Rgb = [u8; 3];
+
+/// Written in place of a value while no data has arrived.
+pub const NO_VALUE: &str = "\u{2014}";
+
+/// The percentage an indicator shows: what is left or what is used.
+pub fn displayed_percent(window: &LimitWindow, value: LimitValue) -> Option<u8> {
+    match value {
+        LimitValue::Remaining => window.remaining_percent(),
+        LimitValue::Used => window.used_percent.map(|used| used.min(100)),
+    }
+}
+
+/// `42%`, or [`NO_VALUE`].
+pub fn percent_text(percent: Option<u8>) -> String {
+    percent.map_or_else(|| NO_VALUE.to_owned(), |value| format!("{value}%"))
+}
+
+/// How urgent a quota is, by what is left of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Status {
+    Critical,
+    Warning,
+    Healthy,
+}
+
+impl Status {
+    pub fn of(remaining: Option<u8>) -> Option<Self> {
+        remaining.map(|remaining| match remaining {
+            0..=15 => Self::Critical,
+            16..=50 => Self::Warning,
+            _ => Self::Healthy,
+        })
+    }
+}
+
+/// The colors one surface draws indicators with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct IndicatorPalette {
+    pub critical: Rgb,
+    pub warning: Rgb,
+    pub healthy: Rgb,
+    pub text: Rgb,
+    pub accent: Rgb,
+}
+
+impl IndicatorPalette {
+    /// The color of `indicator` and whether it is a real tint rather than
+    /// the text color. Status colors follow what is left even when the
+    /// indicator shows what is used.
+    pub fn color(
+        &self,
+        indicator: &TrayIndicator,
+        remaining: Option<u8>,
+        provider_tint: Rgb,
+    ) -> (Rgb, bool) {
+        match indicator.color_mode {
+            TrayColorMode::Status => match Status::of(remaining) {
+                Some(Status::Critical) => (self.critical, true),
+                Some(Status::Warning) => (self.warning, true),
+                Some(Status::Healthy) => (self.healthy, true),
+                None => (self.text, false),
+            },
+            TrayColorMode::Fixed => (
+                [
+                    indicator.fixed_color.red,
+                    indicator.fixed_color.green,
+                    indicator.fixed_color.blue,
+                ],
+                true,
+            ),
+            TrayColorMode::Provider => (provider_tint, true),
+            TrayColorMode::Accent => (self.accent, true),
+            TrayColorMode::Monochrome => (self.text, false),
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct WidgetMetric {
@@ -137,24 +216,32 @@ fn codex_five_hour_reserve_override<'a>(
     limits.luna_reserve().map(|reserve| &reserve.window)
 }
 
+/// Every metric a provider offers, as `(id, label)`: its declared metrics,
+/// then the additional windows it reported.
+pub fn metric_catalog(provider: ProviderKind, limits: &RateLimits) -> Vec<(String, String)> {
+    let mut catalog = provider_registry::descriptor(provider)
+        .metrics
+        .iter()
+        .map(|metric| (metric.id.to_owned(), metric.localized_label().to_owned()))
+        .collect::<Vec<_>>();
+    for additional in &limits.additional_limits {
+        let id = provider_registry::additional_limit_brick_id(provider, &additional.id);
+        if catalog.iter().all(|(known, _)| *known != id) {
+            catalog.push((id, provider_registry::additional_label(additional)));
+        }
+    }
+    catalog
+}
+
 /// Build the shared sanitized snapshot consumed by external widget clients.
 pub fn snapshot(provider: ProviderId, limits: &ProviderLimits) -> ProviderSnapshot {
     let kind = provider.kind();
     let provider_limits = limits.get(provider);
     let descriptor = provider_registry::descriptor(kind);
-    let mut metrics = descriptor
-        .metrics
-        .iter()
-        .filter_map(|metric| metric_snapshot(provider, provider_limits, metric.id))
-        .collect::<Vec<_>>();
-    for additional in provider_limits.additional_limits.iter() {
-        let metric_id = provider_registry::additional_limit_brick_id(kind, &additional.id);
-        if metrics.iter().all(|metric| metric.id != metric_id)
-            && let Some(metric) = metric_snapshot(provider, provider_limits, &metric_id)
-        {
-            metrics.push(metric);
-        }
-    }
+    let metrics = metric_catalog(kind, provider_limits)
+        .into_iter()
+        .filter_map(|(id, _)| metric_snapshot(provider, provider_limits, &id))
+        .collect();
 
     let additional = provider_limits
         .additional_limits

@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use chrono::{DateTime, Duration, Timelike, Utc};
 
 use crate::limits::RateLimits;
+use crate::provider_registry::{self, MetricDescriptor, MetricSource};
 use crate::{instances::ProviderId, settings::NotificationSettings};
 
 /// App User Model ID of the process (taskbar identity of its windows).
@@ -561,13 +562,22 @@ impl LimitNotificationTracker {
             .name
             .clone()
             .unwrap_or_else(|| provider.qualified_name());
+        // The windows the provider declares as quotas; the others stay quiet.
+        let metrics = provider_registry::descriptor(provider.kind()).metrics;
+        let declared = |source| metrics.iter().find(|metric| metric.source == source);
+        let primary_metric = declared(MetricSource::Primary);
+        let secondary_metric = declared(MetricSource::Secondary);
 
         if primary_reset {
             self.startup_low_usage_primary = None;
-            if settings.limits_changed && !defer_primary_reset && notify_five_hour_reset {
+            if let Some(metric) = primary_metric
+                && settings.limits_changed
+                && !defer_primary_reset
+                && notify_five_hour_reset
+            {
                 notify(Notification::limit(
                     NotificationKind::Reset,
-                    crate::i18n::tr("msg-5-hour-limit-reset"),
+                    &reset_title(metric),
                     &name,
                     provider,
                     limits,
@@ -579,10 +589,12 @@ impl LimitNotificationTracker {
         // while the Codex API refreshes, which must not create a reset toast.
         if secondary_reset && can_notify_weekly(limits) {
             self.startup_low_usage_secondary = None;
-            if settings.limits_changed {
+            if let Some(metric) = secondary_metric
+                && settings.limits_changed
+            {
                 notify(Notification::limit(
                     NotificationKind::Reset,
-                    crate::i18n::tr("weekly-limit-reset"),
+                    &reset_title(metric),
                     &name,
                     provider,
                     limits,
@@ -591,10 +603,12 @@ impl LimitNotificationTracker {
             }
         }
 
-        if settings.low_usage_enabled {
+        if let Some(metric) = primary_metric
+            && settings.low_usage_enabled
+        {
             let threshold = settings.low_usage_threshold_percent;
             maybe_notify_low_usage(
-                &crate::i18n::format("name-5-hour", &[("name", name.to_string())]),
+                &window_label(metric, &name),
                 (&name, provider, limits, LimitFocus::Primary),
                 limits.primary.remaining_percent(),
                 limits.primary.resets_at,
@@ -608,9 +622,12 @@ impl LimitNotificationTracker {
                 now,
             );
         }
-        if settings.weekly_low_usage_enabled && can_notify_weekly(limits) {
+        if let Some(metric) = secondary_metric
+            && settings.weekly_low_usage_enabled
+            && can_notify_weekly(limits)
+        {
             let threshold = settings.weekly_low_usage_threshold_percent;
-            let label = secondary_limit_label(limits, &name);
+            let label = secondary_limit_label(metric, limits, &name);
             maybe_notify_low_usage(
                 &label,
                 (&name, provider, limits, LimitFocus::Secondary),
@@ -685,7 +702,16 @@ fn can_notify_five_hour_reset(limits: &RateLimits) -> bool {
     !limits.weekly_exhausted()
 }
 
-fn secondary_limit_label(limits: &RateLimits, name: &str) -> String {
+/// `Codex 5-hour`, `Codex weekly`, `Kiro Monthly credits`.
+fn window_label(metric: &MetricDescriptor, name: &str) -> String {
+    match metric.label_key {
+        "msg-5h-session" => crate::i18n::format("name-5-hour", &[("name", name.to_string())]),
+        "weekly" => crate::i18n::format("name-weekly", &[("name", name.to_string())]),
+        _ => format!("{name} {}", metric.localized_label()),
+    }
+}
+
+fn secondary_limit_label(metric: &MetricDescriptor, limits: &RateLimits, name: &str) -> String {
     if let Some(name) = limits
         .secondary_limit_name
         .as_deref()
@@ -694,7 +720,19 @@ fn secondary_limit_label(limits: &RateLimits, name: &str) -> String {
     {
         return name.to_owned();
     }
-    crate::i18n::format("name-weekly", &[("name", name.to_string())])
+    window_label(metric, name)
+}
+
+fn reset_title(metric: &MetricDescriptor) -> String {
+    match metric.label_key {
+        "msg-5h-session" => crate::i18n::tr("msg-5-hour-limit-reset").to_owned(),
+        "weekly" => crate::i18n::tr("weekly-limit-reset").to_owned(),
+        _ => format!(
+            "{} \u{00b7} {}",
+            metric.localized_label(),
+            crate::i18n::tr("reset")
+        ),
+    }
 }
 
 fn maybe_notify_low_usage(
@@ -765,6 +803,7 @@ mod tests {
     use chrono::TimeZone;
 
     use crate::limits::LimitWindow;
+    use crate::provider_registry::ProviderKind;
 
     use super::*;
 
@@ -807,13 +846,21 @@ mod tests {
             ..Default::default()
         };
 
-        assert_eq!(secondary_limit_label(&limits, "Cursor"), "Cursor Models");
+        let metric = provider_registry::metric(ProviderKind::Cursor, "cursor.auto").unwrap();
+        assert_eq!(
+            secondary_limit_label(metric, &limits, "Cursor"),
+            "Cursor Models"
+        );
     }
 
     #[test]
     fn unnamed_secondary_limit_keeps_weekly_fallback() {
         assert_eq!(
-            secondary_limit_label(&RateLimits::default(), "Codex"),
+            secondary_limit_label(
+                provider_registry::metric(ProviderKind::Codex, "codex.weekly").unwrap(),
+                &RateLimits::default(),
+                "Codex"
+            ),
             "Codex weekly"
         );
     }

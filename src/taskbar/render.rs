@@ -1779,7 +1779,7 @@ impl Renderer {
                         "taskbar-card-resets",
                         &[
                             ("time", crate::format::countdown(reset, now)),
-                            ("clock", super::model::reset_clock(reset)),
+                            ("clock", crate::format::reset_clock(reset)),
                         ],
                     ),
                     _ if row.progress.is_none() => {
@@ -1952,31 +1952,12 @@ impl Renderer {
 
 /// Premultiplied BGRA alpha mask of a monochrome icon, tinted.
 fn rasterize_icon(name: &str, pixels: u32, tint: Rgb) -> Option<Vec<u8>> {
-    use resvg::{tiny_skia, usvg};
-    let source = crate::gui::assets::svg_source(name)?;
-    let svg = crate::gui::assets::normalize_svg(source);
-    let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
-    let size = tree.size();
-    let scale = pixels as f32 / size.width().max(size.height());
-    let mut pixmap = tiny_skia::Pixmap::new(pixels, pixels)?;
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::from_scale(scale, scale),
-        &mut pixmap.as_mut(),
-    );
     Some(
-        pixmap
-            .pixels()
-            .iter()
-            .flat_map(|pixel| {
-                let alpha = u16::from(pixel.alpha());
-                let channel = |value: u8| ((u16::from(value) * alpha + 127) / 255) as u8;
-                [
-                    channel(tint[2]),
-                    channel(tint[1]),
-                    channel(tint[0]),
-                    pixel.alpha(),
-                ]
+        crate::icons::rasterize_alpha(name, pixels)?
+            .into_iter()
+            .flat_map(|alpha| {
+                let channel = |value: u8| ((u16::from(value) * u16::from(alpha) + 127) / 255) as u8;
+                [channel(tint[2]), channel(tint[1]), channel(tint[0]), alpha]
             })
             .collect(),
     )

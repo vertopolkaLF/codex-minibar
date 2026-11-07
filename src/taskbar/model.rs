@@ -4,18 +4,16 @@
 //! renderer, the hover card and the Settings previews all read the same
 //! labels, values and colors.
 
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Utc};
 
 use crate::{
     instances::ProviderId,
     limits::ProviderLimits,
-    settings::{
-        LimitValue, TaskbarResetDisplay, TaskbarWidget, TaskbarWidgetStyle, TimeFormat,
-        TrayColorMode, TrayIndicator,
-    },
+    settings::{LimitValue, TaskbarResetDisplay, TaskbarWidget, TaskbarWidgetStyle, TrayIndicator},
+    widget_data::IndicatorPalette,
 };
 
-pub(crate) type Rgb = [u8; 3];
+pub(crate) use crate::widget_data::Rgb;
 
 /// Everything outside the widget list that changes how widgets look.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -46,15 +44,18 @@ impl Appearance {
     }
 
     /// Fluent system status colors, tuned per theme for contrast.
-    fn status(self, remaining: Option<u8>) -> Rgb {
-        match (remaining, self.light) {
-            (Some(0..=15), false) => [255, 153, 164],
-            (Some(0..=15), true) => [196, 43, 28],
-            (Some(16..=50), false) => [252, 225, 0],
-            (Some(16..=50), true) => [157, 93, 0],
-            (Some(_), false) => [108, 203, 95],
-            (Some(_), true) => [15, 123, 15],
-            (None, _) => self.text(),
+    fn palette(self) -> IndicatorPalette {
+        let (critical, warning, healthy) = if self.light {
+            ([196, 43, 28], [157, 93, 0], [15, 123, 15])
+        } else {
+            ([255, 153, 164], [252, 225, 0], [108, 203, 95])
+        };
+        IndicatorPalette {
+            critical,
+            warning,
+            healthy,
+            text: self.text(),
+            accent: self.accent,
         }
     }
 
@@ -170,39 +171,6 @@ impl WidgetView {
 /// How many steps [`WidgetView::compacted`] takes to the shortest layout.
 pub(crate) const COMPACT_LEVELS: u8 = 5;
 
-/// Local wall-clock time of a reset, with the date once it is not today.
-pub(crate) fn reset_clock(reset: DateTime<Utc>) -> String {
-    let local = reset.with_timezone(&Local);
-    let time = TimeFormat::current().format_hm(local);
-    if local.date_naive() == Local::now().date_naive() {
-        time
-    } else {
-        format!("{} {time}", local.format("%a"))
-    }
-}
-
-fn row_color(
-    indicator: &TrayIndicator,
-    provider: ProviderId,
-    remaining: Option<u8>,
-    appearance: Appearance,
-) -> (Rgb, bool) {
-    match indicator.color_mode {
-        TrayColorMode::Status => (appearance.status(remaining), remaining.is_some()),
-        TrayColorMode::Fixed => (
-            [
-                indicator.fixed_color.red,
-                indicator.fixed_color.green,
-                indicator.fixed_color.blue,
-            ],
-            true,
-        ),
-        TrayColorMode::Provider => (appearance.provider_tint(provider), true),
-        TrayColorMode::Accent => (appearance.accent, true),
-        TrayColorMode::Monochrome => (appearance.text(), false),
-    }
-}
-
 fn icon_for(provider: ProviderId, appearance: Appearance) -> Icon {
     let descriptor = crate::provider_registry::descriptor(provider.kind());
     Icon {
@@ -242,18 +210,18 @@ fn resolve_row(
     let pace = window
         .pace_tip(indicator.limit_value == LimitValue::Used, now)
         .map(|tip| (tip.percent / 100.0) as f32);
-    let remaining = window.remaining_percent();
-    let displayed = match indicator.limit_value {
-        LimitValue::Remaining => remaining,
-        LimitValue::Used => window.used_percent.map(|used| used.min(100)),
-    };
-    let (color, tinted) = row_color(indicator, provider, remaining, appearance);
+    let displayed = crate::widget_data::displayed_percent(&window, indicator.limit_value);
+    let (color, tinted) = appearance.palette().color(
+        indicator,
+        window.remaining_percent(),
+        appearance.provider_tint(provider),
+    );
     Some(Row {
         provider,
         label,
         full_label,
         pace,
-        value: displayed.map_or_else(|| "\u{2014}".to_owned(), |value| format!("{value}%")),
+        value: crate::widget_data::percent_text(displayed),
         progress: displayed.map(|value| f32::from(value) / 100.0),
         color,
         tinted,
@@ -289,7 +257,7 @@ pub(crate) fn resolve(
             .and_then(|at| match reset {
                 TaskbarResetDisplay::Off => None,
                 TaskbarResetDisplay::Countdown => Some(crate::format::countdown(at, now)),
-                TaskbarResetDisplay::Clock => Some(reset_clock(at)),
+                TaskbarResetDisplay::Clock => Some(crate::format::reset_clock(at)),
             });
     }
     let provider = widget.provider();
@@ -416,6 +384,15 @@ fn today_usage(provider: ProviderId, usage: &crate::usage::UsageStatistics) -> O
     })
 }
 
+/// Whether a widget shows: while any instance it reads is enabled.
+pub(crate) fn is_visible(widget: &TaskbarWidget, enabled: &[ProviderId]) -> bool {
+    widget
+        .indicators
+        .iter()
+        .filter_map(TrayIndicator::provider)
+        .any(|provider| enabled.contains(&provider))
+}
+
 /// Widgets that have at least one enabled instance, resolved in order.
 pub(crate) fn resolve_visible(
     widgets: &[TaskbarWidget],
@@ -425,13 +402,7 @@ pub(crate) fn resolve_visible(
 ) -> Vec<WidgetView> {
     widgets
         .iter()
-        .filter(|widget| {
-            widget
-                .indicators
-                .iter()
-                .filter_map(TrayIndicator::provider)
-                .any(|provider| enabled.contains(&provider))
-        })
+        .filter(|widget| is_visible(widget, enabled))
         .map(|widget| resolve(widget, limits, appearance))
         .filter(|view| !view.rows.is_empty())
         .collect()
