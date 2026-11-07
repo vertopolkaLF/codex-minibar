@@ -2173,3 +2173,9 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Pasta 
 
 linux-folder-with-grok-cli = Pasta com o executável grok. Deixe em branco para encontrá-lo automaticamente.
 linux-folder-with-command-code-cli = Pasta com command-code ou cmd. Deixe em branco para encontrá-lo automaticamente.
+
+popup-cost-currency = Moeda dos custos na janela pop-up
+popup-twd-estimate = Estimativa em TWD · 1 USD ≈ NT${ $rate }
+popup-twd-unavailable = Taxa de câmbio indisponível. Valores em USD.
+daily-cost = Custo diário
+cost-by-model = Custo por modelo

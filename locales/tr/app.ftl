@@ -3053,3 +3053,9 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy ç
 
 linux-folder-with-grok-cli = grok yürütülebilir dosyasının bulunduğu klasör. Otomatik bulmak için boş bırakın.
 linux-folder-with-command-code-cli = command-code veya cmd içeren klasör. Otomatik bulmak için boş bırakın.
+
+popup-cost-currency = Açılır penceredeki maliyet para birimi
+popup-twd-estimate = TWD cinsinden tahmin · 1 USD ≈ NT${ $rate }
+popup-twd-unavailable = Döviz kuru kullanılamıyor. Tutarlar USD olarak gösteriliyor.
+daily-cost = Günlük maliyet
+cost-by-model = Modele göre maliyet

@@ -820,7 +820,7 @@ impl PopupRoot {
             palette.font_family.clone(),
             18.0,
             gpui::FontWeight::SEMIBOLD,
-            &format_spend_full(total),
+            &self.ui.cost_display.format(total),
         );
         let label_size = if label_width > DONUT_LABEL_WIDTH {
             ((18.0 * DONUT_LABEL_WIDTH / label_width) * 2.0).floor() / 2.0
@@ -992,7 +992,7 @@ impl PopupRoot {
         let color = self.palette.text_primary;
         self.rolling_label(
             fx::key((scope, "amount", provider)),
-            format_spend_full(spend),
+            self.ui.cost_display.format(spend),
             spend,
             (size, line, gpui::FontWeight::SEMIBOLD, color),
             window,
@@ -1227,27 +1227,9 @@ fn paint_donut(bounds: Bounds<Pixels>, segments: &[(Hsla, f32, f32)], window: &m
     }
 }
 
-pub(super) fn format_spend_full(microusd: u64) -> String {
-    // Integer rounding also preserves cents at the u64 upper bound.
-    let cents = microusd / 10_000 + u64::from(microusd % 10_000 >= 5_000);
-    format!("${}.{:02}", format_thousands(cents / 100), cents % 100)
-}
-
-pub(super) fn format_thousands(value: u64) -> String {
-    let digits = value.to_string();
-    let mut grouped = String::new();
-    for (index, ch) in digits.chars().rev().enumerate() {
-        if index > 0 && index % 3 == 0 {
-            grouped.push(',');
-        }
-        grouped.push(ch);
-    }
-    grouped.chars().rev().collect()
-}
-
 #[cfg(test)]
 mod money_tests {
-    use super::format_spend_full;
+    use crate::currency::CostDisplay;
 
     #[test]
     fn microdollars_keep_cents_through_rounding_and_u64_boundaries() {
@@ -1261,7 +1243,7 @@ mod money_tests {
             (1_299_000_000, "$1,299.00"),
             (u64::MAX, "$18,446,744,073,709.55"),
         ] {
-            assert_eq!(format_spend_full(value), expected);
+            assert_eq!(CostDisplay::Usd.format(value), expected);
         }
     }
 }

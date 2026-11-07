@@ -268,6 +268,11 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
         let mut pending_usage_clear: Option<(u64, Vec<ProviderId>)> = None;
         let mut update_phase = updates.snapshot();
         let mut live_settings = state.settings.clone();
+        let mut exchange_rate = crate::currency::RateRefresh::new(
+            state
+                .activation_path
+                .with_file_name("twd-exchange-rate.json"),
+        );
         let mut ui = UiState {
             provider_errors: state.startup_provider_errors.iter().cloned().collect(),
             last_activation: format_last_activation(&RateLimits::default(), fallback_attempt),
@@ -275,6 +280,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             ..UiState::popup_layout_from_settings(&state.settings)
         };
         ui.apply_settings(&state.settings);
+        ui.cost_display = exchange_rate.tick(live_settings.display_costs_in_twd);
         if let Some(error) = ui.error.as_deref() {
             crate::logger::info(format!("Popup error: {error}"));
         }
@@ -614,6 +620,11 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                 &mut forced_reset_notified_ids,
                 &mut live_settings,
             );
+            let cost_display = exchange_rate.tick(live_settings.display_costs_in_twd);
+            if ui.cost_display != cost_display {
+                ui.cost_display = cost_display;
+                publish_popup_ui(&ui);
+            }
             drain_updates(&mut ui, &mut tray, &mut update_phase, &mut widgets);
             auto_reset.poll(&live_settings, &state);
             if crate::game_mode::take_transition() {

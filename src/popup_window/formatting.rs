@@ -53,14 +53,18 @@ pub(crate) fn format_token_count(tokens: u64) -> String {
 }
 
 pub(crate) fn format_usd(value: f64) -> String {
-    let amount = format!("{value:.2}");
-    let Some((dollars, cents)) = amount.split_once('.') else {
-        return format!("${amount}");
-    };
-    format!("${}.{cents}", group_integer_digits(dollars))
+    format_money("$", value)
 }
 
-fn group_integer_digits(integer: &str) -> String {
+pub(crate) fn format_money(symbol: &str, value: f64) -> String {
+    let amount = format!("{value:.2}");
+    let Some((dollars, cents)) = amount.split_once('.') else {
+        return format!("{symbol}{amount}");
+    };
+    format!("{symbol}{}.{cents}", group_integer_digits(dollars))
+}
+
+pub(crate) fn group_integer_digits(integer: &str) -> String {
     let (sign, digits) = integer
         .strip_prefix('-')
         .map_or(("", integer), |digits| ("-", digits));

@@ -19,11 +19,11 @@ use gpui::{
 use super::{
     components::{self, caption, card, nowrap},
     fx,
-    home::{format_spend_full, format_thousands},
     root::{PopupRoot, SnapshotSlot, eid},
     theme::Palette,
     tooltip::{ChartTip, TipContent},
 };
+use crate::currency::CostDisplay;
 use crate::popup_window::*;
 use crate::{
     usage::TokenUsage,
@@ -664,7 +664,7 @@ impl PopupRoot {
         let palette = self.palette.clone();
         let metric = self.overview_metric;
         let headline = match metric {
-            OverviewMetric::Cost => format_total_cost(&snapshot.totals),
+            OverviewMetric::Cost => format_usage_cost(&snapshot.totals, self.ui.cost_display),
             OverviewMetric::Tokens => format_token_count(snapshot.totals.total_tokens()),
         };
         let mut meta =
@@ -824,7 +824,7 @@ impl PopupRoot {
         let palette = self.palette.clone();
         let provider = entry.provider;
         let value = match metric {
-            OverviewMetric::Cost => format_usage_cost(&entry.usage),
+            OverviewMetric::Cost => format_usage_cost(&entry.usage, self.ui.cost_display),
             OverviewMetric::Tokens => format_token_count(entry.usage.total_tokens()),
         };
         let share = match metric {
@@ -833,7 +833,7 @@ impl PopupRoot {
         };
         let other = match metric {
             OverviewMetric::Cost => format_token_count(entry.usage.total_tokens()),
-            OverviewMetric::Tokens => format_usage_cost(&entry.usage),
+            OverviewMetric::Tokens => format_usage_cost(&entry.usage, self.ui.cost_display),
         };
         let detail = if entry.excluded {
             crate::i18n::format("excluded-other", &[("other", other.to_string())])
@@ -899,7 +899,7 @@ impl PopupRoot {
         ]
         .map(|(id, value, money)| {
             let text = if money {
-                format_spend(value)
+                self.ui.cost_display.format(value)
             } else {
                 format_token_count(value)
             };
@@ -1067,7 +1067,7 @@ impl PopupRoot {
                     palette.font_family.clone(),
                     12.0,
                     FontWeight::NORMAL,
-                    &format_axis_value(*value, metric),
+                    &format_axis_value(*value, metric, self.ui.cost_display),
                 )
             })
             .fold(CHART_Y_AXIS_WIDTH, f32::max)
@@ -1088,7 +1088,7 @@ impl PopupRoot {
                     .right_0()
                     .top(px(top))
                     .child(nowrap(caption(
-                        format_axis_value(value, metric),
+                        format_axis_value(value, metric, self.ui.cost_display),
                         palette.text_tertiary,
                     ))),
             );
@@ -1150,15 +1150,17 @@ impl PopupRoot {
         } else {
             crate::i18n::month_day(point.date)
         };
-        let mut total_cents = 0_u64;
+        let display = self.ui.cost_display;
+        let mut total_cents = 0_u128;
         let mut total_tokens = 0_u64;
         let mut rows = Vec::new();
         for provider in providers {
             let value = point.by_provider.get(provider).copied().unwrap_or(0);
             let (amount, hidden) = match metric {
                 OverviewMetric::Cost => {
-                    total_cents = total_cents.saturating_add(spend_display_cents(value));
-                    (format_spend_full(value), spend_display_cents(value) == 0)
+                    let cents = display.cents(value);
+                    total_cents = total_cents.saturating_add(cents);
+                    (display.format_cents(cents), cents == 0)
                 }
                 OverviewMetric::Tokens => {
                     total_tokens = total_tokens.saturating_add(value);
@@ -1176,7 +1178,7 @@ impl PopupRoot {
             ));
         }
         let total = match metric {
-            OverviewMetric::Cost => format_spend_from_cents(total_cents),
+            OverviewMetric::Cost => display.format_cents(total_cents),
             OverviewMetric::Tokens => format_token_count(total_tokens),
         };
         ChartTip { title, rows, total }
@@ -1228,6 +1230,7 @@ impl PopupRoot {
                 &snapshot.model_rows,
                 &palette,
                 colored,
+                self.ui.cost_display,
                 &mut |_, content| content.into_any_element(),
             ),
             BreakdownMode::Project if snapshot.project_rows.is_empty() => div().child(caption(
@@ -1239,11 +1242,16 @@ impl PopupRoot {
                 &snapshot.project_rows,
                 &palette,
                 colored,
+                self.ui.cost_display,
                 &mut |row, content| self.project_row(row, content, cx),
             ),
-            BreakdownMode::Day => {
-                day_breakdown_table(snapshot, self.overview_metric, &palette, colored)
-            }
+            BreakdownMode::Day => day_breakdown_table(
+                snapshot,
+                self.overview_metric,
+                &palette,
+                colored,
+                self.ui.cost_display,
+            ),
         };
         usage_card(&palette)
             .gap(px(14.0))
@@ -1432,6 +1440,7 @@ fn breakdown_table(
     rows: &[BreakdownRow],
     palette: &Palette,
     colored: bool,
+    display: CostDisplay,
     wrap_row: &mut dyn FnMut(&BreakdownRow, gpui::Div) -> AnyElement,
 ) -> gpui::Div {
     let header = div()
@@ -1495,7 +1504,7 @@ fn breakdown_table(
                 .child(div().flex_1().min_w_0().child(title))
                 .child(cell(
                     56.0,
-                    caption(format_spend(row.cost_microusd), palette.text_primary),
+                    caption(display.format(row.cost_microusd), palette.text_primary),
                 ))
                 .child(cell(
                     44.0,
@@ -1520,6 +1529,7 @@ fn day_breakdown_table(
     metric: OverviewMetric,
     palette: &Palette,
     colored: bool,
+    display: CostDisplay,
 ) -> gpui::Div {
     let providers: Vec<ProviderId> = snapshot
         .providers
@@ -1598,8 +1608,8 @@ fn day_breakdown_table(
             let value = row.by_provider.get(provider);
             let text = match metric {
                 OverviewMetric::Cost => value
-                    .map(format_usage_day_cost)
-                    .unwrap_or_else(|| "$0".into()),
+                    .map(|usage| format_usage_cost(usage, display))
+                    .unwrap_or_else(|| format!("{}0", display.symbol())),
                 OverviewMetric::Tokens => {
                     format_token_count(value.map(TokenUsage::total_tokens).unwrap_or(0))
                 }
@@ -1607,7 +1617,7 @@ fn day_breakdown_table(
             line = line.child(cell(provider_col, caption(text, palette.text_primary)));
         }
         let total = match metric {
-            OverviewMetric::Cost => format_breakdown_cost(row),
+            OverviewMetric::Cost => format_breakdown_cost(row, display),
             OverviewMetric::Tokens => format_token_count(row.tokens),
         };
         line = line.child(cell(56.0, caption(total, palette.text_primary)));
@@ -1944,59 +1954,27 @@ fn chart_scale_max(raw_max: u64) -> u64 {
     (raw_max as f64 * 1.10).ceil().max(1.0) as u64
 }
 
-fn format_axis_value(value: u64, metric: OverviewMetric) -> String {
+fn format_axis_value(value: u64, metric: OverviewMetric, display: CostDisplay) -> String {
     match metric {
-        OverviewMetric::Cost => format_spend(value),
+        OverviewMetric::Cost => display.format(value),
         OverviewMetric::Tokens => format_token_count(value),
     }
 }
 
-fn format_spend(microusd: u64) -> String {
-    format_spend_full(microusd)
-}
-
-fn format_total_cost(usage: &TokenUsage) -> String {
+fn format_usage_cost(usage: &TokenUsage, display: CostDisplay) -> String {
     if usage.requests > 0 && usage.priced_requests == 0 {
         "—".into()
     } else {
-        format_spend_full(usage.estimated_cost_microusd)
+        display.format(usage.estimated_cost_microusd)
     }
 }
 
-fn format_usage_cost(usage: &TokenUsage) -> String {
-    if usage.requests > 0 && usage.priced_requests == 0 {
-        "—".into()
-    } else {
-        format_spend(usage.estimated_cost_microusd)
-    }
-}
-
-fn format_usage_day_cost(usage: &TokenUsage) -> String {
-    if usage.requests > 0 && usage.priced_requests == 0 {
-        "—".into()
-    } else {
-        format_day_cost(usage.estimated_cost_microusd)
-    }
-}
-
-fn format_breakdown_cost(row: &BreakdownRow) -> String {
+fn format_breakdown_cost(row: &BreakdownRow, display: CostDisplay) -> String {
     if row.requests > 0 && row.priced_requests == 0 {
         "—".into()
     } else {
-        format_spend(row.cost_microusd)
+        display.format(row.cost_microusd)
     }
-}
-
-fn format_day_cost(microusd: u64) -> String {
-    format_spend_full(microusd)
-}
-
-fn spend_display_cents(microusd: u64) -> u64 {
-    microusd / 10_000 + u64::from(microusd % 10_000 >= 5_000)
-}
-
-fn format_spend_from_cents(cents: u64) -> String {
-    format!("${}.{:02}", format_thousands(cents / 100), cents % 100)
 }
 
 #[cfg(test)]
@@ -2086,8 +2064,8 @@ mod tests {
 
     #[test]
     fn day_costs_keep_full_dollars_and_cents() {
-        assert_eq!(format_day_cost(0), "$0.00");
-        assert_eq!(format_day_cost(1_234_567), "$1.23");
-        assert_eq!(format_day_cost(1_500_000_000), "$1,500.00");
+        assert_eq!(CostDisplay::Usd.format(0), "$0.00");
+        assert_eq!(CostDisplay::Usd.format(1_234_567), "$1.23");
+        assert_eq!(CostDisplay::Usd.format(1_500_000_000), "$1,500.00");
     }
 }

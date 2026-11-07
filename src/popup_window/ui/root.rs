@@ -2672,6 +2672,32 @@ impl PopupRoot {
             PopupView::Usage => body.push(self.render_usage_page(window, cx)),
             other => body.extend(self.render_provider_page(other, window, cx)),
         }
+        if ui.cost_display != crate::currency::CostDisplay::Usd {
+            let text = match ui.cost_display {
+                crate::currency::CostDisplay::Twd(rate) => crate::i18n::format(
+                    "popup-twd-estimate",
+                    &[("rate", format!("{:.4}", rate.per_usd()))],
+                ),
+                _ => crate::i18n::tr("popup-twd-unavailable").into(),
+            };
+            body.push(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(components::caption(text, palette.text_tertiary))
+                    .child(
+                        div()
+                            .id("exchange-rate-source")
+                            .cursor_pointer()
+                            .on_click(|_, _, cx| cx.open_url(crate::currency::SOURCE_URL))
+                            .child(components::caption(
+                                "Rates By Exchange Rate API",
+                                palette.accent_text,
+                            )),
+                    )
+                    .into_any_element(),
+            );
+        }
         if !model::any_provider_enabled(&ui) {
             body.push(
                 components::info_bar(

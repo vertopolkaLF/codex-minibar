@@ -3081,3 +3081,9 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Пап
 
 linux-folder-with-grok-cli = Папка с исполняемым файлом grok. Оставьте пустым для автоматического поиска.
 linux-folder-with-command-code-cli = Папка с command-code или cmd. Оставьте пустым для автоматического поиска.
+
+popup-cost-currency = Валюта расходов во всплывающем окне
+popup-twd-estimate = Оценка в TWD · 1 USD ≈ NT${ $rate }
+popup-twd-unavailable = Курс недоступен. Расходы показаны в USD.
+daily-cost = Расходы за день
+cost-by-model = Расходы по моделям

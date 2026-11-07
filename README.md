@@ -60,6 +60,12 @@ what shows on Home.
 The Usage tab scans local provider history for animated cost and token charts, per-model
 breakdowns, provider rankings and a spend donut on Home. Everything stays on your PC.
 
+Under **Settings → General → Popup cost currency**, choose USD (default) or
+TWD for estimated usage costs in the popup. TWD uses the latest daily USD/TWD
+rate from [ExchangeRate-API](https://www.exchangerate-api.com), including for
+historical usage. When offline, the popup uses the last cached rate or shows USD
+if it has never received a rate. Stored costs and provider billing stay in USD.
+
 <p align="center">
   <img src="docs/media/1.0.0/usage.webp" alt="Usage tab with cost and token charts">
 </p>
