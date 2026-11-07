@@ -165,7 +165,7 @@ pub(crate) fn provider_cards<'a>(
     is_first: bool,
     show_icon: bool,
     limits: &'a RateLimits,
-    forced_resets: &'a [crate::reset_feed::AnnouncedReset],
+    forced_resets: &'a [crate::reset_detection::AnnouncedReset],
     options: &CardOptions<'_>,
 ) -> Vec<Card<'a>> {
     let kind = provider.kind();
@@ -445,7 +445,7 @@ pub(crate) enum AnnouncedResetPhase {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct AnnouncedResetRow<'a> {
     pub provider: ProviderId,
-    pub reset: &'a crate::reset_feed::AnnouncedReset,
+    pub reset: &'a crate::reset_detection::AnnouncedReset,
     pub phase: AnnouncedResetPhase,
 }
 
@@ -453,13 +453,13 @@ pub(crate) struct AnnouncedResetRow<'a> {
 /// forced reset reached the account, because the later one restored the
 /// same limits.
 pub(crate) fn visible_announced_resets(
-    resets: &[crate::reset_feed::AnnouncedReset],
+    resets: &[crate::reset_detection::AnnouncedReset],
     provider: ProviderId,
     now: DateTime<Utc>,
 ) -> Vec<AnnouncedResetRow<'_>> {
-    use crate::reset_feed::ResetKind;
+    use crate::reset_detection::ResetKind;
     let instance = provider.id();
-    let superseded = |reset: &crate::reset_feed::AnnouncedReset| {
+    let superseded = |reset: &crate::reset_detection::AnnouncedReset| {
         reset.kind == ResetKind::Forced
             && resets.iter().any(|later| {
                 later.kind == ResetKind::Forced

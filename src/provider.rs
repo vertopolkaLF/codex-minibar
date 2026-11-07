@@ -3,6 +3,7 @@ use std::{collections::HashMap, path::PathBuf, sync::mpsc::Sender, thread, time:
 use anyhow::{Context, Result, anyhow};
 
 use crate::{
+    app_event::{AppEvent, ProviderEvent},
     instances::{Capabilities, ProviderId, ProviderInstance},
     settings::Settings,
     worker::{WorkerEvent, WorkerHandle, WorkerOptions},
@@ -15,7 +16,7 @@ pub type ProviderWorkers = HashMap<ProviderId, WorkerHandle>;
 pub fn start_enabled_workers(
     settings: &Settings,
     activation_path: PathBuf,
-    events: Sender<WorkerEvent>,
+    events: Sender<AppEvent>,
 ) -> (ProviderWorkers, Vec<(ProviderId, String)>) {
     let mut workers = ProviderWorkers::new();
     let mut errors = Vec::new();
@@ -40,7 +41,7 @@ pub fn start_provider_worker(
     provider: ProviderId,
     settings: &Settings,
     activation_path: PathBuf,
-    events: Sender<WorkerEvent>,
+    events: Sender<AppEvent>,
 ) -> Result<WorkerHandle> {
     let instance = settings
         .instance(provider)
@@ -73,62 +74,12 @@ pub fn start_provider_worker(
             {
                 continue;
             }
-            let mapped =
-                match event {
-                    WorkerEvent::RequestStarted(kind) => Some(WorkerEvent::ProviderRequestStarted(
-                        provider,
-                        worker_revision,
-                        kind,
-                    )),
-                    WorkerEvent::RequestFinished(kind) => Some(
-                        WorkerEvent::ProviderRequestFinished(provider, worker_revision, kind),
-                    ),
-                    WorkerEvent::LimitsUpdated(limits) => Some(WorkerEvent::ProviderLimitsUpdated(
-                        provider,
-                        worker_revision,
-                        limits,
-                    )),
-                    WorkerEvent::UsageUpdated(usage) => Some(WorkerEvent::ProviderUsageUpdated(
-                        provider,
-                        worker_revision,
-                        usage,
-                    )),
-                    WorkerEvent::UsageLoadedFromCache(usage) => Some(
-                        WorkerEvent::ProviderUsageLoadedFromCache(provider, worker_revision, usage),
-                    ),
-                    WorkerEvent::UsageDataCleared(generation) => {
-                        // This acknowledges a clear command sent to this exact
-                        // worker. Keep the clear generation across a worker
-                        // replacement so the bridge can finish its barrier.
-                        Some(WorkerEvent::ProviderUsageDataCleared(provider, generation))
-                    }
-                    WorkerEvent::UsageRefreshFailed(error) => Some(
-                        WorkerEvent::ProviderUsageRefreshFailed(provider, worker_revision, error),
-                    ),
-                    WorkerEvent::ActivationStarted => Some(WorkerEvent::ProviderActivationStarted(
-                        provider,
-                        worker_revision,
-                    )),
-                    WorkerEvent::ActivationSucceeded => Some(
-                        WorkerEvent::ProviderActivationSucceeded(provider, worker_revision),
-                    ),
-                    WorkerEvent::ActivationFailed(error) => Some(
-                        WorkerEvent::ProviderActivationFailed(provider, worker_revision, error),
-                    ),
-                    WorkerEvent::PollFailed(error) => Some(WorkerEvent::ProviderPollFailed(
-                        provider,
-                        worker_revision,
-                        error,
-                    )),
-                    WorkerEvent::Stopped => None,
-                    // Only the worker itself emits unscoped events. Passing any
-                    // already-scoped value through avoids silently losing data if
-                    // a future provider delegates another coordinator.
-                    event => Some(event),
-                };
-            if let Some(event) = mapped
-                && events.send(event).is_err()
-            {
+            let event = AppEvent::Provider(ProviderEvent {
+                provider,
+                revision: worker_revision,
+                event,
+            });
+            if events.send(event).is_err() {
                 break;
             }
         }

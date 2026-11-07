@@ -1445,7 +1445,7 @@ fn login_notices_offer_sign_in_only_where_minibar_can_sign_in() {
 
 #[test]
 fn announced_reset_rows_track_reception_per_instance() {
-    use crate::reset_feed::{AnnouncedReset, ResetKind, ResetTiming};
+    use crate::reset_detection::{AnnouncedReset, ResetKind, ResetTiming};
     let now = Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap();
     let codex = id(ProviderKind::Codex);
     let other = ProviderId::new(ProviderKind::Codex, "codex-work");

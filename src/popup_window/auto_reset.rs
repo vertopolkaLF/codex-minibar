@@ -13,11 +13,11 @@ use std::{
 use chrono::{DateTime, Utc};
 
 use super::state::{AppState, refresh_all_workers};
+use crate::app_event::AppEvent;
 use crate::banked_reset::{AutoResetChoice, Outcome};
 use crate::instances::{Capabilities, ProviderId, ProviderInstance};
 use crate::limits::{ProviderLimits, RateLimits};
 use crate::settings::{AutoResetLead, Settings};
-use crate::worker::WorkerEvent;
 
 /// The bridge ticks every 16–250 ms; quota snapshots change far less often.
 const CHECK_INTERVAL: Duration = Duration::from_secs(5);
@@ -331,13 +331,11 @@ impl AutoReset {
             // The worker revision check drops this snapshot if the
             // instance's login changed while the request ran.
             if let Ok((_, Ok(limits))) = result {
-                let _ = state
-                    .worker_events_tx
-                    .send(WorkerEvent::ProviderLimitsUpdated(
-                        provider,
-                        instance.credentials_revision,
-                        limits,
-                    ));
+                let _ = state.worker_events_tx.send(AppEvent::limits(
+                    provider,
+                    instance.credentials_revision,
+                    limits,
+                ));
             }
             // Sibling instances sharing the account see the spent credit.
             refresh_all_workers(&state.worker_commands());

@@ -26,7 +26,7 @@ use crate::popup_window::{
     *,
 };
 use crate::{
-    reset_feed::AnnouncedReset,
+    reset_detection::AnnouncedReset,
     usage_overview::{BreakdownMode, OverviewMetric, OverviewRange, OverviewSnapshot},
 };
 
@@ -1652,7 +1652,7 @@ impl PopupRoot {
                         this.state.record_banked_reset_use(provider);
                     }
                     if let Ok((_, Ok(limits))) = &result {
-                        let _ = events.send(WorkerEvent::ProviderLimitsUpdated(
+                        let _ = events.send(crate::app_event::AppEvent::limits(
                             provider,
                             revision,
                             limits.clone(),

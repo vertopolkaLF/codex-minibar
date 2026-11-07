@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, mpsc};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
+    app_event::AppEvent,
     app_paths, notifications,
     popup_window::AppState,
     provider::start_enabled_workers,
@@ -16,7 +17,6 @@ use codex_minibar::{
     updater::{
         UpdateController, show_post_update_success_if_needed, sync_installed_display_version,
     },
-    worker::WorkerEvent,
 };
 
 fn run() -> Result<()> {
@@ -63,17 +63,20 @@ fn run() -> Result<()> {
             }
         };
 
-    let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
-    let reset_feed_worker = reset_feed::start_worker(
-        &settings,
-        app_paths::reset_feed_cache()?,
-        worker_events_tx.clone(),
-    );
-    let provider_status_worker = provider_status::start_worker(
-        &settings,
-        app_paths::provider_status_cache()?,
-        worker_events_tx.clone(),
-    );
+    let (worker_events_tx, worker_events_rx) = mpsc::channel::<AppEvent>();
+    let reset_feed_worker = reset_feed::start_worker(&settings, app_paths::reset_feed_cache()?, {
+        let events = worker_events_tx.clone();
+        move |snapshot| {
+            let _ = events.send(AppEvent::ForcedResetsUpdated(snapshot));
+        }
+    });
+    let provider_status_worker =
+        provider_status::start_worker(&settings, app_paths::provider_status_cache()?, {
+            let events = worker_events_tx.clone();
+            move |snapshot| {
+                let _ = events.send(AppEvent::ProviderStatusUpdated(snapshot));
+            }
+        });
     let hydrated_limits = store::shared()
         .and_then(|shared| {
             let store = shared

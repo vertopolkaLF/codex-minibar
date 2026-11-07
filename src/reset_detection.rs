@@ -26,7 +26,52 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::limits::{LimitWindow, RateLimits};
-use crate::reset_feed::{AnnouncedReset, ResetKind, ResetTiming};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetKind {
+    /// Everyone's limits are reset.
+    #[default]
+    Forced,
+    /// Everyone receives a banked reset credit to spend later.
+    Banked,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResetTiming {
+    /// Lands at `reset_at`.
+    #[default]
+    Exact,
+    /// Lands at some point before `reset_at`, which is only a deadline.
+    Before,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnnouncedReset {
+    /// Stable bot-generated identity. It must not change when the description
+    /// or the timestamp is corrected.
+    pub id: String,
+    #[serde(default)]
+    pub kind: ResetKind,
+    #[serde(default)]
+    pub timing: ResetTiming,
+    /// Optional HTTPS page where the announcement can be verified by the user.
+    #[serde(default)]
+    pub source_url: Option<String>,
+    /// Optional human-readable context, for example "weekly quota".
+    #[serde(default)]
+    pub label: Option<String>,
+    /// ISO-8601 timestamp in UTC. A deadline for [`ResetTiming::Before`].
+    pub reset_at: DateTime<Utc>,
+    /// Optional start of the landing window of a [`ResetTiming::Before`]
+    /// announcement.
+    #[serde(default)]
+    pub not_before: Option<DateTime<Utc>>,
+    /// Instance id -> when this client detected the reset on that account.
+    #[serde(default)]
+    pub received: BTreeMap<String, DateTime<Utc>>,
+}
 
 /// An exact announcement may land slightly ahead of the posted time.
 const EXACT_EARLY_SLACK: Duration = Duration::minutes(15);

@@ -24,9 +24,8 @@ use serde::{Deserialize, Serialize};
 use ureq::Agent;
 
 use crate::{
-    reset_detection::{Observation, Track},
+    reset_detection::{AnnouncedReset, Observation, ResetKind, ResetTiming, Track},
     settings::Settings,
-    worker::WorkerEvent,
 };
 
 pub const FEED_URL: &str =
@@ -44,52 +43,6 @@ const TRACK_RETENTION: chrono::Duration = chrono::Duration::days(8);
 /// Unchanged detection history is written at most this often; it is also
 /// flushed on shutdown.
 const TRACK_SAVE_INTERVAL: Duration = Duration::from_secs(60);
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResetKind {
-    /// Everyone's limits are reset.
-    #[default]
-    Forced,
-    /// Everyone receives a banked reset credit to spend later.
-    Banked,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ResetTiming {
-    /// Lands at `reset_at`.
-    #[default]
-    Exact,
-    /// Lands at some point before `reset_at`, which is only a deadline.
-    Before,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnnouncedReset {
-    /// Stable bot-generated identity. It must not change when the description
-    /// or the timestamp is corrected.
-    pub id: String,
-    #[serde(default)]
-    pub kind: ResetKind,
-    #[serde(default)]
-    pub timing: ResetTiming,
-    /// Optional HTTPS page where the announcement can be verified by the user.
-    #[serde(default)]
-    pub source_url: Option<String>,
-    /// Optional human-readable context, for example "weekly quota".
-    #[serde(default)]
-    pub label: Option<String>,
-    /// ISO-8601 timestamp in UTC. A deadline for [`ResetTiming::Before`].
-    pub reset_at: DateTime<Utc>,
-    /// Optional start of the landing window of a [`ResetTiming::Before`]
-    /// announcement.
-    #[serde(default)]
-    pub not_before: Option<DateTime<Utc>>,
-    /// Instance id -> when this client detected the reset on that account.
-    #[serde(default)]
-    pub received: BTreeMap<String, DateTime<Utc>>,
-}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResetFeedSnapshot {
@@ -166,12 +119,20 @@ fn default_schema_version() -> u8 {
 pub fn start_worker(
     settings: &Settings,
     cache_path: PathBuf,
-    events: mpsc::Sender<WorkerEvent>,
+    publish: impl Fn(ResetFeedSnapshot) + Send + 'static,
 ) -> ResetFeedWorker {
     let (commands, command_receiver) = mpsc::channel();
     let enabled = settings.notifications.forced_reset_feed_enabled;
     let interval = Duration::from_secs(settings.reset_announcement_refresh_interval.seconds());
-    let join = thread::spawn(move || run(enabled, interval, cache_path, command_receiver, events));
+    let join = thread::spawn(move || {
+        run(
+            enabled,
+            interval,
+            cache_path,
+            command_receiver,
+            Box::new(publish),
+        )
+    });
     ResetFeedWorker {
         commands,
         join: Some(join),
@@ -276,12 +237,19 @@ struct Worker {
     enabled: bool,
     cache_path: PathBuf,
     cache: ResetFeedCache,
-    events: mpsc::Sender<WorkerEvent>,
+    publish: Box<dyn Fn(ResetFeedSnapshot) + Send>,
     tracks_dirty: bool,
     last_save: Instant,
 }
 
 impl Worker {
+    fn send_snapshot(&self, cache: &ResetFeedCache) {
+        (self.publish)(ResetFeedSnapshot {
+            resets: cache.resets.clone(),
+            notified_ids: cache.notified_ids.clone(),
+        });
+    }
+
     fn save(&mut self) {
         match save_cache(&self.cache_path, &self.cache) {
             Ok(()) => {
@@ -294,13 +262,13 @@ impl Worker {
 
     fn publish(&self) {
         if self.enabled {
-            send_snapshot(&self.events, &self.cache);
+            self.send_snapshot(&self.cache);
         } else {
             // Keep the cache on disk for a fast re-enable, but make the
             // live surface empty immediately while this option is off.
             let mut hidden = self.cache.clone();
             hidden.resets.clear();
-            send_snapshot(&self.events, &hidden);
+            self.send_snapshot(&hidden);
         }
     }
 
@@ -341,7 +309,7 @@ fn run(
     mut refresh_interval: Duration,
     cache_path: PathBuf,
     commands: mpsc::Receiver<ResetFeedCommand>,
-    events: mpsc::Sender<WorkerEvent>,
+    publish: Box<dyn Fn(ResetFeedSnapshot) + Send>,
 ) {
     let cache = load_cache(&cache_path, Utc::now());
     crate::logger::info(format!(
@@ -356,7 +324,7 @@ fn run(
         enabled,
         cache_path,
         cache,
-        events,
+        publish,
         tracks_dirty: false,
         last_save: Instant::now(),
     };
@@ -386,9 +354,6 @@ fn run(
                 }
                 Err(error) => {
                     crate::logger::info(format!("Codex reset feed refresh failed: {error:#}"));
-                    let _ = worker
-                        .events
-                        .send(WorkerEvent::ForcedResetsRefreshFailed(error.to_string()));
                 }
             }
             next_refresh = Instant::now() + refresh_interval;
@@ -544,13 +509,6 @@ fn save_cache(path: &Path, cache: &ResetFeedCache) -> Result<()> {
     let content = serde_json::to_vec_pretty(cache).context("serialize Codex reset feed cache")?;
     fs::write(path, content).with_context(|| format!("write {}", path.display()))?;
     Ok(())
-}
-
-fn send_snapshot(events: &mpsc::Sender<WorkerEvent>, cache: &ResetFeedCache) {
-    let _ = events.send(WorkerEvent::ForcedResetsUpdated(ResetFeedSnapshot {
-        resets: cache.resets.clone(),
-        notified_ids: cache.notified_ids.clone(),
-    }));
 }
 
 fn sort_resets(resets: &mut [AnnouncedReset]) {

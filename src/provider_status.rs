@@ -23,7 +23,6 @@ use ureq::Agent;
 use crate::{
     provider_registry::{ProviderKind, StatusApi, StatusPage, StatusRelevance},
     settings::Settings,
-    worker::WorkerEvent,
 };
 
 const USER_AGENT: &str = "codex-minibar-provider-status";
@@ -221,11 +220,11 @@ impl ProviderStatusWorker {
 pub fn start_worker(
     settings: &Settings,
     cache_path: PathBuf,
-    events: mpsc::Sender<WorkerEvent>,
+    publish: impl Fn(ProviderStatusSnapshot) + Send + 'static,
 ) -> ProviderStatusWorker {
     let (commands, command_receiver) = mpsc::channel();
     let watched = watched_kinds(settings);
-    thread::spawn(move || run(watched, cache_path, command_receiver, events));
+    thread::spawn(move || run(watched, cache_path, command_receiver, publish));
     ProviderStatusWorker { commands }
 }
 
@@ -244,7 +243,7 @@ fn run(
     mut watched: Vec<ProviderKind>,
     cache_path: PathBuf,
     commands: mpsc::Receiver<ProviderStatusCommand>,
-    events: mpsc::Sender<WorkerEvent>,
+    publish: impl Fn(ProviderStatusSnapshot),
 ) {
     let mut cache = load_cache(&cache_path);
     let mut known = HashMap::<ProviderKind, Known>::new();
@@ -282,7 +281,7 @@ fn run(
                     }
                 }
             }
-            send_snapshot(&events, &watched, &known, &cache);
+            send_snapshot(&publish, &watched, &known, &cache);
             next_refresh = Instant::now() + REFRESH_INTERVAL;
             continue;
         }
@@ -302,7 +301,7 @@ fn run(
                 known.retain(|kind, _| watched.contains(kind));
                 // Removed drivers disappear at once; added ones are fetched
                 // right away instead of waiting for the next tick.
-                send_snapshot(&events, &watched, &known, &cache);
+                send_snapshot(&publish, &watched, &known, &cache);
                 if added {
                     next_refresh = Instant::now();
                 }
@@ -330,7 +329,7 @@ fn run(
 }
 
 fn send_snapshot(
-    events: &mpsc::Sender<WorkerEvent>,
+    publish: &impl Fn(ProviderStatusSnapshot),
     watched: &[ProviderKind],
     known: &HashMap<ProviderKind, Known>,
     cache: &NotifiedCache,
@@ -340,10 +339,10 @@ fn send_snapshot(
         .filter_map(|source| known.get(&source.kind))
         .map(|known| known.status.clone())
         .collect();
-    let _ = events.send(WorkerEvent::ProviderStatusUpdated(ProviderStatusSnapshot {
+    publish(ProviderStatusSnapshot {
         statuses,
         notified_ids: cache.notified_ids.clone(),
-    }));
+    });
 }
 
 fn fetch(agent: &Agent, source: &Source) -> Result<ProviderStatus> {

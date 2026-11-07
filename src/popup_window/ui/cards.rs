@@ -1782,7 +1782,7 @@ impl PopupRoot {
         row: &AnnouncedResetRow<'_>,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use crate::reset_feed::{ResetKind, ResetTiming};
+        use crate::reset_detection::{ResetKind, ResetTiming};
         /// Edge padding, also used between the tile and the text.
         const INSET: f32 = 12.0;
         /// Title line + line gap + caption line, so the tile spans the text

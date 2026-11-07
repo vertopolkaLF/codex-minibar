@@ -172,6 +172,9 @@ pub enum RequestKind {
     Usage,
 }
 
+/// Output of one provider worker. The coordinator scopes it to the instance
+/// that emitted it (see `crate::app_event::ProviderEvent`).
+#[allow(clippy::large_enum_variant)] // moved once through a channel
 #[derive(Clone, Debug)]
 pub enum WorkerEvent {
     RequestStarted(RequestKind),
@@ -181,39 +184,15 @@ pub enum WorkerEvent {
     /// A persisted usage snapshot loaded without contacting the provider.
     /// Cached diagnostics must not become a live provider error on startup.
     UsageLoadedFromCache(UsageStatistics),
+    /// Barrier acknowledgement for `ClearUsageData`; the `u64` is the clear
+    /// generation. It remains valid when the acknowledged worker is replaced
+    /// while that clear is in flight.
     UsageDataCleared(u64),
-    /// Emitted by the bridge's clear executor once the single store wipe ran.
-    /// Carries the clear generation and the error text on failure.
-    UsageClearFinished(u64, Option<String>),
     UsageRefreshFailed(String),
     ActivationStarted,
     ActivationSucceeded,
     ActivationFailed(String),
     PollFailed(String),
-    Stopped,
-    /// A provider-scoped event emitted by the multi-provider coordinator.
-    /// The `u64` after the provider is the credential revision captured when
-    /// that worker started, allowing the UI to reject queued stale output.
-    ProviderRequestStarted(crate::instances::ProviderId, u64, RequestKind),
-    ProviderRequestFinished(crate::instances::ProviderId, u64, RequestKind),
-    ProviderLimitsUpdated(crate::instances::ProviderId, u64, RateLimits),
-    ProviderUsageUpdated(crate::instances::ProviderId, u64, UsageStatistics),
-    ProviderUsageLoadedFromCache(crate::instances::ProviderId, u64, UsageStatistics),
-    /// Barrier acknowledgement for `ClearUsageData`; the `u64` is the clear
-    /// generation, not a credential revision. It remains valid when the
-    /// acknowledged worker is replaced while that clear is in flight.
-    ProviderUsageDataCleared(crate::instances::ProviderId, u64),
-    ProviderUsageRefreshFailed(crate::instances::ProviderId, u64, String),
-    ProviderActivationStarted(crate::instances::ProviderId, u64),
-    ProviderActivationSucceeded(crate::instances::ProviderId, u64),
-    ProviderActivationFailed(crate::instances::ProviderId, u64, String),
-    ProviderPollFailed(crate::instances::ProviderId, u64, String),
-    /// Snapshot from the public Codex forced-reset announcement feed.
-    ForcedResetsUpdated(crate::reset_feed::ResetFeedSnapshot),
-    /// The feed refresh failed; cached forced resets remain usable.
-    ForcedResetsRefreshFailed(String),
-    /// Ongoing incidents from the public status pages of watched drivers.
-    ProviderStatusUpdated(crate::provider_status::ProviderStatusSnapshot),
 }
 
 pub struct WorkerHandle {
@@ -271,6 +250,7 @@ impl Drop for WorkerHandle {
 }
 
 /// What a worker starts with; later changes arrive as [`WorkerCommand`]s.
+#[derive(Clone)]
 pub struct WorkerOptions {
     pub activation_path: PathBuf,
     pub automatic_activation: bool,
@@ -292,16 +272,6 @@ pub fn start_worker(
     activator: Option<Box<dyn Activator>>,
     options: WorkerOptions,
 ) -> WorkerHandle {
-    let WorkerOptions {
-        activation_path: state_path,
-        automatic_activation,
-        schedules: scheduled_activations,
-        pauses: auto_activation_pauses,
-        history_retention_days,
-        usage_refresh_interval,
-        usage_collection_enabled,
-        limit_refresh_interval: poll_interval,
-    } = options;
     let (command_sender, command_receiver) = mpsc::channel();
     let (event_sender, event_receiver) = mpsc::channel();
     let cancelled = Arc::new(AtomicBool::new(false));
@@ -313,6 +283,7 @@ pub fn start_worker(
     let rate_limit_pause = Arc::new(Mutex::new(ProviderRateLimitPause::default()));
 
     let limit_join = {
+        let options = options.clone();
         let event_sender = event_sender.clone();
         let limits_ready = Arc::clone(&limits_ready);
         let rate_limit_pause = Arc::clone(&rate_limit_pause);
@@ -321,11 +292,7 @@ pub fn start_worker(
             run_limit_task(
                 provider,
                 activator,
-                state_path,
-                automatic_activation,
-                scheduled_activations,
-                auto_activation_pauses,
-                poll_interval,
+                options,
                 limit_commands_rx,
                 event_sender,
                 limits_ready,
@@ -342,9 +309,7 @@ pub fn start_worker(
             enter_background_processing_mode();
             run_usage_task_with_rate_limit(
                 usage_provider,
-                history_retention_days,
-                usage_refresh_interval,
-                usage_collection_enabled,
+                options,
                 usage_commands_rx,
                 event_sender,
                 limits_ready,
@@ -402,7 +367,6 @@ pub fn start_worker(
         let _ = usage_commands.send(WorkerCommand::Shutdown);
         let _ = limit_join.join();
         let _ = usage_join.join();
-        let _ = event_sender.send(WorkerEvent::Stopped);
     });
 
     WorkerHandle {
@@ -427,21 +391,24 @@ fn enter_background_processing_mode() {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn run_limit_task(
     mut provider: impl LimitProvider,
     mut activator: Option<Box<dyn Activator>>,
-    state_path: PathBuf,
-    mut automatic_activation: bool,
-    mut scheduled_activations: Vec<ScheduledActivation>,
-    mut auto_activation_pauses: Vec<AutoActivationPause>,
-    mut poll_interval: Duration,
+    options: WorkerOptions,
     commands: Receiver<WorkerCommand>,
     events: Sender<WorkerEvent>,
     limits_ready: Arc<AtomicBool>,
     rate_limit_pause: Arc<Mutex<ProviderRateLimitPause>>,
     usage_commands: Sender<WorkerCommand>,
 ) {
+    let WorkerOptions {
+        activation_path: state_path,
+        mut automatic_activation,
+        schedules: mut scheduled_activations,
+        pauses: mut auto_activation_pauses,
+        limit_refresh_interval: mut poll_interval,
+        ..
+    } = options;
     let mut state = ActivationState::load_or_default(&state_path).unwrap_or_default();
     // This worker belongs to one provider, so its deadline and any retry stay
     // provider-local. A failing provider cannot wake another provider's loop.
@@ -572,15 +539,19 @@ fn run_limit_task(
 
 fn run_usage_task_with_rate_limit(
     mut provider: impl UsageProvider,
-    mut history_retention_days: u16,
-    mut usage_refresh_interval: Duration,
-    mut usage_collection_enabled: bool,
+    options: WorkerOptions,
     commands: Receiver<WorkerCommand>,
     events: Sender<WorkerEvent>,
     limits_ready: Arc<AtomicBool>,
     rate_limit_pause: Arc<Mutex<ProviderRateLimitPause>>,
     limit_commands: Sender<WorkerCommand>,
 ) {
+    let WorkerOptions {
+        mut history_retention_days,
+        mut usage_refresh_interval,
+        mut usage_collection_enabled,
+        ..
+    } = options;
     let load_cached_usage_when_disabled = provider.load_cached_usage_when_disabled();
     // Cached aggregates are a fast local read and make the popup useful before
     // a provider's first quota request completes. Keep the potentially
@@ -827,7 +798,6 @@ fn run_usage_task_with_rate_limit(
 }
 
 #[cfg(test)]
-#[allow(clippy::too_many_arguments)]
 fn run_usage_task(
     provider: impl UsageProvider,
     history_retention_days: u16,
@@ -840,9 +810,16 @@ fn run_usage_task(
     let (limit_commands, _limit_commands_rx) = mpsc::channel();
     run_usage_task_with_rate_limit(
         provider,
-        history_retention_days,
-        usage_refresh_interval,
-        usage_collection_enabled,
+        WorkerOptions {
+            activation_path: PathBuf::new(),
+            automatic_activation: false,
+            schedules: Vec::new(),
+            pauses: Vec::new(),
+            history_retention_days,
+            usage_refresh_interval,
+            usage_collection_enabled,
+            limit_refresh_interval: Duration::MAX,
+        },
         commands,
         events,
         limits_ready,
@@ -1038,11 +1015,16 @@ mod tests {
             run_limit_task(
                 PartialProvider,
                 Some(Box::new(CountingActivator(0))),
-                state_path,
-                false,
-                Vec::new(),
-                Vec::new(),
-                Duration::from_millis(1),
+                WorkerOptions {
+                    activation_path: state_path,
+                    automatic_activation: false,
+                    schedules: Vec::new(),
+                    pauses: Vec::new(),
+                    history_retention_days: 30,
+                    usage_refresh_interval: Duration::MAX,
+                    usage_collection_enabled: false,
+                    limit_refresh_interval: Duration::from_millis(1),
+                },
                 commands_rx,
                 events_tx,
                 ready,

@@ -54,13 +54,13 @@ pub struct AppState {
     pub limits: Mutex<ProviderLimits>,
     /// Latest valid public forced-reset announcements. Kept outside UiState so
     /// hidden popups avoid a full native-tree publish on every feed poll.
-    pub forced_resets: Mutex<Vec<crate::reset_feed::AnnouncedReset>>,
+    pub forced_resets: Mutex<Vec<crate::reset_detection::AnnouncedReset>>,
     /// Ongoing status-page incidents of watched drivers.
     pub provider_statuses: Mutex<Vec<crate::provider_status::ProviderStatus>>,
     pub commands: Mutex<HashMap<ProviderId, Sender<WorkerCommand>>>,
     pub workers: Mutex<crate::provider::ProviderWorkers>,
-    pub worker_events_rx: Mutex<Option<Receiver<WorkerEvent>>>,
-    pub worker_events_tx: Sender<WorkerEvent>,
+    pub worker_events_rx: Mutex<Option<Receiver<crate::app_event::AppEvent>>>,
+    pub worker_events_tx: Sender<crate::app_event::AppEvent>,
     /// Independent public-feed worker for announced Codex forced resets.
     pub reset_feed_worker: Mutex<Option<crate::reset_feed::ResetFeedWorker>>,
     /// Public status-page poller for provider incidents.
@@ -148,7 +148,7 @@ impl AppState {
         }
     }
 
-    pub(super) fn take_worker_events(&self) -> Option<Receiver<WorkerEvent>> {
+    pub(super) fn take_worker_events(&self) -> Option<Receiver<crate::app_event::AppEvent>> {
         self.worker_events_rx.lock().ok()?.take()
     }
 
@@ -164,14 +164,17 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    pub(super) fn current_forced_resets(&self) -> Vec<crate::reset_feed::AnnouncedReset> {
+    pub(super) fn current_forced_resets(&self) -> Vec<crate::reset_detection::AnnouncedReset> {
         self.forced_resets
             .lock()
             .map(|resets| resets.clone())
             .unwrap_or_default()
     }
 
-    pub(super) fn replace_forced_resets(&self, resets: Vec<crate::reset_feed::AnnouncedReset>) {
+    pub(super) fn replace_forced_resets(
+        &self,
+        resets: Vec<crate::reset_detection::AnnouncedReset>,
+    ) {
         if let Ok(mut current) = self.forced_resets.lock() {
             *current = resets;
         }

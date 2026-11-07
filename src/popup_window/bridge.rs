@@ -12,7 +12,7 @@ pub(super) fn provider_worker_event_is_current(
     ui.provider_enabled(provider) && worker_revision == ui.credentials_revision(provider)
 }
 
-fn forced_reset_info_body(reset: &crate::reset_feed::AnnouncedReset) -> String {
+fn forced_reset_info_body(reset: &crate::reset_detection::AnnouncedReset) -> String {
     let local = reset.reset_at.with_timezone(&Local);
     let when = format!(
         "{}, {}",
@@ -20,7 +20,7 @@ fn forced_reset_info_body(reset: &crate::reset_feed::AnnouncedReset) -> String {
         TimeFormat::current().format_hm(local)
     );
     let countdown = format_reset_in(Some(reset.reset_at));
-    let before = reset.timing == crate::reset_feed::ResetTiming::Before;
+    let before = reset.timing == crate::reset_detection::ResetTiming::Before;
     let mut args = vec![("when", when), ("countdown", countdown)];
     match reset.label.as_deref() {
         Some(label) => {
@@ -49,7 +49,7 @@ fn forced_reset_info_body(reset: &crate::reset_feed::AnnouncedReset) -> String {
 /// unrelated to the API-driven `limits_changed` notification: the feed never
 /// proves that a reset actually happened at `reset_at`.
 fn notify_new_forced_reset_info(
-    resets: &[crate::reset_feed::AnnouncedReset],
+    resets: &[crate::reset_detection::AnnouncedReset],
     notified_ids: &mut HashSet<String>,
     settings: &NotificationSettings,
     state: &AppState,
@@ -62,8 +62,10 @@ fn notify_new_forced_reset_info(
         if notified_ids.insert(reset.id.clone()) {
             notifications::show(
                 match reset.kind {
-                    crate::reset_feed::ResetKind::Forced => crate::i18n::tr("new-codex-reset-info"),
-                    crate::reset_feed::ResetKind::Banked => {
+                    crate::reset_detection::ResetKind::Forced => {
+                        crate::i18n::tr("new-codex-reset-info")
+                    }
+                    crate::reset_detection::ResetKind::Banked => {
                         crate::i18n::tr("new-codex-banked-reset-info")
                     }
                 },
@@ -632,7 +634,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
             };
             made_progress = next_event.is_ok();
             match next_event {
-                Ok(WorkerEvent::ForcedResetsUpdated(snapshot)) => {
+                Ok(AppEvent::ForcedResetsUpdated(snapshot)) => {
                     forced_reset_notified_ids.extend(snapshot.notified_ids);
                     if notification_settings.forced_reset_feed_enabled {
                         state.replace_forced_resets(snapshot.resets.clone());
@@ -648,7 +650,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     );
                     publish_ui(&ui);
                 }
-                Ok(WorkerEvent::ProviderStatusUpdated(snapshot)) => {
+                Ok(AppEvent::ProviderStatusUpdated(snapshot)) => {
                     incident_notified_ids.extend(snapshot.notified_ids);
                     let statuses = if notification_settings.provider_status_enabled {
                         snapshot.statuses
@@ -665,199 +667,7 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                     ui.observe_provider_status_update();
                     publish_ui(&ui);
                 }
-                Ok(WorkerEvent::ForcedResetsRefreshFailed(error)) => {
-                    crate::logger::info(format!("Codex reset feed refresh failed: {error}"));
-                }
-                Ok(WorkerEvent::ProviderRequestStarted(provider, worker_revision, kind)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
-                        continue;
-                    }
-                    ui.request_started(provider, kind);
-                    publish_ui(&ui);
-                }
-                Ok(WorkerEvent::ProviderRequestFinished(provider, worker_revision, kind)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
-                        continue;
-                    }
-                    ui.request_finished(provider, kind);
-                    publish_ui(&ui);
-                }
-                Ok(WorkerEvent::ProviderLimitsUpdated(provider, worker_revision, limits)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
-                        continue;
-                    }
-                    crate::logger::info(format!(
-                        "{} limits received: session used={:?}%, reset={:?}; weekly used={:?}%, reset={:?}",
-                        provider.display_name(),
-                        limits.primary.used_percent,
-                        limits.primary.resets_at,
-                        limits.secondary.used_percent,
-                        limits.secondary.resets_at,
-                    ));
-                    let mut limits = limits;
-                    // The running reader still has the names it started with.
-                    if provider.kind() == ProviderKind::OpenRouter
-                        && let Some(instance) = live_settings.instance(provider)
-                    {
-                        crate::openrouter::apply_account_names(&mut limits, instance);
-                    }
-                    // Publish once, then let both native tray and GPUI render
-                    // from that exact snapshot.
-                    warn_login_expiry(provider, &limits);
-                    if provider.kind() == ProviderKind::Codex {
-                        let previous = state.current_limits().get(provider).clone();
-                        state.observe_reset_limits(provider, Some(&previous), &limits);
-                    }
-                    state.replace_limits(provider, limits);
-                    ui.clear_provider_error(provider);
-                    let limits = state.current_limits();
-                    crate::settings_window::publish_discovered_popup_bricks(&limits);
-                    crate::settings_window::publish_openrouter_snapshot(&limits);
-                    if ui.popup_visibility.absorb_discovered_bricks(&limits) {
-                        let limits_for_settings = limits.clone();
-                        crate::settings_window::persist_update(
-                            settings_tx.clone(),
-                            move |settings| {
-                                settings
-                                    .popup_visibility
-                                    .absorb_discovered_bricks(&limits_for_settings);
-                            },
-                        );
-                    }
-                    let combine_activation_notification =
-                        pending_auto_activation_successes.remove(&provider);
-                    let revision = ui.credentials_revision(provider);
-                    if notified_revisions.insert(provider.id().to_owned(), revision)
-                        != Some(revision)
-                    {
-                        limit_notifications.remove(provider.id());
-                    }
-                    let tracker = instance_tracker(&mut limit_notifications, provider);
-                    let notification_result = if combine_activation_notification {
-                        tracker.observe_with_primary_reset_deferred(
-                            limits.get(provider),
-                            &notification_settings,
-                            provider,
-                        )
-                    } else {
-                        tracker.observe(limits.get(provider), &notification_settings, provider)
-                    };
-                    if combine_activation_notification {
-                        if notification_result.primary_reset {
-                            notifications::show_activation_succeeded_after_reset(
-                                provider,
-                                limits.get(provider),
-                            );
-                        } else if notification_settings.activation_success {
-                            notifications::show_activation_succeeded(
-                                provider,
-                                Some(limits.get(provider)),
-                            );
-                        }
-                    }
-                    if let Err(error) = tray.sync(
-                        &widgets,
-                        &limits,
-                        update_available_from_phase(&update_phase),
-                    ) {
-                        ui.set_popup_error(error.to_string());
-                    } else {
-                        ui.error = None;
-                    }
-                    crate::taskbar::publish_limits(&limits);
-                    if provider == ProviderId::primary(ProviderKind::Codex) {
-                        ui.last_activation =
-                            format_last_activation(limits.get(provider), fallback_attempt);
-                    }
-                    ui.observe_limits_update();
-                    publish_ui(&ui);
-                }
-                Ok(WorkerEvent::ProviderUsageUpdated(provider, worker_revision, usage)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
-                        continue;
-                    }
-                    if provider == ProviderId::primary(ProviderKind::Codex)
-                        && usage
-                            .account_id
-                            .as_deref()
-                            .is_some_and(|id| id != crate::store::codex_accounts::current_id())
-                    {
-                        continue;
-                    }
-                    crate::logger::info(format!(
-                        "{} usage received: today={} tokens, history={} tokens",
-                        provider.display_name(),
-                        usage.today.total_tokens(),
-                        usage.history.total_tokens()
-                    ));
-                    let usage_error = live_settings
-                        .usage_stats_collection_enabled(provider)
-                        .then(|| usage_error_message(&usage))
-                        .flatten();
-                    state.replace_usage(provider, usage);
-                    if let Some(error) = usage_error {
-                        ui.set_usage_error(provider, error);
-                    } else {
-                        ui.clear_usage_error(provider);
-                    }
-                    ui.observe_usage_update();
-                    publish_ui(&ui);
-                }
-                Ok(WorkerEvent::ProviderUsageLoadedFromCache(provider, worker_revision, usage)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
-                        continue;
-                    }
-                    crate::logger::info(format!(
-                        "{} usage cache loaded: today={} tokens, history={} tokens",
-                        provider.display_name(),
-                        usage.today.total_tokens(),
-                        usage.history.total_tokens()
-                    ));
-                    state.replace_usage(provider, usage);
-                    // Cached account.error values are historical diagnostics,
-                    // not proof that the provider is failing now.
-                    ui.observe_usage_update();
-                    publish_ui(&ui);
-                }
-                Ok(WorkerEvent::ProviderUsageRefreshFailed(provider, worker_revision, error)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision)
-                        || !live_settings.usage_stats_collection_enabled(provider)
-                    {
-                        continue;
-                    }
-                    crate::logger::info(format!(
-                        "{} usage refresh failed: {error}",
-                        provider.display_name()
-                    ));
-                    // Usage/analytics failures use the same provider-scoped
-                    // presentation as quota failures. The state keeps the
-                    // source separate so a successful quota poll does not
-                    // clear an active analytics error.
-                    ui.set_usage_error(provider, error);
-                    publish_ui(&ui);
-                }
-                Ok(WorkerEvent::ProviderUsageDataCleared(provider, generation)) => {
-                    let completed = pending_usage_clear.as_mut().is_some_and(
-                        |(pending_generation, providers)| {
-                            if *pending_generation != generation {
-                                return false;
-                            }
-                            let before = providers.len();
-                            providers.retain(|pending_provider| *pending_provider != provider);
-                            before != providers.len() && providers.is_empty()
-                        },
-                    );
-                    if completed {
-                        // Every worker is idle and acknowledged, so any stale
-                        // in-flight snapshot has already been delivered. Drop
-                        // it, then wipe the store exactly once off-thread.
-                        state.clear_usage_snapshot();
-                        ui.observe_usage_update();
-                        publish_ui(&ui);
-                        spawn_usage_wipe(state.worker_events_tx.clone(), generation);
-                    }
-                }
-                Ok(WorkerEvent::UsageClearFinished(generation, error)) => {
+                Ok(AppEvent::UsageClearFinished(generation, error)) => {
                     if pending_usage_clear
                         .as_ref()
                         .is_some_and(|(pending, _)| *pending == generation)
@@ -875,83 +685,250 @@ pub(super) fn start_background_bridge(state: Arc<AppState>) {
                         }
                     }
                 }
-                Ok(WorkerEvent::ProviderActivationStarted(provider, worker_revision)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
+                Ok(AppEvent::Provider(ProviderEvent {
+                    provider,
+                    revision: worker_revision,
+                    event,
+                })) => {
+                    // The clear-barrier ack carries a clear generation instead
+                    // of a credential revision, so it is never stale.
+                    if !matches!(event, WorkerEvent::UsageDataCleared(_))
+                        && !provider_worker_event_is_current(&ui, provider, worker_revision)
+                    {
                         continue;
                     }
-                    crate::logger::info(format!("{} activation started", provider.display_name()));
-                }
-                Ok(WorkerEvent::ProviderActivationSucceeded(provider, worker_revision)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
-                        continue;
+                    match event {
+                        WorkerEvent::RequestStarted(kind) => {
+                            ui.request_started(provider, kind);
+                            publish_ui(&ui);
+                        }
+                        WorkerEvent::RequestFinished(kind) => {
+                            ui.request_finished(provider, kind);
+                            publish_ui(&ui);
+                        }
+                        WorkerEvent::LimitsUpdated(limits) => {
+                            crate::logger::info(format!(
+                                "{} limits received: session used={:?}%, reset={:?}; weekly used={:?}%, reset={:?}",
+                                provider.display_name(),
+                                limits.primary.used_percent,
+                                limits.primary.resets_at,
+                                limits.secondary.used_percent,
+                                limits.secondary.resets_at,
+                            ));
+                            let mut limits = limits;
+                            // The running reader still has the names it started with.
+                            if provider.kind() == ProviderKind::OpenRouter
+                                && let Some(instance) = live_settings.instance(provider)
+                            {
+                                crate::openrouter::apply_account_names(&mut limits, instance);
+                            }
+                            // Publish once, then let both native tray and GPUI render
+                            // from that exact snapshot.
+                            warn_login_expiry(provider, &limits);
+                            if provider.kind() == ProviderKind::Codex {
+                                let previous = state.current_limits().get(provider).clone();
+                                state.observe_reset_limits(provider, Some(&previous), &limits);
+                            }
+                            state.replace_limits(provider, limits);
+                            ui.clear_provider_error(provider);
+                            let limits = state.current_limits();
+                            crate::settings_window::publish_discovered_popup_bricks(&limits);
+                            crate::settings_window::publish_openrouter_snapshot(&limits);
+                            if ui.popup_visibility.absorb_discovered_bricks(&limits) {
+                                let limits_for_settings = limits.clone();
+                                crate::settings_window::persist_update(
+                                    settings_tx.clone(),
+                                    move |settings| {
+                                        settings
+                                            .popup_visibility
+                                            .absorb_discovered_bricks(&limits_for_settings);
+                                    },
+                                );
+                            }
+                            let combine_activation_notification =
+                                pending_auto_activation_successes.remove(&provider);
+                            let revision = ui.credentials_revision(provider);
+                            if notified_revisions.insert(provider.id().to_owned(), revision)
+                                != Some(revision)
+                            {
+                                limit_notifications.remove(provider.id());
+                            }
+                            let tracker = instance_tracker(&mut limit_notifications, provider);
+                            let notification_result = if combine_activation_notification {
+                                tracker.observe_with_primary_reset_deferred(
+                                    limits.get(provider),
+                                    &notification_settings,
+                                    provider,
+                                )
+                            } else {
+                                tracker.observe(
+                                    limits.get(provider),
+                                    &notification_settings,
+                                    provider,
+                                )
+                            };
+                            if combine_activation_notification {
+                                if notification_result.primary_reset {
+                                    notifications::show_activation_succeeded_after_reset(
+                                        provider,
+                                        limits.get(provider),
+                                    );
+                                } else if notification_settings.activation_success {
+                                    notifications::show_activation_succeeded(
+                                        provider,
+                                        Some(limits.get(provider)),
+                                    );
+                                }
+                            }
+                            if let Err(error) = tray.sync(
+                                &widgets,
+                                &limits,
+                                update_available_from_phase(&update_phase),
+                            ) {
+                                ui.set_popup_error(error.to_string());
+                            } else {
+                                ui.error = None;
+                            }
+                            crate::taskbar::publish_limits(&limits);
+                            if provider == ProviderId::primary(ProviderKind::Codex) {
+                                ui.last_activation =
+                                    format_last_activation(limits.get(provider), fallback_attempt);
+                            }
+                            ui.observe_limits_update();
+                            publish_ui(&ui);
+                        }
+                        WorkerEvent::UsageUpdated(usage) => {
+                            if provider == ProviderId::primary(ProviderKind::Codex)
+                                && usage.account_id.as_deref().is_some_and(|id| {
+                                    id != crate::store::codex_accounts::current_id()
+                                })
+                            {
+                                continue;
+                            }
+                            crate::logger::info(format!(
+                                "{} usage received: today={} tokens, history={} tokens",
+                                provider.display_name(),
+                                usage.today.total_tokens(),
+                                usage.history.total_tokens()
+                            ));
+                            let usage_error = live_settings
+                                .usage_stats_collection_enabled(provider)
+                                .then(|| usage_error_message(&usage))
+                                .flatten();
+                            state.replace_usage(provider, usage);
+                            if let Some(error) = usage_error {
+                                ui.set_usage_error(provider, error);
+                            } else {
+                                ui.clear_usage_error(provider);
+                            }
+                            ui.observe_usage_update();
+                            publish_ui(&ui);
+                        }
+                        WorkerEvent::UsageLoadedFromCache(usage) => {
+                            crate::logger::info(format!(
+                                "{} usage cache loaded: today={} tokens, history={} tokens",
+                                provider.display_name(),
+                                usage.today.total_tokens(),
+                                usage.history.total_tokens()
+                            ));
+                            state.replace_usage(provider, usage);
+                            // Cached account.error values are historical diagnostics,
+                            // not proof that the provider is failing now.
+                            ui.observe_usage_update();
+                            publish_ui(&ui);
+                        }
+                        WorkerEvent::UsageRefreshFailed(error) => {
+                            if !live_settings.usage_stats_collection_enabled(provider) {
+                                continue;
+                            }
+                            crate::logger::info(format!(
+                                "{} usage refresh failed: {error}",
+                                provider.display_name()
+                            ));
+                            // Usage/analytics failures use the same provider-scoped
+                            // presentation as quota failures. The state keeps the
+                            // source separate so a successful quota poll does not
+                            // clear an active analytics error.
+                            ui.set_usage_error(provider, error);
+                            publish_ui(&ui);
+                        }
+                        WorkerEvent::UsageDataCleared(generation) => {
+                            let completed = pending_usage_clear.as_mut().is_some_and(
+                                |(pending_generation, providers)| {
+                                    if *pending_generation != generation {
+                                        return false;
+                                    }
+                                    let before = providers.len();
+                                    providers
+                                        .retain(|pending_provider| *pending_provider != provider);
+                                    before != providers.len() && providers.is_empty()
+                                },
+                            );
+                            if completed {
+                                // Every worker is idle and acknowledged, so any stale
+                                // in-flight snapshot has already been delivered. Drop
+                                // it, then wipe the store exactly once off-thread.
+                                state.clear_usage_snapshot();
+                                ui.observe_usage_update();
+                                publish_ui(&ui);
+                                spawn_usage_wipe(state.worker_events_tx.clone(), generation);
+                            }
+                        }
+                        WorkerEvent::ActivationStarted => {
+                            crate::logger::info(format!(
+                                "{} activation started",
+                                provider.display_name()
+                            ));
+                        }
+                        WorkerEvent::ActivationSucceeded => {
+                            crate::logger::info(format!(
+                                "{} activation succeeded",
+                                provider.display_name()
+                            ));
+                            ui.last_activation = crate::i18n::format(
+                                "succeeded-at",
+                                &[
+                                    ("v0", provider.qualified_name().to_string()),
+                                    ("v1", (format_activation_at(Utc::now())).to_string()),
+                                ],
+                            );
+                            let combine_activation_notification =
+                                crate::provider::automatic_activation(provider, &live_settings)
+                                    && notification_settings.limits_changed
+                                    && notification_settings.activation_success;
+                            if combine_activation_notification {
+                                pending_auto_activation_successes.insert(provider);
+                            } else if notification_settings.activation_success {
+                                notifications::show_activation_succeeded(provider, None);
+                            }
+                            publish_ui(&ui);
+                        }
+                        WorkerEvent::ActivationFailed(error) => {
+                            pending_auto_activation_successes.remove(&provider);
+                            crate::logger::info(format!(
+                                "{} activation failed: {error}",
+                                provider.display_name()
+                            ));
+                            ui.last_activation = crate::i18n::format(
+                                "failed-at-error",
+                                &[
+                                    ("v0", provider.qualified_name().to_string()),
+                                    ("v1", (format_activation_at(Utc::now())).to_string()),
+                                    ("error", error.to_string()),
+                                ],
+                            );
+                            publish_ui(&ui);
+                        }
+                        WorkerEvent::PollFailed(error) => {
+                            crate::logger::info(format!(
+                                "{} polling failed: {error}",
+                                provider.display_name()
+                            ));
+                            ui.set_provider_error(provider, error);
+                            publish_ui(&ui);
+                        }
                     }
-                    crate::logger::info(format!(
-                        "{} activation succeeded",
-                        provider.display_name()
-                    ));
-                    ui.last_activation = crate::i18n::format(
-                        "succeeded-at",
-                        &[
-                            ("v0", provider.qualified_name().to_string()),
-                            ("v1", (format_activation_at(Utc::now())).to_string()),
-                        ],
-                    );
-                    let combine_activation_notification =
-                        crate::provider::automatic_activation(provider, &live_settings)
-                            && notification_settings.limits_changed
-                            && notification_settings.activation_success;
-                    if combine_activation_notification {
-                        pending_auto_activation_successes.insert(provider);
-                    } else if notification_settings.activation_success {
-                        notifications::show_activation_succeeded(provider, None);
-                    }
-                    publish_ui(&ui);
                 }
-                Ok(WorkerEvent::ProviderActivationFailed(provider, worker_revision, error)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
-                        continue;
-                    }
-                    pending_auto_activation_successes.remove(&provider);
-                    crate::logger::info(format!(
-                        "{} activation failed: {error}",
-                        provider.display_name()
-                    ));
-                    ui.last_activation = crate::i18n::format(
-                        "failed-at-error",
-                        &[
-                            ("v0", provider.qualified_name().to_string()),
-                            ("v1", (format_activation_at(Utc::now())).to_string()),
-                            ("error", error.to_string()),
-                        ],
-                    );
-                    publish_ui(&ui);
-                }
-                Ok(WorkerEvent::ProviderPollFailed(provider, worker_revision, error)) => {
-                    if !provider_worker_event_is_current(&ui, provider, worker_revision) {
-                        continue;
-                    }
-                    crate::logger::info(format!(
-                        "{} polling failed: {error}",
-                        provider.display_name()
-                    ));
-                    ui.set_provider_error(provider, error);
-                    publish_ui(&ui);
-                }
-                // All live provider workers are forwarded as scoped events.
-                Ok(
-                    WorkerEvent::RequestStarted(_)
-                    | WorkerEvent::RequestFinished(_)
-                    | WorkerEvent::LimitsUpdated(_)
-                    | WorkerEvent::UsageUpdated(_)
-                    | WorkerEvent::UsageLoadedFromCache(_)
-                    | WorkerEvent::UsageDataCleared(_)
-                    | WorkerEvent::UsageRefreshFailed(_)
-                    | WorkerEvent::ActivationStarted
-                    | WorkerEvent::ActivationSucceeded
-                    | WorkerEvent::ActivationFailed(_)
-                    | WorkerEvent::PollFailed(_),
-                ) => {}
-                Ok(WorkerEvent::Stopped) => break,
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
@@ -1123,7 +1100,7 @@ pub(super) fn pump_tray_and_dismiss(_tray: &TrayManager, _ui: &mut UiState) -> b
 /// Runs the single usage-data wipe on a dedicated thread so the bridge never
 /// blocks on the store mutex, then reports back through the worker event
 /// channel so the bridge can surface errors and resume the workers.
-fn spawn_usage_wipe(events: std::sync::mpsc::Sender<WorkerEvent>, generation: u64) {
+fn spawn_usage_wipe(events: std::sync::mpsc::Sender<AppEvent>, generation: u64) {
     let fallback = events.clone();
     let spawned = std::thread::Builder::new()
         .name("usage-wipe".into())
@@ -1131,10 +1108,10 @@ fn spawn_usage_wipe(events: std::sync::mpsc::Sender<WorkerEvent>, generation: u6
             let error = crate::store::with_store(|store| store.clear_usage_data())
                 .err()
                 .map(|error| format!("{error:#}"));
-            let _ = events.send(WorkerEvent::UsageClearFinished(generation, error));
+            let _ = events.send(AppEvent::UsageClearFinished(generation, error));
         });
     if let Err(error) = spawned {
-        let _ = fallback.send(WorkerEvent::UsageClearFinished(
+        let _ = fallback.send(AppEvent::UsageClearFinished(
             generation,
             Some(error.to_string()),
         ));
