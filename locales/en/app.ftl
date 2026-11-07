@@ -1891,6 +1891,7 @@ reads-supergrok-subscription-credits-from-your-existing-official = Reads SuperGr
 
 # src/settings_window/providers.rs
 reads-command-code-5h-weekly-and-monthly-credits-from-your-existin = Reads Command Code 5-hour, weekly, and monthly credits from your existing official CLI sign-in.
+reads-workbuddy-token-history-from-your-local-workbuddy-transcripts = Reads token history from your local WorkBuddy session transcripts.
 
 # src/settings_window/providers.rs
 fetches-kiro-s-live-monthly-credits-with-its-shared-sign-in-recog = Fetches Kiro's live monthly credits with its shared sign-in; recognizes IDE, Crew, and CLI installs.

@@ -335,6 +335,20 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         metrics: COMMAND_CODE_METRICS,
         default_tray_metrics: &["command-code.session", "command-code.weekly"],
     },
+    ProviderDescriptor {
+        kind: ProviderKind::WorkBuddy,
+        id: "workbuddy",
+        display_name: "WorkBuddy",
+        icon: "workbuddy",
+        brand_rgb: (77, 124, 254),
+        // No activation endpoint and no quota windows: this provider only
+        // contributes local token history to Usage Stats.
+        supports_activation: false,
+        include_in_total_spend: true,
+        supports_multiple_instances: false,
+        metrics: &[],
+        default_tray_metrics: &[],
+    },
 ];
 
 pub fn descriptor(provider: ProviderKind) -> &'static ProviderDescriptor {
@@ -378,6 +392,7 @@ pub fn light_surface_brand_rgb(provider: ProviderKind) -> (u8, u8, u8) {
         ProviderKind::Grok => (51, 51, 51),
         ProviderKind::Kiro => (105, 78, 198),
         ProviderKind::CommandCode => (51, 51, 51),
+        ProviderKind::WorkBuddy => (61, 100, 214),
     }
 }
 
