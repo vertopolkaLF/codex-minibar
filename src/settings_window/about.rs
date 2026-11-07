@@ -123,10 +123,7 @@ impl SettingsWindow {
                             .accent()
                             .disabled(busy)
                             .on_click(Self::h(cx, |this, (), _, _| {
-                                this.state.updates.check_async(
-                                    false,
-                                    this.settings.notifications.update_available,
-                                );
+                                this.state.updates.check_async(false);
                             }))
                             .render(k),
                     )

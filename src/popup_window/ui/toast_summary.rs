@@ -12,7 +12,7 @@ use gpui::{
     StyledText, UnderlineStyle, Window, div, img, px,
 };
 
-use crate::whats_new::{Block, Content, Inline, Marker, SpanStyle};
+use crate::release_summary::{Block, Content, Inline, Marker, SpanStyle};
 
 use super::theme::Palette;
 

@@ -37,6 +37,7 @@ pub mod provider;
 pub mod provider_registry;
 pub mod provider_status;
 mod provider_support;
+pub mod release_summary;
 pub mod reset_detection;
 pub mod reset_feed;
 pub mod scheduler;

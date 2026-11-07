@@ -382,6 +382,26 @@ impl ToastHost {
         (height, summary_height)
     }
 
+    /// A notification that fills a visible card becomes that card with its
+    /// summary and buttons; otherwise it stands on its own.
+    fn fill(&self, mut notification: Notification) -> Notification {
+        let Some(key) = notification.fills.take() else {
+            return notification;
+        };
+        let Some(card) = self
+            .cards
+            .iter()
+            .find(|card| card.leaving.is_none() && card.notification.key == Some(key))
+        else {
+            return notification;
+        };
+        Notification {
+            summary: notification.summary,
+            actions: notification.actions,
+            ..card.notification.clone()
+        }
+    }
+
     /// Adds a card. Returns the native work to do outside this borrow when
     /// the host has to appear.
     fn push(
@@ -390,6 +410,7 @@ impl ToastHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        let notification = self.fill(notification);
         let palette = self.palette(window, cx);
         let hero = notification
             .summary

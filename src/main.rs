@@ -14,15 +14,14 @@ use codex_minibar::{
     settings_runtime,
     single_instance::{self, SingleInstance},
     store, troubleshoot,
-    updater::{
-        UpdateController, show_post_update_success_if_needed, sync_installed_display_version,
-    },
+    updater::{self, UpdateController},
 };
 
 fn run() -> Result<()> {
     codex_minibar::banked_reset::mark_process_start();
+    codex_minibar::app::install_notification_host();
     notifications::initialize();
-    sync_installed_display_version();
+    updater::sync_installed_display_version();
     let path = app_paths::settings()?;
     if app_paths::fake_sandbox() {
         codex_minibar::fake::seed_settings()?;
@@ -63,13 +62,7 @@ fn run() -> Result<()> {
     codex_minibar::taskbar::publish_limits(&hydrated_limits);
     let (settings_tx, settings_rx) = mpsc::channel();
     settings_runtime::start(&settings, settings_tx);
-    let just_updated = show_post_update_success_if_needed();
-    std::thread::spawn(|| {
-        // Let the update helper that relaunched us finish and drop its own
-        // staging before the install directory is swept.
-        std::thread::sleep(std::time::Duration::from_secs(30));
-        codex_minibar::updater::cleanup_install_dir();
-    });
+    updater::finish_startup();
     std::thread::spawn(|| {
         if let Err(error) = codex_minibar::codex::discovery::cleanup() {
             logger::info(format!(
@@ -110,7 +103,7 @@ fn run() -> Result<()> {
     let (usage_actions_tx, usage_actions_rx) = mpsc::channel();
     let updates = UpdateController::new();
     if settings.check_for_updates {
-        updates.check_async(true, settings.notifications.update_available);
+        updates.check_async(settings.notifications.update_available);
     }
     let onboarding_needed = !settings.onboarding_completed;
     let state = Arc::new(AppState {
@@ -139,7 +132,7 @@ fn run() -> Result<()> {
     });
 
     codex_minibar::app::start(Arc::clone(&state));
-    codex_minibar::whats_new::start(&state.settings, just_updated);
+    codex_minibar::whats_new::start(&state.settings);
     if onboarding_needed {
         codex_minibar::settings_window::open_onboarding();
     }

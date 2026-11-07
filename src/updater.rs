@@ -113,9 +113,6 @@ pub fn apply_pending_update() -> Result<()> {
     if let Err(error) = runtime.updates.apply() {
         return Err(report_update_failure(error));
     }
-    // Let the card show its last step before the process goes away; the
-    // helper waits for this process to exit anyway.
-    thread::sleep(RESTART_NOTICE);
     (runtime.before_exit)();
     release_for_update();
     std::process::exit(0);
@@ -127,8 +124,6 @@ fn report_update_failure(error: anyhow::Error) -> anyhow::Error {
     error
 }
 
-/// How long the "Restarting" step stays up before the process exits.
-const RESTART_NOTICE: Duration = Duration::from_millis(600);
 /// Minimum spacing of progress updates sent to the update card.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(80);
 
@@ -202,14 +197,6 @@ fn report_unpack(done: usize, total: usize) {
     );
 }
 
-fn report_restart() {
-    notifications::show_update_progress(
-        crate::i18n::tr("update-restarting"),
-        crate::i18n::tr("update-restarting-body"),
-        notifications::Progress::Fraction(1.0),
-    );
-}
-
 /// Opens the GitHub release page for the pending update, or the releases index.
 pub fn open_release_notes() -> Result<()> {
     let url = RUNTIME
@@ -220,24 +207,27 @@ pub fn open_release_notes() -> Result<()> {
     crate::shell::open_url(&url)
 }
 
-/// Shows a one-shot success toast after an in-place update relaunch.
-/// Returns whether this launch follows one.
-pub fn show_post_update_success_if_needed() -> bool {
-    match take_post_update_success_marker() {
-        Ok(Some(version)) => {
-            notifications::notify(update_complete_notification(&version));
-            true
-        }
-        Ok(None) => false,
+/// Announces a finished in-place update, then sweeps the install directory
+/// in the background.
+pub fn finish_startup() {
+    let updated = match take_post_update_success_marker() {
+        Ok(version) => version,
         Err(error) => {
-            eprintln!("failed to read post-update marker: {error:#}");
-            false
+            crate::logger::info(format!("failed to read post-update marker: {error:#}"));
+            None
         }
+    };
+    if let Some(version) = &updated {
+        notifications::notify(update_complete_notification(version));
     }
+    // The helper that relaunched us is still running and removes its own
+    // staging (`finally` in apply-update.ps1); leave it to the helper then.
+    let sweep_staging = updated.is_none();
+    thread::spawn(move || cleanup_install_dir(sweep_staging));
 }
 
 /// The finished-update card; [`crate::whats_new`] fills in the summary.
-pub fn update_complete_notification(version: &str) -> notifications::Notification {
+fn update_complete_notification(version: &str) -> notifications::Notification {
     notifications::Notification::new(
         notifications::NotificationKind::Success,
         crate::i18n::tr("update-complete"),
@@ -275,7 +265,7 @@ fn sync_uninstall_display_version(version: &str) -> Result<()> {
 /// Removes files that earlier releases installed and this one no longer
 /// ships: the WinUI runtime, assets dropped since, and leftover update
 /// staging. Zip updates only copy the new package over the install.
-pub fn cleanup_install_dir() {
+fn cleanup_install_dir(sweep_staging: bool) {
     let dir = match install_dir() {
         Ok(dir) => dir,
         Err(error) => {
@@ -286,7 +276,9 @@ pub fn cleanup_install_dir() {
     let mut removed = 0;
     removed += remove_legacy_winui(&dir);
     removed += prune_stale_assets(&dir.join("assets"));
-    removed += remove_update_staging(&dir.join(UPDATE_STAGING_DIR));
+    if sweep_staging {
+        removed += remove_update_staging(&dir.join(UPDATE_STAGING_DIR));
+    }
     if removed > 0 {
         crate::logger::info(format!(
             "Removed {removed} stale item(s) from {}",
@@ -469,22 +461,23 @@ impl UpdateController {
         self.inner.lock().expect("update controller lock").phase = phase;
     }
 
-    pub fn check_async(self: &Arc<Self>, notify: bool, notify_enabled: bool) {
+    /// Checks for an update in the background; `notify` announces a newly
+    /// found version on a card.
+    pub fn check_async(self: &Arc<Self>, notify: bool) {
         let controller = Arc::clone(self);
         thread::spawn(move || {
-            if let Err(error) = controller.check_once(notify, notify_enabled) {
+            if let Err(error) = controller.check_once(notify) {
                 eprintln!("update check failed: {error:#}");
                 controller.set_phase(UpdatePhase::Failed(error.to_string()));
             }
         });
     }
 
-    fn check_once(&self, notify: bool, notify_enabled: bool) -> Result<()> {
+    fn check_once(&self, notify: bool) -> Result<()> {
         self.set_phase(UpdatePhase::Checking);
         match check_for_update()? {
             Some(update) => {
                 let should_notify = notify
-                    && notify_enabled
                     && self
                         .inner
                         .lock()
@@ -745,7 +738,6 @@ try {{
     );
     fs::write(&script_path, script).context("write update helper script")?;
     spawn_hidden_helper(&script_path).context("spawn update helper")?;
-    report_restart();
 
     Ok(())
 }

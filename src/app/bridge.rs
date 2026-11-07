@@ -485,9 +485,7 @@ impl Bridge {
     fn apply_settings(&mut self, settings: Settings) {
         let state = Arc::clone(&self.state);
         if settings.check_for_updates && !self.ui.settings.check_for_updates {
-            state
-                .updates
-                .check_async(false, settings.notifications.update_available);
+            state.updates.check_async(false);
         }
         let previous = Arc::clone(&self.ui.settings);
         let providers_changed = previous.enabled_providers() != settings.enabled_providers()

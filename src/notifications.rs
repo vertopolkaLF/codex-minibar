@@ -1,10 +1,13 @@
 //! In-app notifications for activations, rate-limit events and updates.
 //!
-//! Any thread can post a [`Notification`]. It travels to the GPUI thread,
-//! which shows it as an animated card in the toast host
-//! (`popup_window::ui::toast`) and plays the sound of its kind.
+//! Any thread can post a [`Notification`]. It travels to the [`Host`] the
+//! app installs at startup, which shows it as an animated card and plays the
+//! sound of its kind; the host also performs the cards' buttons.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{
+    OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 use chrono::{DateTime, Duration, Timelike, Utc};
 
@@ -76,21 +79,30 @@ impl NotificationAction {
 
     /// Runs the action off the GPUI thread: installing exits the process.
     pub fn run(&self) {
+        let Some(host) = HOST.get() else {
+            return;
+        };
         let action = self.clone();
-        std::thread::spawn(move || match action {
-            NotificationAction::InstallUpdate => {
-                // Failures are reported on the update card.
-                let _ = crate::updater::apply_pending_update();
-            }
-            NotificationAction::OpenUrl(url) => {
-                if let Err(error) = crate::shell::open_url(&url) {
-                    eprintln!("failed to open {url}: {error:#}");
-                }
-            }
-            NotificationAction::IgnoreGame(path) => crate::game_mode::ignore_game(path),
-            NotificationAction::AutoReset(choice) => crate::banked_reset::choose(choice),
-        });
+        std::thread::spawn(move || (host.run_action)(action));
     }
+}
+
+/// What the app provides to notifications.
+pub struct Host {
+    /// Shows a card.
+    pub deliver: fn(Notification),
+    /// Whether the user is looking at the app right now.
+    pub user_engaged: fn() -> bool,
+    pub game_mode_active: fn() -> bool,
+    /// Performs a card's button.
+    pub run_action: fn(NotificationAction),
+}
+
+static HOST: OnceLock<Host> = OnceLock::new();
+
+/// Installs the app's [`Host`]; notifications posted before go nowhere.
+pub fn install_host(host: Host) {
+    let _ = HOST.set(host);
 }
 
 /// The quota window a limit notification is about.
@@ -142,12 +154,15 @@ pub struct Notification {
     /// A visible card with the same key is updated in place instead of a new
     /// card entering, so one operation reads as one card.
     pub key: Option<&'static str>,
+    /// While a card with this key is visible, this notification adds its
+    /// summary and buttons to that card instead of entering as its own.
+    pub fills: Option<&'static str>,
     /// Cards with progress stay until a notification without progress
     /// replaces them (or they are closed by hand).
     pub progress: Option<Progress>,
     /// A release summary drawn under the text. Cards with one stay until
     /// they are closed by hand.
-    pub summary: Option<std::sync::Arc<crate::whats_new::Content>>,
+    pub summary: Option<std::sync::Arc<crate::release_summary::Content>>,
 }
 
 impl Notification {
@@ -159,6 +174,7 @@ impl Notification {
             actions: Vec::new(),
             limits: None,
             key: None,
+            fills: None,
             progress: None,
             summary: None,
         }
@@ -169,12 +185,17 @@ impl Notification {
         self
     }
 
+    pub fn filling(mut self, key: &'static str) -> Self {
+        self.fills = Some(key);
+        self
+    }
+
     pub fn with_progress(mut self, progress: Progress) -> Self {
         self.progress = Some(progress);
         self
     }
 
-    pub fn with_summary(mut self, summary: crate::whats_new::Content) -> Self {
+    pub fn with_summary(mut self, summary: crate::release_summary::Content) -> Self {
         self.summary = Some(std::sync::Arc::new(summary));
         self
     }
@@ -254,7 +275,7 @@ pub fn set_follow_do_not_disturb(enabled: bool) {
 /// Why an unsolicited notification is held back right now, if it is. The
 /// card announcing game mode itself is exempt from the game-mode rule.
 fn quiet_reason(game_mode_card: bool) -> Option<&'static str> {
-    if crate::game_mode::is_active() && !game_mode_card {
+    if HOST.get().is_some_and(|host| (host.game_mode_active)()) && !game_mode_card {
         return Some("game mode");
     }
     #[cfg(windows)]
@@ -270,11 +291,10 @@ fn quiet_reason(game_mode_card: bool) -> Option<&'static str> {
 fn requested_by_user(notification: &Notification) -> bool {
     notification.progress.is_some()
         || matches!(
-            notification.key,
+            notification.key.or(notification.fills),
             Some(UPDATE_PROGRESS_KEY | UPDATE_COMPLETE_KEY)
         )
-        || crate::popup::is_visible()
-        || crate::settings_window::is_open()
+        || HOST.get().is_some_and(|host| (host.user_engaged)())
 }
 
 /// Registers the process AUMID so the taskbar and shell say "Codex Minibar".
@@ -303,9 +323,9 @@ pub fn notify(notification: Notification) {
             notification.title, notification.body
         ));
     }
-    crate::popup_window::send_command(crate::popup_window::PopupCommand::Toast(Box::new(
-        notification,
-    )));
+    if let Some(host) = HOST.get() {
+        (host.deliver)(notification);
+    }
 }
 
 /// An informational notification.
