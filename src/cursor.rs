@@ -565,7 +565,16 @@ struct CursorAuth {
 impl CursorAuth {
     fn load() -> Result<Self> {
         let db_path = cursor_state_db();
-        let db = Connection::open_with_flags(&db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        let root = db_path
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .context("resolve Cursor profile directory")?;
+        Self::load_from(&db_path, root)
+    }
+
+    fn load_from(db_path: &Path, root: &Path) -> Result<Self> {
+        let db = Connection::open_with_flags(db_path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .with_context(|| format!("open Cursor session database at {}", db_path.display()))?;
         let value = |key: &str| -> Result<String> {
             db.query_row(
@@ -575,11 +584,84 @@ impl CursorAuth {
             )
             .with_context(|| format!("read {key} from Cursor session database"))
         };
+        let access = value(ACCESS_TOKEN_KEY)?;
+        let refresh = value(REFRESH_TOKEN_KEY)?;
+        let mut key = None;
+        let mut decode = |token: &str| -> Result<String> {
+            if !token.starts_with("cursor-safe-storage") {
+                return Ok(token.to_owned());
+            }
+            let encoded = token
+                .strip_prefix("cursor-safe-storage:")
+                .context("malformed Cursor safe-storage envelope")?;
+            let encoded = encoded
+                .strip_prefix("v1:")
+                .context("unsupported Cursor safe-storage envelope version")?;
+            if key.is_none() {
+                key = Some(cursor_master_key(root)?);
+            }
+            decrypt_cursor_token(encoded, key.as_ref().unwrap())
+        };
         Ok(Self {
-            access_token: value(ACCESS_TOKEN_KEY)?,
-            refresh_token: value(REFRESH_TOKEN_KEY)?,
+            access_token: decode(&access).context("decode Cursor access token")?,
+            refresh_token: decode(&refresh).context("decode Cursor refresh token")?,
         })
     }
+}
+
+/// Only read Cursor's profile; refreshed credentials remain in memory.
+#[cfg(windows)]
+fn cursor_master_key(root: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    use base64::engine::general_purpose::STANDARD;
+    let contents = std::fs::read(root.join("Local State")).context("read Cursor Local State")?;
+    let state: Value = serde_json::from_slice(&contents)
+        .map_err(|_| anyhow!("invalid Cursor Local State JSON"))?;
+    let encoded = state
+        .pointer("/os_crypt/encrypted_key")
+        .and_then(Value::as_str)
+        .context("Cursor Local State has no os_crypt encrypted_key")?;
+    let wrapped = STANDARD
+        .decode(encoded)
+        .map_err(|_| anyhow!("invalid base64 in Cursor os_crypt key"))?;
+    let wrapped = wrapped
+        .strip_prefix(b"DPAPI")
+        .context("Cursor os_crypt key is not DPAPI-wrapped")?;
+    let key = zeroize::Zeroizing::new(
+        crate::claude_desktop::unprotect(wrapped)
+            .context("unwrap Cursor os_crypt key with current-user DPAPI")?,
+    );
+    anyhow::ensure!(key.len() == 32, "Cursor os_crypt key must be 32 bytes");
+    Ok(key)
+}
+
+#[cfg(not(windows))]
+fn cursor_master_key(_root: &Path) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+    bail!("Cursor safe-storage decryption is currently supported only on Windows")
+}
+
+fn decrypt_cursor_token(encoded: &str, key: &[u8]) -> Result<String> {
+    use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+    use base64::engine::general_purpose::STANDARD;
+    let blob = STANDARD
+        .decode(encoded)
+        .map_err(|_| anyhow!("invalid base64 in Cursor safe-storage envelope"))?;
+    let body = blob
+        .strip_prefix(b"v10")
+        .context("unsupported Cursor OSCrypt version (expected v10)")?;
+    anyhow::ensure!(body.len() >= 12 + 16, "truncated Cursor OSCrypt envelope");
+    let cipher = Aes256Gcm::new_from_slice(key)
+        .map_err(|_| anyhow!("Cursor os_crypt key must be 32 bytes"))?;
+    let plaintext = zeroize::Zeroizing::new(
+        cipher
+            .decrypt(Nonce::from_slice(&body[..12]), &body[12..])
+            .map_err(|_| {
+                anyhow!("Cursor token authentication failed (wrong key or damaged envelope)")
+            })?,
+    );
+    let token = std::str::from_utf8(&plaintext)
+        .map_err(|_| anyhow!("decrypted Cursor token is not UTF-8"))?;
+    anyhow::ensure!(!token.trim().is_empty(), "decrypted Cursor token is empty");
+    Ok(token.to_owned())
 }
 
 fn cursor_state_db() -> PathBuf {
@@ -756,6 +838,156 @@ fn number(value: Option<&Value>) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    fn sealed_token(key: &[u8], token: &[u8]) -> String {
+        use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+        use base64::engine::general_purpose::STANDARD;
+        let nonce = [3u8; 12];
+        let mut blob = b"v10".to_vec();
+        blob.extend(nonce);
+        blob.extend(
+            Aes256Gcm::new_from_slice(key)
+                .unwrap()
+                .encrypt(Nonce::from_slice(&nonce), token)
+                .unwrap(),
+        );
+        STANDARD.encode(blob)
+    }
+
+    #[test]
+    fn safe_storage_authentication_and_format_errors() {
+        use base64::engine::general_purpose::STANDARD;
+        let key = [7; 32];
+        let sealed = sealed_token(&key, b"synthetic-token");
+        assert_eq!(
+            decrypt_cursor_token(&sealed, &key).unwrap(),
+            "synthetic-token"
+        );
+        assert!(decrypt_cursor_token(&sealed, &[8; 32]).is_err());
+        let mut damaged = STANDARD.decode(&sealed).unwrap();
+        *damaged.last_mut().unwrap() ^= 1;
+        assert!(decrypt_cursor_token(&STANDARD.encode(damaged), &key).is_err());
+        for invalid in [
+            "%%%".to_owned(),
+            STANDARD.encode(b"v11unsupported"),
+            STANDARD.encode(b"v10short"),
+            STANDARD.encode([]),
+            sealed_token(&key, b""),
+            sealed_token(&key, &[0xff]),
+        ] {
+            assert!(decrypt_cursor_token(&invalid, &key).is_err());
+        }
+    }
+
+    fn auth_fixture(root: &Path, access: &str, refresh: &str) -> PathBuf {
+        let path = root.join("User/globalStorage/state.vscdb");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let db = Connection::open(&path).unwrap();
+        db.execute_batch("CREATE TABLE ItemTable (key TEXT PRIMARY KEY, value TEXT);")
+            .unwrap();
+        for (key, value) in [(ACCESS_TOKEN_KEY, access), (REFRESH_TOKEN_KEY, refresh)] {
+            db.execute("INSERT INTO ItemTable VALUES (?1, ?2)", [key, value])
+                .unwrap();
+        }
+        path
+    }
+
+    #[test]
+    fn plaintext_load_is_read_only_and_needs_no_local_state() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = auth_fixture(dir.path(), "legacy-access", "legacy-refresh");
+        let before = std::fs::read(&path).unwrap();
+        let auth = CursorAuth::load_from(&path, dir.path()).unwrap();
+        assert_eq!(auth.access_token, "legacy-access");
+        assert_eq!(auth.refresh_token, "legacy-refresh");
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+        assert!(!dir.path().join("Local State").exists());
+        assert!(CursorAuth::load_from(&dir.path().join("missing.db"), dir.path()).is_err());
+        assert!(!dir.path().join("missing.db").exists());
+    }
+
+    #[test]
+    fn unknown_envelope_version_never_becomes_plaintext() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = auth_fixture(dir.path(), "legacy-access", "cursor-safe-storage:v2:secret");
+        let error = CursorAuth::load_from(&path, dir.path()).err().unwrap();
+        assert!(format!("{error:#}").contains("unsupported Cursor safe-storage"));
+        assert!(!format!("{error:#}").contains("secret"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn encrypted_and_mixed_profiles_use_dpapi_and_remain_unchanged() {
+        use base64::engine::general_purpose::STANDARD;
+        use windows_sys::Win32::{
+            Foundation::LocalFree,
+            Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptProtectData},
+        };
+        let key = [7u8; 32];
+        let input = CRYPT_INTEGER_BLOB {
+            cbData: 32,
+            pbData: key.as_ptr().cast_mut(),
+        };
+        let mut output = CRYPT_INTEGER_BLOB {
+            cbData: 0,
+            pbData: std::ptr::null_mut(),
+        };
+        // SAFETY: initialized blobs live throughout the call; DPAPI owns output.
+        assert_ne!(
+            unsafe {
+                CryptProtectData(
+                    &input,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                    0,
+                    &mut output,
+                )
+            },
+            0
+        );
+        let mut wrapped = b"DPAPI".to_vec();
+        // SAFETY: successful DPAPI call returned cbData readable bytes.
+        wrapped.extend_from_slice(unsafe {
+            std::slice::from_raw_parts(output.pbData, output.cbData as usize)
+        });
+        // SAFETY: DPAPI allocated output with LocalAlloc.
+        unsafe { LocalFree(output.pbData.cast()) };
+        for (encrypt_access, encrypt_refresh) in [(true, true), (true, false), (false, true)] {
+            let dir = tempfile::tempdir().unwrap();
+            let envelope = |token: &str| {
+                format!(
+                    "cursor-safe-storage:v1:{}",
+                    sealed_token(&key, token.as_bytes())
+                )
+            };
+            let access = if encrypt_access {
+                envelope("synthetic-access")
+            } else {
+                "synthetic-access".into()
+            };
+            let refresh = if encrypt_refresh {
+                envelope("synthetic-refresh")
+            } else {
+                "synthetic-refresh".into()
+            };
+            let path = auth_fixture(dir.path(), &access, &refresh);
+            let state_path = dir.path().join("Local State");
+            std::fs::write(
+                &state_path,
+                json!({"os_crypt": {"encrypted_key": STANDARD.encode(&wrapped)}}).to_string(),
+            )
+            .unwrap();
+            let before_db = std::fs::read(&path).unwrap();
+            let before_state = std::fs::read(&state_path).unwrap();
+            let auth = CursorAuth::load_from(&path, dir.path()).unwrap();
+            assert_eq!(auth.access_token, "synthetic-access");
+            assert_eq!(auth.refresh_token, "synthetic-refresh");
+            assert_eq!(std::fs::read(&path).unwrap(), before_db);
+            assert_eq!(std::fs::read(&state_path).unwrap(), before_state);
+        }
+    }
+
     use super::*;
     use chrono::Timelike;
 
