@@ -124,19 +124,24 @@ impl AppState {
         let Ok(mut current) = self.limits.lock() else {
             return;
         };
-        let mut changed = false;
+        let mut renamed = Vec::new();
         for instance in settings
             .instances
             .iter()
             .filter(|instance| instance.driver == ProviderKind::OpenRouter)
         {
-            changed |= crate::openrouter::apply_account_names(
-                current.get_mut(instance.provider_id()),
-                instance,
-            );
+            let provider = instance.provider_id();
+            if crate::openrouter::apply_account_names(current.get_mut(provider), instance) {
+                renamed.push((provider, current.get(provider).clone()));
+            }
         }
-        if changed {
-            self.mark(Changes::LIMITS);
+        drop(current);
+        if renamed.is_empty() {
+            return;
+        }
+        self.mark(Changes::LIMITS);
+        for (provider, limits) in renamed {
+            limits_persister().save(provider, limits);
         }
     }
 

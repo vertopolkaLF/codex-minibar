@@ -266,6 +266,28 @@ fn take<T>(slot: &Mutex<Option<T>>) -> Option<T> {
     slot.lock().ok().and_then(|mut slot| slot.take())
 }
 
+/// What one flush repaints for the snapshots that changed.
+#[derive(Debug, PartialEq, Eq)]
+struct FanOut {
+    /// Tray, taskbar and Settings take the live quota snapshot.
+    sync_limits: bool,
+    /// The popup takes `ui`.
+    publish: bool,
+}
+
+impl FanOut {
+    /// Folds usage changes into `ui` and decides the rest.
+    fn plan(changes: Changes, ui: &mut UiState, ui_changed: bool) -> Self {
+        if changes.contains(Changes::USAGE) {
+            ui.usage_revision = ui.usage_revision.wrapping_add(1);
+        }
+        Self {
+            sync_limits: changes.contains(Changes::LIMITS),
+            publish: ui_changed || !changes.is_empty(),
+        }
+    }
+}
+
 pub(super) fn start(state: Arc<AppState>) {
     thread::spawn(move || Bridge::new(state).run());
 }
@@ -425,14 +447,11 @@ impl Bridge {
     /// Repaints every surface from the shared snapshots that changed, then
     /// publishes the popup state if anything did.
     fn flush(&mut self) {
-        let changes = self.state.take_changes();
-        if changes.contains(Changes::LIMITS) {
+        let fan_out = FanOut::plan(self.state.take_changes(), &mut self.ui, self.ui_changed);
+        if fan_out.sync_limits {
             self.sync_limits();
         }
-        if changes.contains(Changes::USAGE) {
-            self.ui.usage_revision = self.ui.usage_revision.wrapping_add(1);
-        }
-        if self.ui_changed || !changes.is_empty() {
+        if fan_out.publish {
             self.ui_changed = false;
             publish_ui(&self.ui);
         }
@@ -464,9 +483,8 @@ impl Bridge {
     fn sync_tray(&mut self, limits: &ProviderLimits) {
         let update_available = matches!(self.update_phase, UpdatePhase::Available(_));
         crate::taskbar::set_update_available(update_available);
-        match self.tray.sync(&self.widgets, limits, update_available) {
-            Ok(()) => self.ui.error = None,
-            Err(error) => self.ui.set_popup_error(error.to_string()),
+        if let Err(error) = self.tray.sync(&self.widgets, limits, update_available) {
+            self.ui.set_popup_error(error.to_string());
         }
         self.ui_changed = true;
     }
@@ -520,9 +538,10 @@ impl Bridge {
         self.ui.set_settings(settings);
         // Presentation settings must visibly apply before any background
         // work. In particular, changing provider icons must never wait on a
-        // worker lock, network request, or provider lifecycle change.
+        // worker lock, network request, or provider lifecycle change. The
+        // tray and taskbar repaint once, in the flush that ends this tick.
+        publish_ui(&self.ui);
         self.ui_changed = true;
-        self.flush();
         let settings = Arc::clone(&self.ui.settings);
         if providers_changed || !restart.is_empty() {
             for (provider, error) in state.sync_provider_workers(&settings, &restart) {
@@ -937,9 +956,19 @@ impl Bridge {
         ));
         warn_login_expiry(provider, &limits);
         self.state.observe_reset_limits(provider, &limits);
-        self.state.replace_limits(provider, limits);
+        let mut limits = limits;
         // The running reader still has the names it started with.
-        self.state.apply_openrouter_account_names(&self.ui.settings);
+        if let Some(instance) = self
+            .ui
+            .settings
+            .instance(provider)
+            .filter(|instance| instance.driver == ProviderKind::OpenRouter)
+        {
+            crate::openrouter::apply_account_names(&mut limits, instance);
+        }
+        self.state.replace_limits(provider, limits);
+        // The tray repaint in this pass's flush reports its own failure.
+        self.ui.error = None;
         self.ui.clear_provider_error(provider);
         let limits = self.state.current_limits();
         let limits = limits.get(provider);
@@ -1025,6 +1054,75 @@ mod tests {
 
     fn id(kind: ProviderKind) -> ProviderId {
         ProviderId::primary(kind)
+    }
+
+    fn idle_state() -> AppState {
+        let (worker_events_tx, worker_events_rx) = std::sync::mpsc::channel();
+        let (usage_actions_tx, usage_actions_rx) = std::sync::mpsc::channel();
+        AppState {
+            settings: Settings::default(),
+            limits: Mutex::new(ProviderLimits::default()),
+            forced_resets: Mutex::new(Vec::new()),
+            provider_statuses: Mutex::new(Vec::new()),
+            changes: Default::default(),
+            commands: Mutex::new(HashMap::new()),
+            workers: Mutex::new(HashMap::new()),
+            worker_events_rx: Mutex::new(Some(worker_events_rx)),
+            worker_events_tx,
+            reset_feed_worker: Mutex::new(None),
+            provider_status_worker: Mutex::new(None),
+            activation_path: std::path::PathBuf::new(),
+            startup_provider_errors: Vec::new(),
+            last_activation_at: None,
+            settings_rx: Mutex::new(None),
+            usage_actions_rx: Mutex::new(Some(usage_actions_rx)),
+            usage_actions_tx,
+            updates: crate::updater::UpdateController::new(),
+        }
+    }
+
+    #[test]
+    fn changes_marked_within_a_tick_fan_out_once() {
+        let state = idle_state();
+        let mut ui = UiState::initial(&state);
+
+        // A settings commit resets a provider and then marks the widgets.
+        state.mark(Changes::LIMITS);
+        state.mark(Changes::LIMITS);
+        assert_eq!(
+            FanOut::plan(state.take_changes(), &mut ui, false),
+            FanOut {
+                sync_limits: true,
+                publish: true,
+            }
+        );
+        assert_eq!(ui.usage_revision, 0);
+        assert_eq!(
+            FanOut::plan(state.take_changes(), &mut ui, false),
+            FanOut {
+                sync_limits: false,
+                publish: false,
+            }
+        );
+
+        state.replace_usage(id(ProviderKind::Codex), Default::default());
+        assert_eq!(
+            FanOut::plan(state.take_changes(), &mut ui, false),
+            FanOut {
+                sync_limits: false,
+                publish: true,
+            }
+        );
+        assert_eq!(ui.usage_revision, 1);
+
+        assert_eq!(
+            FanOut::plan(state.take_changes(), &mut ui, true),
+            FanOut {
+                sync_limits: false,
+                publish: true,
+            }
+        );
+        assert_eq!(ui.usage_revision, 1);
     }
 
     #[test]

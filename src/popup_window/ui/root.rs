@@ -290,6 +290,33 @@ pub(super) enum SnapshotSlot {
     Overview,
 }
 
+/// Everything the palette is built from. Settings and the VS Code theme are
+/// compared by identity: a settings commit or edit replaces the snapshot, and
+/// reinstalling a theme replaces its entry.
+struct PaletteKey {
+    settings: Arc<crate::settings::Settings>,
+    vscode: Option<Arc<crate::vscode_themes::VsCodeTheme>>,
+    system_dark: bool,
+    accent: crate::theme::AccentRamp,
+    material: crate::settings::PopupBackgroundMaterial,
+    preview_generation: u64,
+}
+
+impl PartialEq for PaletteKey {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.settings, &other.settings)
+            && match (&self.vscode, &other.vscode) {
+                (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.system_dark == other.system_dark
+            && self.accent == other.accent
+            && self.material == other.material
+            && self.preview_generation == other.preview_generation
+    }
+}
+
 pub(crate) struct PopupRoot {
     pub(super) state: Arc<AppState>,
     pub(super) ui: Rc<UiState>,
@@ -302,6 +329,8 @@ pub(crate) struct PopupRoot {
     pub(super) default_font: SharedString,
     /// The `vscode_themes::preview_generation` the palette was built for.
     pub(super) preview_generation: u64,
+    /// What `palette` was last built from.
+    palette_key: Option<PaletteKey>,
     pub(super) fx: Fx,
     pub(super) hover: HashSet<u64>,
     pub(super) host: Host,
@@ -413,6 +442,7 @@ impl PopupRoot {
             accent,
             default_font,
             preview_generation: theme::preview_generation(),
+            palette_key: None,
             fx: Fx::default(),
             hover: HashSet::new(),
             host: Host::new(),
@@ -505,13 +535,29 @@ impl PopupRoot {
     pub(super) fn refresh_palette(&mut self, window: &Window) {
         self.preview_generation = theme::preview_generation();
         // Looked up on every refresh: reinstalling a theme replaces its entry.
+        let key = PaletteKey {
+            settings: Arc::clone(&self.ui.settings),
+            vscode: theme::popup_design(
+                self.ui.settings.popup_theme,
+                self.ui.settings.popup_vscode_theme.as_deref(),
+            )
+            .1,
+            system_dark: system_dark(window),
+            accent: self.accent,
+            material: crate::popup::background_material(),
+            preview_generation: self.preview_generation,
+        };
+        if self.palette_key.as_ref() == Some(&key) {
+            return;
+        }
         let palette = Palette::from_settings(
-            &self.ui.settings,
-            system_dark(window),
-            self.accent,
-            crate::popup::background_material(),
+            &key.settings,
+            key.system_dark,
+            key.accent,
+            key.material,
             &self.default_font,
         );
+        self.palette_key = Some(key);
         #[cfg(windows)]
         if (self.palette.material != palette.material
             || self.palette.backdrop_luminosity() != palette.backdrop_luminosity())

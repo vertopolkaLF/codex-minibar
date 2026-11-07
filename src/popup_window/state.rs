@@ -84,7 +84,9 @@ impl UiState {
     /// for the settings file. Returns the snapshot before the edit.
     pub(crate) fn edit_settings(&mut self, edit: impl FnOnce(&mut Settings)) -> Settings {
         let before = crate::settings::store::edit_snapshot(Arc::make_mut(&mut self.settings), edit);
-        self.usage_stats_providers = self.settings.usage_stats_providers();
+        if self.settings.instances != before.instances {
+            self.usage_stats_providers = self.settings.usage_stats_providers();
+        }
         before
     }
 
