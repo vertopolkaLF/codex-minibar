@@ -113,6 +113,9 @@ pub fn apply_pending_update() -> Result<()> {
     if let Err(error) = runtime.updates.apply() {
         return Err(report_update_failure(error));
     }
+    // Let the card show its last step before the process goes away; the
+    // helper waits for this process to exit anyway.
+    thread::sleep(RESTART_NOTICE);
     (runtime.before_exit)();
     release_for_update();
     std::process::exit(0);
@@ -124,6 +127,8 @@ fn report_update_failure(error: anyhow::Error) -> anyhow::Error {
     error
 }
 
+/// How long the "Restarting" step stays up before the process exits.
+const RESTART_NOTICE: Duration = Duration::from_millis(600);
 /// Minimum spacing of progress updates sent to the update card.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(80);
 
@@ -194,6 +199,14 @@ fn report_unpack(done: usize, total: usize) {
         } else {
             done as f32 / total as f32
         }),
+    );
+}
+
+fn report_restart() {
+    notifications::show_update_progress(
+        crate::i18n::tr("update-restarting"),
+        crate::i18n::tr("update-restarting-body"),
+        notifications::Progress::Fraction(1.0),
     );
 }
 
@@ -738,6 +751,7 @@ try {{
     );
     fs::write(&script_path, script).context("write update helper script")?;
     spawn_hidden_helper(&script_path).context("spawn update helper")?;
+    report_restart();
 
     Ok(())
 }

@@ -383,23 +383,24 @@ impl ToastHost {
     }
 
     /// A notification that fills a visible card becomes that card with its
-    /// summary and buttons; otherwise it stands on its own.
-    fn fill(&self, mut notification: Notification) -> Notification {
+    /// summary and buttons; otherwise it stands on its own, unless quiet
+    /// hours hold it back.
+    fn fill(&self, mut notification: Notification) -> Option<Notification> {
         let Some(key) = notification.fills.take() else {
-            return notification;
+            return Some(notification);
         };
         let Some(card) = self
             .cards
             .iter()
             .find(|card| card.leaving.is_none() && card.notification.key == Some(key))
         else {
-            return notification;
+            return (!crate::notifications::held_back(&notification)).then_some(notification);
         };
-        Notification {
+        Some(Notification {
             summary: notification.summary,
             actions: notification.actions,
             ..card.notification.clone()
-        }
+        })
     }
 
     /// Adds a card. Returns the native work to do outside this borrow when
@@ -410,7 +411,9 @@ impl ToastHost {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        let notification = self.fill(notification);
+        let Some(notification) = self.fill(notification) else {
+            return false;
+        };
         let palette = self.palette(window, cx);
         let hero = notification
             .summary

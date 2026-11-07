@@ -291,10 +291,26 @@ fn quiet_reason(game_mode_card: bool) -> Option<&'static str> {
 fn requested_by_user(notification: &Notification) -> bool {
     notification.progress.is_some()
         || matches!(
-            notification.key.or(notification.fills),
+            notification.key,
             Some(UPDATE_PROGRESS_KEY | UPDATE_COMPLETE_KEY)
         )
         || HOST.get().is_some_and(|host| (host.user_engaged)())
+}
+
+/// Whether quiet hours hold back `notification` as its own card right now;
+/// logs it when they do.
+pub(crate) fn held_back(notification: &Notification) -> bool {
+    if requested_by_user(notification) {
+        return false;
+    }
+    let Some(reason) = quiet_reason(notification.key == Some(GAME_MODE_KEY)) else {
+        return false;
+    };
+    crate::logger::info(format!(
+        "Notification held back ({reason}): {} — {}",
+        notification.title, notification.body
+    ));
+    true
 }
 
 /// Registers the process AUMID so the taskbar and shell say "Codex Minibar".
@@ -307,13 +323,9 @@ pub fn initialize() {
 
 /// Posts a notification to the toast host. Safe from any thread.
 pub fn notify(notification: Notification) {
-    if !requested_by_user(&notification)
-        && let Some(reason) = quiet_reason(notification.key == Some(GAME_MODE_KEY))
-    {
-        crate::logger::info(format!(
-            "Notification held back ({reason}): {} — {}",
-            notification.title, notification.body
-        ));
+    // Whether a filling card is held back depends on the card it would fill;
+    // the host decides that with [`held_back`].
+    if notification.fills.is_none() && held_back(&notification) {
         return;
     }
     // Progress ticks arrive many times a second; only results are logged.

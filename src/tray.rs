@@ -163,14 +163,17 @@ fn indicator_color(
     remaining: Option<u8>,
     accent: [u8; 3],
 ) -> [u8; 3] {
+    let light = crate::win32::shell_uses_light_theme();
     let palette = IndicatorPalette {
         critical: [230, 74, 72],
         warning: [245, 158, 11],
         healthy: [49, 196, 141],
-        text: tray_text_color(crate::win32::shell_uses_light_theme()),
+        text: tray_text_color(light),
         accent,
     };
-    let (red, green, blue) = provider_registry::descriptor(provider.kind()).brand_rgb;
+    let (red, green, blue) = provider_registry::descriptor(provider.kind())
+        .icon_rgb
+        .pick(!light);
     palette.color(indicator, remaining, [red, green, blue]).0
 }
 
