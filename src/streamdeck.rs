@@ -279,7 +279,48 @@ fn write_endpoint(path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;
     staged.write_all(contents)?;
     staged.as_file().sync_all()?;
+    publish_endpoint(staged, path)
+}
+
+#[cfg(not(windows))]
+fn publish_endpoint(staged: tempfile::NamedTempFile, path: &std::path::Path) -> io::Result<()> {
     staged.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// ReplaceFile preserves existing readers' handles, unlike MoveFileEx (used by
+/// tempfile::persist). Close our staging handle before Windows opens it again.
+#[cfg(windows)]
+fn publish_endpoint(staged: tempfile::NamedTempFile, path: &std::path::Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{Foundation::ERROR_FILE_NOT_FOUND, Storage::FileSystem::ReplaceFileW};
+    let staged = staged.into_temp_path();
+    let destination: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let source: Vec<u16> = staged.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: paths are NUL-terminated and live for the call; optional pointers
+    // are null. The staging guard removes the temporary file on failure.
+    if unsafe {
+        ReplaceFileW(
+            destination.as_ptr(),
+            source.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() != Some(ERROR_FILE_NOT_FOUND as i32) {
+        return Err(error);
+    }
+    // First publication has no destination. Do not overwrite one created by a
+    // concurrent writer after ReplaceFile reported a missing file.
+    staged
+        .persist_noclobber(path)
+        .map_err(|error| error.error)?;
     Ok(())
 }
 
@@ -537,6 +578,17 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn endpoint_publication_creates_then_replaces_a_complete_document() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("nested").join(ENDPOINT_FILE_NAME);
+        write_endpoint(&path, b"first-fixture").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"first-fixture");
+        write_endpoint(&path, b"second-fixture").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second-fixture");
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    }
 
     #[test]
     fn endpoint_publication_replaces_the_file_instead_of_truncating_a_readers_copy() {
