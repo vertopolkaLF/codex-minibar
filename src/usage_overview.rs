@@ -190,8 +190,7 @@ pub fn build_overview_snapshot(
 ) -> OverviewSnapshot {
     let now = Local::now();
     let hourly = range == OverviewRange::Past24h;
-    let end_hour = crate::local_time::truncate_hour(now);
-    let start_hour = end_hour - Duration::hours(23);
+    let (start_hour, _) = hour_window(now);
     let end_date = now.date_naive();
     let start_date = if hourly {
         start_hour.date_naive()
@@ -211,6 +210,55 @@ fn build_overview_snapshot_for_dates(
     assemble_overview_snapshot(limits, enabled, metric, start_date, end_date, false)
 }
 
+/// The 24 local hours ending with the current one, as `(first, last)`.
+fn hour_window(now: DateTime<Local>) -> (DateTime<Local>, DateTime<Local>) {
+    let end_hour = crate::local_time::truncate_hour(now);
+    (end_hour - Duration::hours(23), end_hour)
+}
+
+/// One provider's stored usage for the snapshot window.
+#[derive(Default)]
+struct ProviderData {
+    daily: Vec<DailyTokenUsage>,
+    hourly: BTreeMap<DateTime<Local>, TokenUsage>,
+    sessions: u64,
+    models: Vec<(String, TokenUsage)>,
+    projects: Vec<(String, TokenUsage)>,
+}
+
+fn load_provider_data(
+    store: &store::ProviderStore,
+    provider: ProviderId,
+    load_days: u16,
+    (start_date, end_date): (NaiveDate, NaiveDate),
+    hours: Option<(DateTime<Local>, DateTime<Local>)>,
+) -> anyhow::Result<ProviderData> {
+    let mut data = ProviderData {
+        daily: store.load_usage_daily(provider, load_days)?.daily,
+        sessions: store.count_session_paths(provider, start_date, end_date)?,
+        projects: store.load_project_breakdown(provider, start_date, end_date)?,
+        ..Default::default()
+    };
+    match hours {
+        // OpenRouter keeps hours per model in its analytics cache, aligned to
+        // the chart's own hour grid.
+        Some((start, end)) if provider.kind() == ProviderKind::OpenRouter => {
+            for (model, at, usage) in
+                crate::openrouter::analytics::hourly_rows(store, provider, start, end)?
+            {
+                data.hourly.entry(at).or_default().add(&usage);
+                data.models.push((model, usage));
+            }
+        }
+        Some((start, end)) => {
+            data.hourly = store.load_usage_hourly(provider, start, end)?;
+            data.models = store.load_model_breakdown(provider, start_date, end_date)?;
+        }
+        None => data.models = store.load_model_breakdown(provider, start_date, end_date)?,
+    }
+    Ok(data)
+}
+
 fn assemble_overview_snapshot(
     limits: &ProviderLimits,
     enabled: &[ProviderId],
@@ -220,8 +268,7 @@ fn assemble_overview_snapshot(
     hourly: bool,
 ) -> OverviewSnapshot {
     let now = Local::now();
-    let end_hour = crate::local_time::truncate_hour(now);
-    let start_hour = end_hour - Duration::hours(23);
+    let (start_hour, end_hour) = hour_window(now);
     // statistics_from_daily is always anchored to today, so load enough days
     // to include `start_date` even when the window ends on yesterday.
     let load_days = if hourly {
@@ -243,112 +290,44 @@ fn assemble_overview_snapshot(
     let spend_providers: Vec<ProviderId> = enabled
         .iter()
         .copied()
-        .filter(|provider| {
-            provider_registry::PROVIDERS.iter().any(|descriptor| {
-                descriptor.kind == provider.kind() && descriptor.include_in_total_spend
-            })
-        })
+        .filter(|provider| provider_registry::descriptor(provider.kind()).include_in_total_spend)
         .collect();
 
     if spend_providers.is_empty() {
         return snapshot;
     }
 
-    let store_data = store::with_store(|store| {
-        let mut provider_daily = BTreeMap::new();
-        let mut provider_hourly = BTreeMap::new();
-        let mut provider_sessions = BTreeMap::new();
-        let mut model_rows = BTreeMap::<(ProviderId, String), TokenUsage>::new();
-        let mut project_cwds = Vec::<(ProviderId, String, TokenUsage)>::new();
-        for provider in &spend_providers {
-            for (cwd, usage) in store
-                .load_project_breakdown(*provider, start_date, end_date)
-                .unwrap_or_default()
-            {
-                project_cwds.push((*provider, cwd, usage));
-            }
-            let statistics = store
-                .load_usage_daily(*provider, load_days)
-                .unwrap_or_default();
-            provider_daily.insert(*provider, statistics.daily);
-            if hourly {
-                provider_hourly.insert(
-                    *provider,
-                    store
-                        .load_usage_hourly(*provider, start_hour, end_hour)
-                        .unwrap_or_default(),
-                );
-            }
-            provider_sessions.insert(
-                *provider,
-                store
-                    .count_session_paths(*provider, start_date, end_date)
-                    .unwrap_or(0),
-            );
-            let breakdown = if hourly && provider.kind() == ProviderKind::OpenRouter {
-                store
-                    .load_openrouter_hourly_rows(*provider, start_hour, end_hour)?
-                    .into_iter()
-                    .map(|(model, _, usage)| (model, usage))
-                    .collect()
-            } else {
-                store
-                    .load_model_breakdown(*provider, start_date, end_date)
-                    .unwrap_or_default()
-            };
-            for (model, usage) in breakdown {
-                let model = if provider.kind() == ProviderKind::Cursor {
-                    crate::cursor::normalize_cursor_model_name(&model)
-                } else {
-                    model
-                };
-                model_rows
-                    .entry((*provider, model))
-                    .or_default()
-                    .add(&usage);
-            }
-        }
-        Ok((
-            provider_daily,
-            provider_hourly,
-            provider_sessions,
-            model_rows,
-            project_cwds,
-        ))
+    // A provider whose rows cannot be read shows as empty; the others stay.
+    let data: BTreeMap<ProviderId, ProviderData> = store::with_store(|store| {
+        Ok(spend_providers
+            .iter()
+            .map(|&provider| {
+                let data = load_provider_data(
+                    store,
+                    provider,
+                    load_days,
+                    (start_date, end_date),
+                    hourly.then_some((start_hour, end_hour)),
+                )
+                .unwrap_or_else(|error| {
+                    crate::logger::info(format!(
+                        "failed to read {} usage for the overview: {error:#}",
+                        provider.id()
+                    ));
+                    ProviderData::default()
+                });
+                (provider, data)
+            })
+            .collect())
     })
-    .unwrap_or_default();
-
-    let (provider_daily, provider_hourly, provider_sessions, mut model_rows, project_cwds) =
-        store_data;
-    let codex = ProviderId::primary(ProviderKind::Codex);
-    let codex_has_usage = provider_daily.get(&codex).is_some_and(|days| {
-        days.iter().any(|entry| {
-            entry.date >= start_date
-                && entry.date <= end_date
-                && (entry.usage.requests > 0 || entry.usage.total_tokens() > 0)
-        })
+    .unwrap_or_else(|error| {
+        crate::logger::info(format!("failed to open usage for the overview: {error:#}"));
+        BTreeMap::new()
     });
-    let codex_missing_models = !model_rows.keys().any(|(provider, _)| *provider == codex);
-    if spend_providers.contains(&codex) && codex_has_usage && codex_missing_models {
-        // Incremental Codex saves used to wipe usage_model_daily. Rebuild
-        // from session logs instead of asking the user to delete the store.
-        if crate::usage::refresh_usage_statistics(codex, None, load_days).is_ok()
-            && let Ok(rows) =
-                store::with_store(|store| store.load_model_breakdown(codex, start_date, end_date))
-        {
-            for (model, usage) in rows {
-                model_rows.entry((codex, model)).or_default().add(&usage);
-            }
-        }
-    }
-    // Codex hourly data is populated by the account-aware usage worker at
-    // startup. Its usage event invalidates the overview snapshot once the
-    // scan completes. Never bypass attribution with a raw-log scan here:
-    // an empty active-account history may coexist with another account's logs.
 
     let mut daily_by_date: BTreeMap<NaiveDate, BTreeMap<ProviderId, TokenUsage>> = BTreeMap::new();
-    for (provider, days) in &provider_daily {
-        for entry in days {
+    for (provider, provider_data) in &data {
+        for entry in &provider_data.daily {
             if entry.date < start_date || entry.date > end_date {
                 continue;
             }
@@ -361,96 +340,71 @@ fn assemble_overview_snapshot(
         }
     }
 
-    let mut providers = Vec::new();
     for provider in &spend_providers {
-        let mut usage = TokenUsage::default();
-        if hourly {
-            if let Some(hours) = provider_hourly.get(provider) {
-                for hour_usage in hours.values() {
-                    usage.add(hour_usage);
-                }
-            }
+        let provider_data = data.get(provider);
+        let usage = match provider_data {
             // No daily fallback: calendar days would pull in activity older
             // than 24 hours. Providers without hourly rows show zero here.
-        } else if let Some(days) = provider_daily.get(provider) {
-            for entry in days {
-                if entry.date >= start_date && entry.date <= end_date {
-                    usage.add(&entry.usage);
-                }
-            }
-        }
-        let tracked = provider_sessions.get(provider).copied().unwrap_or(0);
+            Some(provider_data) if hourly => sum_usage(provider_data.hourly.values()),
+            Some(provider_data) => slice_provider_usage(&provider_data.daily, start_date, end_date),
+            None => TokenUsage::default(),
+        };
+        let tracked = provider_data.map_or(0, |provider_data| provider_data.sessions);
         // Codex/Claude have real session files or event paths. Cursor (and
         // anyone else with only a daily rollup) never writes those tables —
         // its CSV rows already live in `requests`. A stored 0 is not "unknown".
         let sessions = if tracked > 0 { tracked } else { usage.requests };
-        snapshot.totals.add(&usage);
-        snapshot.total_sessions = snapshot.total_sessions.saturating_add(sessions);
-        providers.push(ProviderOverview {
+        snapshot.providers.push(ProviderOverview {
             provider: *provider,
             sessions,
             usage,
-            share_cost: 0.0,
-            share_tokens: 0.0,
-            excluded: false,
+            ..Default::default()
         });
     }
-
-    let total_cost = snapshot.totals.estimated_cost_microusd.max(1);
-    let total_tokens = snapshot.totals.total_tokens().max(1);
-    for entry in &mut providers {
-        entry.share_cost = entry.usage.estimated_cost_microusd as f64 / total_cost as f64 * 100.0;
-        entry.share_tokens = entry.usage.total_tokens() as f64 / total_tokens as f64 * 100.0;
+    // Keep in-memory limits as a fallback when the store has not hydrated yet.
+    if snapshot
+        .providers
+        .iter()
+        .all(|entry| entry.usage.requests == 0)
+    {
+        for entry in &mut snapshot.providers {
+            entry.usage = slice_provider_usage(
+                limits.get(entry.provider).usage.daily.as_slice(),
+                start_date,
+                end_date,
+            );
+            entry.sessions = entry.usage.requests;
+        }
     }
-    providers.sort_by(|left, right| {
+    update_provider_totals(&mut snapshot, &BTreeSet::new());
+    snapshot.providers.sort_by(|left, right| {
         right
             .usage
             .estimated_cost_microusd
             .cmp(&left.usage.estimated_cost_microusd)
     });
-    snapshot.providers = providers;
 
-    let total_metric = match metric {
-        OverviewMetric::Cost => snapshot.totals.estimated_cost_microusd.max(1),
-        OverviewMetric::Tokens => snapshot.totals.total_tokens().max(1),
-    };
+    let total_metric = metric_value(metric, &snapshot.totals).max(1);
 
     if hourly {
         snapshot.day_rows = (0..24)
             .rev()
             .map(|offset| {
                 let at = start_hour + Duration::hours(offset);
-                let mut cost = 0_u64;
-                let mut tokens = 0_u64;
-                let mut requests = 0_u64;
-                let mut priced_requests = 0_u64;
-                let mut by_provider = BTreeMap::new();
-                for (provider, hours) in &provider_hourly {
-                    if let Some(usage) = hours.get(&at) {
-                        cost = cost.saturating_add(usage.estimated_cost_microusd);
-                        tokens = tokens.saturating_add(usage.total_tokens());
-                        requests = requests.saturating_add(usage.requests);
-                        priced_requests = priced_requests.saturating_add(usage.priced_requests);
-                        by_provider.insert(*provider, usage.clone());
-                    }
-                }
-                let metric_value = match metric {
-                    OverviewMetric::Cost => cost,
-                    OverviewMetric::Tokens => tokens,
-                };
-                BreakdownRow {
+                let by_provider: BTreeMap<ProviderId, TokenUsage> = data
+                    .iter()
+                    .filter_map(|(provider, provider_data)| {
+                        Some((*provider, provider_data.hourly.get(&at)?.clone()))
+                    })
+                    .collect();
+                let mut row = BreakdownRow {
                     label: format_hour_label(at),
-                    weekday: None,
-                    provider: None,
-                    cost_microusd: cost,
-                    tokens,
-                    requests,
-                    priced_requests,
-                    share: metric_value as f64 / total_metric as f64 * 100.0,
                     by_provider,
-                    unknown: false,
-                    path: None,
-                }
+                    ..Default::default()
+                };
+                sum_row_providers(&mut row);
+                row.share = share(row_metric(metric, &row), total_metric);
+                row
             })
             .filter(|row| row.tokens > 0 || row.cost_microusd > 0)
             .collect();
@@ -458,25 +412,18 @@ fn assemble_overview_snapshot(
         snapshot.daily_series = (0..24)
             .map(|offset| {
                 let at = start_hour + Duration::hours(offset);
-                let mut values = BTreeMap::new();
-                let mut total = 0_u64;
-                for (provider, hours) in &provider_hourly {
-                    let usage = hours.get(&at);
-                    let value = match (metric, usage) {
-                        (OverviewMetric::Cost, Some(usage)) => usage.estimated_cost_microusd,
-                        (OverviewMetric::Tokens, Some(usage)) => usage.total_tokens(),
-                        _ => 0,
-                    };
-                    if value > 0 {
-                        values.insert(*provider, value);
-                        total = total.saturating_add(value);
-                    }
-                }
+                let by_provider: BTreeMap<ProviderId, u64> = data
+                    .iter()
+                    .filter_map(|(provider, provider_data)| {
+                        let value = metric_value(metric, provider_data.hourly.get(&at)?);
+                        (value > 0).then_some((*provider, value))
+                    })
+                    .collect();
                 DailySeriesPoint {
                     at,
                     date: at.date_naive(),
-                    by_provider: values,
-                    total,
+                    total: sum_values(by_provider.values()),
+                    by_provider,
                 }
             })
             .collect();
@@ -485,130 +432,110 @@ fn assemble_overview_snapshot(
             .iter()
             .rev()
             .map(|(date, providers)| {
-                let usage = providers
-                    .values()
-                    .fold(TokenUsage::default(), |mut total, usage| {
-                        total.add(usage);
-                        total
-                    });
-                let cost = usage.estimated_cost_microusd;
-                let tokens = usage.total_tokens();
-                let metric_value = match metric {
-                    OverviewMetric::Cost => cost,
-                    OverviewMetric::Tokens => tokens,
-                };
-                BreakdownRow {
+                let mut row = BreakdownRow {
                     label: crate::i18n::month_day(*date),
                     weekday: Some(weekday_short(*date).to_owned()),
-                    provider: None,
-                    cost_microusd: cost,
-                    tokens,
-                    requests: usage.requests,
-                    priced_requests: usage.priced_requests,
-                    share: metric_value as f64 / total_metric as f64 * 100.0,
                     by_provider: providers.clone(),
-                    unknown: false,
-                    path: None,
-                }
+                    ..Default::default()
+                };
+                sum_row_providers(&mut row);
+                row.share = share(row_metric(metric, &row), total_metric);
+                row
             })
             .collect();
 
         snapshot.daily_series = daily_by_date
             .into_iter()
             .map(|(date, by_provider)| {
-                let mut values = BTreeMap::new();
-                let mut total = 0_u64;
-                for (provider, usage) in by_provider {
-                    let value = match metric {
-                        OverviewMetric::Cost => usage.estimated_cost_microusd,
-                        OverviewMetric::Tokens => usage.total_tokens(),
-                    };
-                    values.insert(provider, value);
-                    total = total.saturating_add(value);
-                }
+                let by_provider: BTreeMap<ProviderId, u64> = by_provider
+                    .iter()
+                    .map(|(provider, usage)| (*provider, metric_value(metric, usage)))
+                    .collect();
                 DailySeriesPoint {
                     at: crate::local_time::start_of_local_day(date),
                     date,
-                    by_provider: values,
-                    total,
+                    total: sum_values(by_provider.values()),
+                    by_provider,
                 }
             })
             .collect();
     }
 
+    let mut model_rows = BTreeMap::<(ProviderId, String), TokenUsage>::new();
+    let mut project_cwds = Vec::<(ProviderId, String, TokenUsage)>::new();
+    for (provider, provider_data) in data {
+        for (model, usage) in provider_data.models {
+            let model = if provider.kind() == ProviderKind::Cursor {
+                crate::cursor::normalize_cursor_model_name(&model)
+            } else {
+                model
+            };
+            model_rows.entry((provider, model)).or_default().add(&usage);
+        }
+        project_cwds.extend(
+            provider_data
+                .projects
+                .into_iter()
+                .map(|(cwd, usage)| (provider, cwd, usage)),
+        );
+    }
     snapshot.model_rows = model_rows
         .into_iter()
         .map(|((provider, model), usage)| BreakdownRow {
             label: model,
-            weekday: None,
             provider: Some(provider),
             cost_microusd: usage.estimated_cost_microusd,
             tokens: usage.total_tokens(),
             requests: usage.requests,
             priced_requests: usage.priced_requests,
-            share: match metric {
-                OverviewMetric::Cost => {
-                    usage.estimated_cost_microusd as f64 / total_metric as f64 * 100.0
-                }
-                OverviewMetric::Tokens => usage.total_tokens() as f64 / total_metric as f64 * 100.0,
-            },
-            by_provider: BTreeMap::new(),
-            unknown: false,
-            path: None,
+            share: share(metric_value(metric, &usage), total_metric),
+            ..Default::default()
         })
         .collect();
-    snapshot.model_rows.sort_by(|left, right| match metric {
-        OverviewMetric::Cost => right.cost_microusd.cmp(&left.cost_microusd),
-        OverviewMetric::Tokens => right.tokens.cmp(&left.tokens),
-    });
+    snapshot
+        .model_rows
+        .sort_by_key(|row| std::cmp::Reverse(row_metric(metric, row)));
     snapshot.project_rows = project_rows(project_cwds, metric, total_metric);
-
-    // Keep in-memory limits as a fallback when the store has not hydrated yet.
-    if snapshot.totals.requests == 0 {
-        snapshot.totals = TokenUsage::default();
-        snapshot.total_sessions = 0;
-        for entry in &mut snapshot.providers {
-            let usage = slice_provider_usage(
-                limits.get(entry.provider).usage.daily.as_slice(),
-                start_date,
-                end_date,
-            );
-            let sessions = usage.requests;
-            snapshot.totals.add(&usage);
-            snapshot.total_sessions = snapshot.total_sessions.saturating_add(sessions);
-            entry.usage = usage;
-            entry.sessions = sessions;
-        }
-        let total_cost = snapshot.totals.estimated_cost_microusd.max(1);
-        let total_tokens = snapshot.totals.total_tokens().max(1);
-        for entry in &mut snapshot.providers {
-            entry.share_cost =
-                entry.usage.estimated_cost_microusd as f64 / total_cost as f64 * 100.0;
-            entry.share_tokens = entry.usage.total_tokens() as f64 / total_tokens as f64 * 100.0;
-        }
-        snapshot.providers.sort_by(|left, right| {
-            right
-                .usage
-                .estimated_cost_microusd
-                .cmp(&left.usage.estimated_cost_microusd)
-        });
-    }
-
     snapshot
 }
 
-/// Leaves `excluded` providers out of a built snapshot without touching the
-/// store: totals, shares, the chart series and both breakdowns are recomputed
-/// from the remaining providers. Excluded tiles keep their own usage.
-pub fn exclude_providers(
-    snapshot: &OverviewSnapshot,
-    excluded: &BTreeSet<ProviderId>,
-    metric: OverviewMetric,
-) -> OverviewSnapshot {
-    let mut snapshot = snapshot.clone();
-    if excluded.is_empty() {
-        return snapshot;
+fn metric_value(metric: OverviewMetric, usage: &TokenUsage) -> u64 {
+    match metric {
+        OverviewMetric::Cost => usage.estimated_cost_microusd,
+        OverviewMetric::Tokens => usage.total_tokens(),
     }
+}
+
+fn row_metric(metric: OverviewMetric, row: &BreakdownRow) -> u64 {
+    match metric {
+        OverviewMetric::Cost => row.cost_microusd,
+        OverviewMetric::Tokens => row.tokens,
+    }
+}
+
+/// Percentage of `total`, which callers keep at least 1.
+fn share(value: u64, total: u64) -> f64 {
+    value as f64 / total as f64 * 100.0
+}
+
+fn sum_usage<'a>(usages: impl IntoIterator<Item = &'a TokenUsage>) -> TokenUsage {
+    usages
+        .into_iter()
+        .fold(TokenUsage::default(), |mut total, usage| {
+            total.add(usage);
+            total
+        })
+}
+
+fn sum_values<'a>(values: impl IntoIterator<Item = &'a u64>) -> u64 {
+    values
+        .into_iter()
+        .fold(0_u64, |sum, value| sum.saturating_add(*value))
+}
+
+/// Recomputes totals, sessions and both shares from the providers that are
+/// not `excluded`; excluded ones get no share.
+fn update_provider_totals(snapshot: &mut OverviewSnapshot, excluded: &BTreeSet<ProviderId>) {
     snapshot.totals = TokenUsage::default();
     snapshot.total_sessions = 0;
     for entry in &mut snapshot.providers {
@@ -625,47 +552,39 @@ pub fn exclude_providers(
             (0.0, 0.0)
         } else {
             (
-                entry.usage.estimated_cost_microusd as f64 / total_cost as f64 * 100.0,
-                entry.usage.total_tokens() as f64 / total_tokens as f64 * 100.0,
+                share(entry.usage.estimated_cost_microusd, total_cost),
+                share(entry.usage.total_tokens(), total_tokens),
             )
         };
     }
-    let total_metric = match metric {
-        OverviewMetric::Cost => total_cost,
-        OverviewMetric::Tokens => total_tokens,
-    };
-    let share = |cost: u64, tokens: u64| {
-        let value = match metric {
-            OverviewMetric::Cost => cost,
-            OverviewMetric::Tokens => tokens,
-        };
-        value as f64 / total_metric as f64 * 100.0
-    };
+}
+
+/// Leaves `excluded` providers out of a built snapshot without touching the
+/// store: totals, shares, the chart series and both breakdowns are recomputed
+/// from the remaining providers. Excluded tiles keep their own usage.
+pub fn exclude_providers(
+    snapshot: &OverviewSnapshot,
+    excluded: &BTreeSet<ProviderId>,
+    metric: OverviewMetric,
+) -> OverviewSnapshot {
+    let mut snapshot = snapshot.clone();
+    if excluded.is_empty() {
+        return snapshot;
+    }
+    update_provider_totals(&mut snapshot, excluded);
+    let total_metric = metric_value(metric, &snapshot.totals).max(1);
 
     for point in &mut snapshot.daily_series {
         point
             .by_provider
             .retain(|provider, _| !excluded.contains(provider));
-        point.total = point
-            .by_provider
-            .values()
-            .fold(0_u64, |sum, value| sum.saturating_add(*value));
+        point.total = sum_values(point.by_provider.values());
     }
     for row in &mut snapshot.day_rows {
         row.by_provider
             .retain(|provider, _| !excluded.contains(provider));
-        let usage = row
-            .by_provider
-            .values()
-            .fold(TokenUsage::default(), |mut total, usage| {
-                total.add(usage);
-                total
-            });
-        row.cost_microusd = usage.estimated_cost_microusd;
-        row.tokens = usage.total_tokens();
-        row.requests = usage.requests;
-        row.priced_requests = usage.priced_requests;
-        row.share = share(row.cost_microusd, row.tokens);
+        sum_row_providers(row);
+        row.share = share(row_metric(metric, row), total_metric);
     }
     snapshot.day_rows.retain(|row| !row.by_provider.is_empty());
     snapshot.model_rows.retain(|row| {
@@ -673,13 +592,13 @@ pub fn exclude_providers(
             .is_none_or(|provider| !excluded.contains(&provider))
     });
     for row in &mut snapshot.model_rows {
-        row.share = share(row.cost_microusd, row.tokens);
+        row.share = share(row_metric(metric, row), total_metric);
     }
     for row in &mut snapshot.project_rows {
         row.by_provider
             .retain(|provider, _| !excluded.contains(provider));
         sum_row_providers(row);
-        row.share = share(row.cost_microusd, row.tokens);
+        row.share = share(row_metric(metric, row), total_metric);
     }
     snapshot
         .project_rows
@@ -736,11 +655,7 @@ fn project_rows(
                 ..Default::default()
             };
             sum_row_providers(&mut row);
-            let value = match metric {
-                OverviewMetric::Cost => row.cost_microusd,
-                OverviewMetric::Tokens => row.tokens,
-            };
-            row.share = value as f64 / total_metric.max(1) as f64 * 100.0;
+            row.share = share(row_metric(metric, &row), total_metric.max(1));
             row
         })
         .filter(|row| row.cost_microusd >= MIN_PROJECT_COST_MICROUSD)
@@ -759,13 +674,7 @@ fn disambiguated_name(root: &str, name: &str) -> String {
 
 /// Recomputes a row's totals from its per-provider usage.
 fn sum_row_providers(row: &mut BreakdownRow) {
-    let usage = row
-        .by_provider
-        .values()
-        .fold(TokenUsage::default(), |mut total, usage| {
-            total.add(usage);
-            total
-        });
+    let usage = sum_usage(row.by_provider.values());
     row.cost_microusd = usage.estimated_cost_microusd;
     row.tokens = usage.total_tokens();
     row.requests = usage.requests;
@@ -776,10 +685,9 @@ fn sum_row_providers(row: &mut BreakdownRow) {
 /// to the bottom.
 fn sort_rows(rows: &mut [BreakdownRow], metric: OverviewMetric) {
     rows.sort_by(|left, right| {
-        left.unknown.cmp(&right.unknown).then_with(|| match metric {
-            OverviewMetric::Cost => right.cost_microusd.cmp(&left.cost_microusd),
-            OverviewMetric::Tokens => right.tokens.cmp(&left.tokens),
-        })
+        left.unknown
+            .cmp(&right.unknown)
+            .then_with(|| row_metric(metric, right).cmp(&row_metric(metric, left)))
     });
 }
 
@@ -792,13 +700,11 @@ pub fn format_hour_label(at: DateTime<Local>) -> String {
 }
 
 fn slice_provider_usage(days: &[DailyTokenUsage], start: NaiveDate, end: NaiveDate) -> TokenUsage {
-    let mut usage = TokenUsage::default();
-    for entry in days {
-        if entry.date >= start && entry.date <= end {
-            usage.add(&entry.usage);
-        }
-    }
-    usage
+    sum_usage(
+        days.iter()
+            .filter(|entry| entry.date >= start && entry.date <= end)
+            .map(|entry| &entry.usage),
+    )
 }
 
 #[cfg(test)]

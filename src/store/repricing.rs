@@ -9,17 +9,17 @@
 //! * Codex: `codex_events` (account-attributed events, the source of truth for
 //!   the primary instance) plus the per-file cache tables `usage_file_model_daily`
 //!   / `usage_file_daily` and the rollups `usage_daily` / `usage_model_daily`.
-//!   Stored `input_tokens` already includes cached tokens; cache-write tokens are
-//!   not stored and are priced at the input rate (the catalog default for OpenAI
-//!   models). `codex_legacy_*` tables are frozen historical totals and are left
+//!   Stored `input_tokens` already includes cached tokens. Codex logs record no
+//!   cache writes, so none are priced; the scanner prices the same request
+//!   identically. `codex_legacy_*` tables are frozen historical totals and are left
 //!   alone, as are `usage_hourly` (not populated for Codex) and mixed
 //!   priced/unpriced aggregate rows (the unpriced share is unknown).
 //! * Claude: `usage_events` stores `input + cache_creation` merged and clips the
 //!   cache-read count, so the exact cost cannot be rebuilt from columns. Matching
-//!   events are re-read from the still-existing JSONL logs; events whose log was
-//!   deleted stay unpriced rather than getting a wrong cost. Rollups
-//!   (`usage_daily`, `usage_model_daily`) are then recomputed with the scanner's
-//!   own deduplication.
+//!   events are re-read from the still-existing JSONL logs with the scanner's
+//!   own line parser; events whose log was deleted stay unpriced rather than
+//!   getting a wrong cost. The provider rollup is then rebuilt exactly as a
+//!   scan builds it.
 
 use std::{
     collections::{BTreeSet, HashMap},
@@ -29,33 +29,18 @@ use std::{
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rusqlite::params;
-use serde_json::Value;
 
 use super::ProviderStore;
-use crate::{instances::ProviderId, pricing, provider_registry::ProviderKind, usage};
+use crate::{
+    instances::ProviderId,
+    pricing::{self, RequestTokens},
+    provider_registry::ProviderKind,
+    usage,
+};
 
-/// `(provider, model, cache creation, uncached input, cache read, output)` to
-/// `(cost, cache savings)`; `None` while the model has no rate.
-pub(crate) type Pricer<'a> =
-    dyn Fn(ProviderKind, &str, u64, u64, u64, u64) -> Option<(u64, u64)> + 'a;
-
-// Only the non-test worker loop reprices.
-#[cfg_attr(test, allow(dead_code))]
-fn catalog_pricer(
-    kind: ProviderKind,
-    model: &str,
-    creation: u64,
-    uncached: u64,
-    cached: u64,
-    output: u64,
-) -> Option<(u64, u64)> {
-    let cost =
-        pricing::request_cost_microusd(kind, Some(model), creation, uncached, cached, output)?;
-    Some((
-        cost,
-        pricing::cache_savings_microusd(kind, Some(model), cached),
-    ))
-}
+/// `(provider, model, tokens)` to `(cost, cache savings)`; `None` while the
+/// model has no rate.
+pub(crate) type Pricer<'a> = dyn Fn(ProviderKind, &str, RequestTokens) -> Option<(u64, u64)> + 'a;
 
 /// Reprices every unpriced row whose model the current catalog can price, once
 /// per catalog generation. `seen` is the caller's last healed generation; each
@@ -68,12 +53,29 @@ pub(crate) fn reprice_for_current_catalog(seen: &mut u64) -> Result<bool> {
     if generation == 0 || generation == *seen {
         return Ok(false);
     }
-    let changed = super::with_store(|store| store.reprice_unpriced_usage(&catalog_pricer))?;
+    let changed = super::with_store(|store| store.reprice_unpriced_usage(&pricing::price))?;
     *seen = generation;
     Ok(changed)
 }
 
 type ClaudeKey = (DateTime<Utc>, Option<String>, Option<String>, u64);
+
+/// Enough tokens to tell whether the catalog has a rate for a model.
+const PROBE: RequestTokens = RequestTokens {
+    input: 1,
+    cache_read: 0,
+    cache_creation: 0,
+    output: 0,
+};
+
+fn codex_tokens(input: u64, cached: u64, output: u64) -> RequestTokens {
+    RequestTokens {
+        input,
+        cache_read: cached,
+        cache_creation: 0,
+        output,
+    }
+}
 
 impl ProviderStore {
     /// One transaction per provider family.
@@ -90,7 +92,7 @@ impl ProviderStore {
         let mut can_price = |model: &str| -> bool {
             *priceable
                 .entry(model.to_owned())
-                .or_insert_with(|| pricer(ProviderKind::Codex, model, 0, 1, 0, 0).is_some())
+                .or_insert_with(|| pricer(ProviderKind::Codex, model, PROBE).is_some())
         };
 
         // Account-attributed events.
@@ -122,10 +124,11 @@ impl ProviderStore {
                 if !can_price(&model) {
                     continue;
                 }
-                let uncached = input.saturating_sub(cached);
-                if let Some((cost, savings)) =
-                    pricer(ProviderKind::Codex, &model, 0, uncached, cached, output)
-                {
+                if let Some((cost, savings)) = pricer(
+                    ProviderKind::Codex,
+                    &model,
+                    codex_tokens(input, cached, output),
+                ) {
                     changed |=
                         update.execute(params![session, ts, sig, cost as i64, savings as i64])? > 0;
                 }
@@ -164,10 +167,11 @@ impl ProviderStore {
                 {
                     continue;
                 }
-                let uncached = input.saturating_sub(cached);
-                let Some((cost, savings)) =
-                    pricer(ProviderKind::Codex, &model, 0, uncached, cached, output)
-                else {
+                let Some((cost, savings)) = pricer(
+                    ProviderKind::Codex,
+                    &model,
+                    codex_tokens(input, cached, output),
+                ) else {
                     continue;
                 };
                 if update.execute(params![
@@ -268,7 +272,7 @@ impl ProviderStore {
                 // Only models the catalog can price are worth re-reading logs for.
                 let ok = *priceable
                     .entry(model.clone())
-                    .or_insert_with(|| pricer(ProviderKind::Claude, &model, 0, 1, 0, 0).is_some());
+                    .or_insert_with(|| pricer(ProviderKind::Claude, &model, PROBE).is_some());
                 if ok {
                     by_path.entry(path.clone()).or_default().push(Row {
                         provider,
@@ -299,32 +303,37 @@ impl ProviderStore {
             )?;
             for (path, rows) in by_path {
                 let Ok(raw) = fs::read(&path) else { continue };
-                let mut lines: HashMap<ClaudeKey, Vec<(u64, u64, u64)>> = HashMap::new();
+                let mut lines: HashMap<ClaudeKey, Vec<RequestTokens>> = HashMap::new();
                 for line in raw.split(|&b| b == b'\n') {
                     if !line.windows(7).any(|w| w == b"\"usage\"") {
                         continue;
                     }
-                    if let Some((key, tokens)) = claude_line(line) {
-                        lines.entry(key).or_default().push(tokens);
+                    // Lines with a reported cost were priced at scan time.
+                    if let Some(line) = usage::parse_claude_line(line)
+                        .filter(|line| line.reported_cost_microusd.is_none())
+                    {
+                        let key = (
+                            line.timestamp,
+                            line.message_id,
+                            line.request_id,
+                            line.tokens.output,
+                        );
+                        lines.entry(key).or_default().push(line.tokens);
                     }
                 }
                 for row in rows {
-                    // The stored input is `input + cache creation + cache read`
+                    // The stored input folds in cache creation and cache read
                     // (older rows omit the cache read).
-                    let Some(&(input, creation, cache_read)) = lines.get(&row.key).and_then(|c| {
-                        c.iter()
-                            .find(|t| t.0 + t.1 + t.2 == row.input || t.0 + t.1 == row.input)
+                    let Some(&tokens) = lines.get(&row.key).and_then(|candidates| {
+                        candidates.iter().find(|tokens| {
+                            tokens.input == row.input
+                                || tokens.input.saturating_sub(tokens.cache_read) == row.input
+                        })
                     }) else {
                         continue;
                     };
-                    let Some((cost, savings)) = pricer(
-                        ProviderKind::Claude,
-                        &row.model,
-                        creation,
-                        input,
-                        cache_read,
-                        row.key.3,
-                    ) else {
+                    let Some((cost, savings)) = pricer(ProviderKind::Claude, &row.model, tokens)
+                    else {
                         continue;
                     };
                     if update.execute(params![
@@ -344,55 +353,11 @@ impl ProviderStore {
             let id = ProviderId::lookup(provider)
                 .unwrap_or_else(|| ProviderId::new(ProviderKind::Claude, provider));
             let cache = self.load_claude_cache(id)?;
-            let stats =
-                usage::statistics_from_claude_cache(&cache, crate::local_time::RETENTION_DAYS);
-            self.replace_usage_daily_bounded(id, &stats.daily, None)?;
-            self.replace_usage_model_daily_in_transaction(
-                id,
-                &usage::aggregate_claude_model_daily(&cache),
-            )?;
-            self.replace_usage_project_daily_in_transaction(
-                id,
-                &usage::aggregate_claude_project_daily(&cache),
-            )?;
+            self.write_rollup(id, &usage::claude_rollup(&cache), None)?;
         }
         tx.commit()?;
         Ok(!touched.is_empty())
     }
-}
-
-/// Key and `(input, cache creation, cache read)` of an assistant line without
-/// a reported `costUSD`, mirroring the scanner's field handling.
-fn claude_line(line: &[u8]) -> Option<(ClaudeKey, (u64, u64, u64))> {
-    let event: Value = serde_json::from_slice(line).ok()?;
-    if event.get("type")?.as_str()? != "assistant"
-        || event.get("costUSD").and_then(Value::as_f64).is_some()
-    {
-        return None;
-    }
-    let ts = DateTime::parse_from_rfc3339(event.get("timestamp")?.as_str()?)
-        .ok()?
-        .with_timezone(&Utc);
-    let message = event.get("message")?;
-    let usage = message.get("usage")?;
-    let input = usage.get("input_tokens")?.as_u64()?;
-    let output = usage.get("output_tokens")?.as_u64()?;
-    let get = |value: Option<&Value>| value.and_then(Value::as_u64);
-    let cache_read = get(usage.get("cache_read_input_tokens")).unwrap_or(0);
-    let total_creation = get(usage.get("cache_creation_input_tokens")).unwrap_or(0);
-    let details = usage.get("cache_creation");
-    let w5 =
-        get(details.and_then(|v| v.get("ephemeral_5m_input_tokens"))).unwrap_or(total_creation);
-    let w1 = get(details.and_then(|v| v.get("ephemeral_1h_input_tokens"))).unwrap_or(0);
-    let id = message.get("id").and_then(Value::as_str).map(str::to_owned);
-    let request = event
-        .get("requestId")
-        .and_then(Value::as_str)
-        .map(str::to_owned);
-    Some((
-        (ts, id, request, output),
-        (input, w5.saturating_add(w1), cache_read),
-    ))
 }
 
 #[cfg(test)]
@@ -410,7 +375,7 @@ mod tests {
         store
     }
 
-    fn pricer() -> impl Fn(ProviderKind, &str, u64, u64, u64, u64) -> Option<(u64, u64)> {
+    fn pricer() -> impl Fn(ProviderKind, &str, RequestTokens) -> Option<(u64, u64)> {
         pricing::test_pricer(&json!({
             "gpt-6-luna": {"input_cost_per_token": 0.000001, "output_cost_per_token": 0.000004, "cache_read_input_token_cost": 0.0000001},
             "claude-x": {"input_cost_per_token": 0.000003, "output_cost_per_token": 0.000015, "cache_read_input_token_cost": 0.0000003, "cache_creation_input_token_cost": 0.00000375}

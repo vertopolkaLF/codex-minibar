@@ -7,7 +7,6 @@
 //! and Grok Bot as separate lanes.
 
 use std::{
-    collections::BTreeMap,
     env,
     path::{Path, PathBuf},
     time::Duration,
@@ -25,10 +24,10 @@ use crate::{
     },
     instances::{ProviderId, ProviderInstance},
     limits::{AdditionalLimit, LimitWindow, RateLimits},
-    pricing,
+    pricing::{self, RequestTokens},
     provider_registry::ProviderKind,
     store,
-    usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
+    usage::{Rollup, RollupBuilder, TokenUsage, UsageStatistics},
     worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
@@ -38,7 +37,7 @@ const CURSOR_CLIENT_ID: &str = "KbZUR41cY7W6zRSdpSUJ7I7mLYBKOCmB";
 const ACCESS_TOKEN_KEY: &str = "cursorAuth/accessToken";
 const REFRESH_TOKEN_KEY: &str = "cursorAuth/refreshToken";
 const USAGE_EXPORT_PATH: &str = "/api/dashboard/export-usage-events-csv";
-const USAGE_CACHE_VERSION: u8 = 8;
+pub(crate) const USAGE_CACHE_VERSION: u8 = 8;
 const USAGE_CACHE_TTL: ChronoDuration = ChronoDuration::minutes(10);
 
 pub(crate) static DRIVER: Driver = Driver {
@@ -270,7 +269,7 @@ impl CursorClient {
 
     fn usage_statistics(&self, history_days: u16) -> Result<UsageStatistics> {
         let cached = store::with_store(|store| {
-            if store.cursor_usage_version(CURSOR)? != USAGE_CACHE_VERSION {
+            if store.usage_version(CURSOR)? != USAGE_CACHE_VERSION {
                 return Ok(None);
             }
             let Some(fetched_at) = store.usage_fetched_at(CURSOR)? else {
@@ -290,13 +289,13 @@ impl CursorClient {
             return Ok(statistics);
         }
 
-        match self.download_usage_statistics(history_days) {
-            Ok((statistics, fetched_since)) => {
+        match self.download_usage() {
+            Ok((rollup, fetched_since)) => {
                 store::with_store(|store| {
                     // Only the fetched window is authoritative; older stored
                     // days are accumulated history and must survive.
-                    store.replace_usage_daily_since(CURSOR, &statistics.daily, fetched_since)?;
-                    store.set_usage_fetched_at(CURSOR, Utc::now())?;
+                    store.save_rollup(CURSOR, &rollup, Some(fetched_since))?;
+                    store.set_usage_fetched_at(CURSOR, Utc::now(), USAGE_CACHE_VERSION)?;
                     store.load_usage_daily(CURSOR, history_days)
                 })
             }
@@ -323,8 +322,8 @@ impl CursorClient {
         }
     }
 
-    /// Returns the statistics and the first local date the export covered.
-    fn download_usage_statistics(&self, history_days: u16) -> Result<(UsageStatistics, NaiveDate)> {
+    /// Returns the export's rollup and the first local date it covered.
+    fn download_usage(&self) -> Result<(Rollup, NaiveDate)> {
         let auth = CursorAuth::load()?;
         let token = self.access_token(&auth)?;
         let user_id = cursor_user_id(&token).context("Cursor token has no user identity")?;
@@ -351,8 +350,10 @@ impl CursorClient {
             .context("request Cursor usage export")?
             .into_string()
             .context("read Cursor usage export")?;
-        let statistics = usage_statistics_from_csv(&csv, history_days)?;
-        Ok((statistics, start.with_timezone(&Local).date_naive()))
+        Ok((
+            rollup_from_csv(&csv)?,
+            start.with_timezone(&Local).date_naive(),
+        ))
     }
 }
 
@@ -364,8 +365,10 @@ impl LimitProvider for CursorClient {
 
 impl UsageProvider for CursorClient {
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
-        store::with_store(|store| store.load_usage_daily(CURSOR, history_days))
-            .or_else(|_| Ok(UsageStatistics::default()))
+        store::with_store(|store| store.load_usage_daily(CURSOR, history_days)).or_else(|error| {
+            crate::logger::info(format!("failed to read cached Cursor usage: {error:#}"));
+            Ok(UsageStatistics::default())
+        })
     }
 
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
@@ -379,7 +382,7 @@ impl UsageProvider for CursorClient {
     }
 }
 
-fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageStatistics> {
+fn rollup_from_csv(csv_text: &str) -> Result<Rollup> {
     const DATE: &str = "Date";
     const MODEL: &str = "Model";
     const CACHE_WRITE: &str = "Input (w/ Cache Write)";
@@ -407,9 +410,8 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
     let cache_read_column = column(CACHE_READ)?;
     let output_column = column(OUTPUT)?;
 
-    let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
-    let mut model_daily = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
-    let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
+    let mut rollup = RollupBuilder::new(Local::now());
+    let mut rows = 0_usize;
     for row in reader.records() {
         let Ok(row) = row else { continue };
         let Some((date, timestamp)) = row.get(date_column).and_then(cursor_export_timestamp) else {
@@ -428,69 +430,20 @@ fn usage_statistics_from_csv(csv_text: &str, history_days: u16) -> Result<UsageS
         let Some(output) = row.get(output_column).and_then(cursor_export_tokens) else {
             continue;
         };
-        let usage = daily.entry(date).or_default();
-        usage.input_tokens = usage
-            .input_tokens
-            .saturating_add(input)
-            .saturating_add(cache_write)
-            .saturating_add(cache_read);
-        usage.cached_input_tokens = usage.cached_input_tokens.saturating_add(cache_read);
-        usage.output_tokens = usage.output_tokens.saturating_add(output);
-        // Export rows are aggregates rather than individual requests; retain a
-        // row count so the common usage card can still report activity.
-        usage.requests = usage.requests.saturating_add(1);
-        let model_key = normalize_cursor_model_name(model);
-        let row_cost =
-            cursor_estimated_cost_microusd(&model_key, cache_write, input, cache_read, output);
-        usage.estimated_cost_microusd = usage
-            .estimated_cost_microusd
-            .saturating_add(row_cost.unwrap_or_default());
-        usage.priced_requests = usage
-            .priced_requests
-            .saturating_add(u64::from(row_cost.is_some()));
-
-        let row_usage = TokenUsage {
-            input_tokens: input.saturating_add(cache_write).saturating_add(cache_read),
-            cached_input_tokens: cache_read,
-            output_tokens: output,
-            requests: 1,
-            estimated_cost_microusd: row_cost.unwrap_or_default(),
-            priced_requests: u64::from(row_cost.is_some()),
-            ..Default::default()
-        };
-        model_daily
-            .entry((model_key, date))
-            .or_default()
-            .add(&row_usage);
-        if let Some(timestamp) = timestamp {
-            hourly
-                .entry(crate::local_time::truncate_hour(timestamp))
-                .or_default()
-                .add(&row_usage);
+        let model = normalize_cursor_model_name(model);
+        // Export rows are aggregates rather than individual requests; each
+        // counts as one request so the common usage card still reports activity.
+        let usage = cursor_row_usage(&model, cache_write, input, cache_read, output);
+        match timestamp {
+            Some(at) => rollup.add(at, &usage, Some(&model), None),
+            None => rollup.add_on(date, &usage, Some(&model), None),
         }
+        rows += 1;
     }
-
-    let model_rows = model_daily
-        .into_iter()
-        .map(|((model, date), usage)| (model, date, usage))
-        .collect::<Vec<_>>();
-    let hourly_rows = hourly.into_iter().collect::<Vec<_>>();
-    if daily.is_empty() {
+    if rows == 0 {
         bail!("Cursor usage export contained no valid usage rows");
     }
-    store::with_store(|store| {
-        store.replace_usage_model_daily(CURSOR, &model_rows)?;
-        if !hourly_rows.is_empty() {
-            store.replace_usage_hourly(CURSOR, &hourly_rows)?;
-        }
-        Ok(())
-    })?;
-
-    let daily = daily
-        .into_iter()
-        .map(|(date, usage)| DailyTokenUsage { date, usage })
-        .collect::<Vec<_>>();
-    Ok(statistics_from_daily(&daily, history_days))
+    Ok(rollup.finish())
 }
 
 /// Collapse Cursor catalog flavors onto one family id.
@@ -534,21 +487,20 @@ pub(crate) fn normalize_cursor_model_name(model: &str) -> String {
     }
 }
 
-fn cursor_estimated_cost_microusd(
+fn cursor_row_usage(
     model: &str,
     cache_write: u64,
     input: u64,
     cache_read: u64,
     output: u64,
-) -> Option<u64> {
-    pricing::request_cost_microusd(
-        ProviderKind::Cursor,
-        Some(model),
-        cache_write,
-        input,
+) -> TokenUsage {
+    let tokens = RequestTokens {
+        input: input.saturating_add(cache_write).saturating_add(cache_read),
         cache_read,
+        cache_creation: cache_write,
         output,
-    )
+    };
+    pricing::request_usage(ProviderKind::Cursor, Some(model), tokens, None)
 }
 
 fn cursor_export_timestamp(value: &str) -> Option<(NaiveDate, Option<DateTime<Local>>)> {
@@ -882,7 +834,8 @@ mod tests {
         let csv = format!(
             "Date,Model,Input (w/ Cache Write),Input (w/o Cache Write),Cache Read,Output Tokens\n{date} 12:00:00,gpt-5,10,20,30,40\n"
         );
-        let statistics = usage_statistics_from_csv(&csv, 30).unwrap();
+        let rollup = rollup_from_csv(&csv).unwrap();
+        let statistics = crate::usage::statistics_from_daily(&rollup.daily, 30);
         assert_eq!(statistics.today.input_tokens, 60);
         assert_eq!(statistics.today.cached_input_tokens, 30);
         assert_eq!(statistics.today.output_tokens, 40);
@@ -897,10 +850,9 @@ mod tests {
 
     #[test]
     fn leaves_cursor_usage_unpriced_without_a_rate_catalog() {
-        assert_eq!(
-            cursor_estimated_cost_microusd("grok-4.6", 0, 100_000, 50_000, 10_000),
-            None
-        );
+        let usage = cursor_row_usage("grok-4.6", 0, 100_000, 50_000, 10_000);
+        assert_eq!(usage.priced_requests, 0);
+        assert_eq!(usage.estimated_cost_microusd, 0);
     }
 
     #[test]
@@ -911,8 +863,8 @@ mod tests {
     #[test]
     fn cached_cursor_usage_is_available_without_downloading_again() {
         let today = Local::now().date_naive();
-        let statistics = statistics_from_daily(
-            &[DailyTokenUsage {
+        let statistics = crate::usage::statistics_from_daily(
+            &[crate::usage::DailyTokenUsage {
                 date: today,
                 usage: TokenUsage {
                     input_tokens: 12,

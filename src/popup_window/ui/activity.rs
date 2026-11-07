@@ -659,7 +659,9 @@ impl PopupRoot {
                         } else if provider.kind() == ProviderKind::OpenRouter
                             && let Some(account) = account.as_deref()
                         {
-                            store.load_openrouter_account_models(provider, account, first, today)
+                            crate::openrouter::analytics::account_models(
+                                store, provider, account, first, today,
+                            )
                         } else {
                             store.load_model_daily(provider, first, today)
                         }

@@ -11,7 +11,7 @@
 //! and the credit cost the CLI charged for it.
 
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
@@ -20,7 +20,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use chrono::{DateTime, Local, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Local, TimeZone, Utc};
 use directories::BaseDirs;
 use serde_json::Value;
 
@@ -30,8 +30,10 @@ use crate::{
     },
     instances::{ProviderId, ProviderInstance},
     limits::{AdditionalLimit, Credits, LimitWindow, RateLimits, UsageAmount},
+    pricing::RequestTokens,
+    provider_registry::ProviderKind,
     provider_support, store,
-    usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
+    usage::{Rollup, RollupBuilder, TokenUsage, UsageStatistics, statistics_from_daily},
     worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
@@ -151,12 +153,7 @@ impl UsageProvider for CommandCodeClient {
         };
         refresh_sessions(&mut self.sessions, &session_files(&root));
         let rollup = rollup(&self.sessions, Utc::now());
-        store::with_store(|store| {
-            store.replace_usage_daily(self.provider, &rollup.daily)?;
-            store.replace_usage_hourly(self.provider, &rollup.hourly)?;
-            store.replace_usage_model_daily(self.provider, &rollup.models)?;
-            store.replace_usage_project_daily(self.provider, &rollup.projects)
-        })?;
+        store::with_store(|store| store.save_rollup(self.provider, &rollup, None))?;
         Ok(statistics_from_daily(&rollup.daily, history_days))
     }
 }
@@ -570,7 +567,7 @@ fn read_session(path: &Path) -> Result<(Option<String>, Vec<UsageRecord>)> {
             && let Some(dir) = value.get("cwd").and_then(Value::as_str)
             && !dir.trim().is_empty()
         {
-            cwd = Some(dir.to_owned());
+            cwd = Some(crate::usage_projects::normalize_cwd(dir));
         }
         if let Some(record) = usage_record(&value) {
             records.push(record);
@@ -599,6 +596,12 @@ fn usage_record(value: &Value) -> Option<UsageRecord> {
     if input == 0 && output == 0 && cost.is_none_or(|cost| cost == 0.0) {
         return None;
     }
+    let model = value
+        .get("model")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|model| !model.is_empty())
+        .unwrap_or("unknown");
     Some(UsageRecord {
         id: value
             .get("id")
@@ -606,63 +609,40 @@ fn usage_record(value: &Value) -> Option<UsageRecord> {
             .filter(|id| !id.is_empty())
             .map(str::to_owned),
         timestamp,
-        model: value
-            .get("model")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|model| !model.is_empty())
-            .unwrap_or("unknown")
-            .to_owned(),
-        usage: TokenUsage {
-            input_tokens: input,
-            cached_input_tokens: tokens("cacheReadTokens").min(input),
-            output_tokens: output,
-            requests: 1,
-            estimated_cost_microusd: cost.map_or(0, crate::money::from_usd),
-            priced_requests: u64::from(cost.is_some()),
-            ..TokenUsage::default()
-        },
+        usage: crate::pricing::request_usage(
+            ProviderKind::CommandCode,
+            Some(model),
+            RequestTokens {
+                input,
+                cache_read: tokens("cacheReadTokens").min(input),
+                cache_creation: 0,
+                output,
+            },
+            cost.map(crate::money::from_usd),
+        ),
+        model: model.to_owned(),
     })
 }
 
-#[derive(Debug, Default)]
-struct UsageRollup {
-    daily: Vec<DailyTokenUsage>,
-    hourly: Vec<(DateTime<Local>, TokenUsage)>,
-    models: Vec<(String, NaiveDate, TokenUsage)>,
-    projects: Vec<(String, NaiveDate, TokenUsage)>,
-}
-
-fn rollup(sessions: &HashMap<PathBuf, SessionLog>, now: DateTime<Utc>) -> UsageRollup {
+fn rollup(sessions: &HashMap<PathBuf, SessionLog>, now: DateTime<Utc>) -> Rollup {
     let oldest = now - chrono::Duration::days(i64::from(crate::local_time::RETENTION_DAYS));
-    let hourly_since = crate::local_time::hourly_window_start(now.with_timezone(&Local));
-    // A log without its own `session` header shares its siblings' project.
-    let folder = |path: &Path| {
+    fn folder(path: &Path) -> Option<&str> {
         path.parent()
             .and_then(Path::file_name)
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    };
+            .and_then(|name| name.to_str())
+    }
     let mut paths = sessions.keys().collect::<Vec<_>>();
     paths.sort();
-    let mut folder_cwd = HashMap::<String, &str>::new();
-    for path in &paths {
-        if let Some(cwd) = sessions[*path].cwd.as_deref() {
-            folder_cwd.entry(folder(path)).or_insert(cwd);
-        }
-    }
+    let projects = crate::usage_projects::LogProjects::new(
+        paths
+            .iter()
+            .map(|path| (folder(path), sessions[*path].cwd.as_deref())),
+    );
     let mut seen = HashSet::new();
-    let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
-    let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
-    let mut models = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
-    let mut projects = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
+    let mut rollup = RollupBuilder::new(now.with_timezone(&Local));
     for path in paths {
         let log = &sessions[path];
-        let project = log
-            .cwd
-            .clone()
-            .or_else(|| folder_cwd.get(&folder(path)).map(|cwd| (*cwd).to_owned()))
-            .unwrap_or_else(|| folder(path));
+        let project = projects.project(folder(path), log.cwd.as_deref());
         for record in &log.records {
             if record.timestamp < oldest {
                 continue;
@@ -673,39 +653,15 @@ fn rollup(sessions: &HashMap<PathBuf, SessionLog>, now: DateTime<Utc>) -> UsageR
             {
                 continue;
             }
-            let local = record.timestamp.with_timezone(&Local);
-            let date = local.date_naive();
-            daily.entry(date).or_default().add(&record.usage);
-            models
-                .entry((record.model.clone(), date))
-                .or_default()
-                .add(&record.usage);
-            projects
-                .entry((project.clone(), date))
-                .or_default()
-                .add(&record.usage);
-            if record.timestamp >= hourly_since {
-                hourly
-                    .entry(crate::local_time::truncate_hour(local))
-                    .or_default()
-                    .add(&record.usage);
-            }
+            rollup.add(
+                record.timestamp.with_timezone(&Local),
+                &record.usage,
+                Some(&record.model),
+                Some(project),
+            );
         }
     }
-    let keyed = |rows: BTreeMap<(String, NaiveDate), TokenUsage>| {
-        rows.into_iter()
-            .map(|((key, date), usage)| (key, date, usage))
-            .collect()
-    };
-    UsageRollup {
-        daily: daily
-            .into_iter()
-            .map(|(date, usage)| DailyTokenUsage { date, usage })
-            .collect(),
-        hourly: hourly.into_iter().collect(),
-        models: keyed(models),
-        projects: keyed(projects),
-    }
+    rollup.finish()
 }
 
 #[cfg(test)]

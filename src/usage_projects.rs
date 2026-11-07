@@ -53,6 +53,33 @@ pub(crate) fn normalize_cwd(raw: &str) -> String {
     trimmed.to_owned()
 }
 
+/// Projects of transcript logs that sit in per-project folders. A log that
+/// names no `cwd` (deleted, or no header yet) takes the first `cwd` a sibling
+/// log in the same folder names, else the folder name itself.
+pub(crate) struct LogProjects<'a> {
+    folder_cwd: HashMap<&'a str, &'a str>,
+}
+
+impl<'a> LogProjects<'a> {
+    /// `logs` yields `(folder, cwd)` per log, in a stable order.
+    pub(crate) fn new(logs: impl IntoIterator<Item = (Option<&'a str>, Option<&'a str>)>) -> Self {
+        let mut folder_cwd = HashMap::new();
+        for (folder, cwd) in logs {
+            if let (Some(folder), Some(cwd)) = (folder, cwd.filter(|cwd| !cwd.is_empty())) {
+                folder_cwd.entry(folder).or_insert(cwd);
+            }
+        }
+        Self { folder_cwd }
+    }
+
+    pub(crate) fn project(&self, folder: Option<&'a str>, cwd: Option<&'a str>) -> &'a str {
+        cwd.filter(|cwd| !cwd.is_empty())
+            .or_else(|| folder.and_then(|folder| self.folder_cwd.get(folder).copied()))
+            .or(folder)
+            .unwrap_or("")
+    }
+}
+
 fn has_drive_prefix(path: &str) -> bool {
     let bytes = path.as_bytes();
     bytes.len() >= 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'

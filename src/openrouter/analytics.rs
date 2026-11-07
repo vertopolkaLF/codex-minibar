@@ -2,8 +2,9 @@
 use super::OpenRouterClient;
 use crate::local_time::{HOURLY_WINDOW_HOURS, RETENTION_DAYS, truncate_hour};
 use crate::{
-    store,
-    usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
+    instances::ProviderId,
+    store::{self, ProviderStore},
+    usage::{DailyTokenUsage, Rollup, TokenUsage, UsageStatistics, statistics_from_daily},
 };
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Local, NaiveDate, TimeZone, Utc};
@@ -70,7 +71,37 @@ fn window_bucket<T: TimeZone>(
     Some(start + Duration::hours(elapsed.num_hours()))
 }
 
-pub(crate) fn cached_hourly_rows(
+/// Stamped on the provider's usage metadata with each saved analytics cache.
+const ANALYTICS_VERSION: u8 = 3;
+
+/// `(model, hour, usage)` rows of the cached analytics in `[start, end]`.
+pub(crate) fn hourly_rows(
+    store: &ProviderStore,
+    provider: ProviderId,
+    start: DateTime<Local>,
+    end: DateTime<Local>,
+) -> Result<Vec<(String, DateTime<Local>, TokenUsage)>> {
+    match store.load_openrouter_analytics(provider)? {
+        Some(raw) => cached_hourly_rows(&raw, start, end),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// `(model, date, usage)` rows of one account's cached analytics.
+pub(crate) fn account_models(
+    store: &ProviderStore,
+    provider: ProviderId,
+    account: &str,
+    start: NaiveDate,
+    end: NaiveDate,
+) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
+    match store.load_openrouter_analytics(provider)? {
+        Some(raw) => cached_account_models(&raw, account, start, end),
+        None => Ok(Vec::new()),
+    }
+}
+
+fn cached_hourly_rows(
     raw: &str,
     start: DateTime<Local>,
     end: DateTime<Local>,
@@ -239,13 +270,18 @@ fn persist(client: &OpenRouterClient, cache: &Cache, at: DateTime<Utc>) -> Resul
                 .map(move |(model, usage)| (model.clone(), date, usage.clone()))
         })
         .collect();
+    let rollup = Rollup {
+        daily: daily(cache),
+        models,
+        ..Rollup::default()
+    };
     let encoded = serde_json::to_string(cache)?;
     store::with_store(|s| {
-        s.save_openrouter_analytics(client.provider, &encoded, &daily(cache), &models, at)
+        s.save_openrouter_analytics(client.provider, &encoded, ANALYTICS_VERSION, &rollup, at)
     })
 }
 
-pub(crate) fn cached_account_models(
+fn cached_account_models(
     raw: &str,
     id: &str,
     start: NaiveDate,

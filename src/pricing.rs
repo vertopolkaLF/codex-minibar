@@ -23,7 +23,7 @@ use chrono::Duration;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::{provider_registry::ProviderKind, store};
+use crate::{provider_registry::ProviderKind, store, usage::TokenUsage};
 
 #[cfg(not(test))]
 const LITELLM_RATES_URL: &str =
@@ -179,70 +179,78 @@ fn download_catalog() -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn request_cost_microusd(
+/// Token counts of one request. `input` is every prompt token, including the
+/// `cache_read` and `cache_creation` subsets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RequestTokens {
+    pub input: u64,
+    pub cache_read: u64,
+    pub cache_creation: u64,
+    pub output: u64,
+}
+
+impl RequestTokens {
+    fn uncached_input(self) -> u64 {
+        self.input
+            .saturating_sub(self.cache_read)
+            .saturating_sub(self.cache_creation)
+    }
+}
+
+/// `(cost, cache savings)` of a request at the installed catalog's API rates;
+/// `None` while the model has no rate.
+pub(crate) fn price(
     provider: ProviderKind,
-    model: Option<&str>,
-    cache_creation_tokens: u64,
-    uncached_input_tokens: u64,
-    cache_read_tokens: u64,
-    output_tokens: u64,
-) -> Option<u64> {
+    model: &str,
+    tokens: RequestTokens,
+) -> Option<(u64, u64)> {
     let catalog = catalog_slot()
         .read()
         .expect("pricing catalog lock poisoned");
-    let catalog = catalog.as_ref()?;
-    cost_for_catalog(
-        catalog,
-        provider,
-        model,
-        cache_creation_tokens,
-        uncached_input_tokens,
-        cache_read_tokens,
-        output_tokens,
-    )
+    price_with(catalog.as_ref()?, provider, model, tokens)
 }
 
-pub(crate) fn cache_savings_microusd(
+/// One request's usage. A cost the provider reported wins over the catalog
+/// estimate; cache savings always come from the catalog.
+pub(crate) fn request_usage(
     provider: ProviderKind,
     model: Option<&str>,
-    cache_read_tokens: u64,
-) -> u64 {
-    let Some(model) = model.map(str::trim).filter(|model| !model.is_empty()) else {
-        return 0;
-    };
-    let catalog = catalog_slot()
-        .read()
-        .expect("pricing catalog lock poisoned");
-    let Some(rate) = catalog
-        .as_ref()
-        .and_then(|catalog| lookup_rate(catalog, provider, model))
-    else {
-        return 0;
-    };
-    crate::money::from_usd(
-        cache_read_tokens as f64 * (rate.input_per_token - rate.cache_read_per_token),
-    )
+    tokens: RequestTokens,
+    reported_cost_microusd: Option<u64>,
+) -> TokenUsage {
+    let priced = model.and_then(|model| price(provider, model, tokens));
+    let cost = reported_cost_microusd.or(priced.map(|(cost, _)| cost));
+    TokenUsage {
+        input_tokens: tokens.input,
+        cached_input_tokens: tokens.cache_read,
+        output_tokens: tokens.output,
+        requests: 1,
+        estimated_cost_microusd: cost.unwrap_or_default(),
+        priced_requests: u64::from(cost.is_some()),
+        cache_savings_microusd: priced.map_or(0, |(_, savings)| savings),
+    }
 }
 
-fn cost_for_catalog(
+fn price_with(
     catalog: &PricingCatalog,
     provider: ProviderKind,
-    model: Option<&str>,
-    cache_creation_tokens: u64,
-    uncached_input_tokens: u64,
-    cache_read_tokens: u64,
-    output_tokens: u64,
-) -> Option<u64> {
-    let model = model?.trim();
+    model: &str,
+    tokens: RequestTokens,
+) -> Option<(u64, u64)> {
+    let model = model.trim();
     if model.is_empty() {
         return None;
     }
     let rate = lookup_rate(catalog, provider, model)?;
-    let cost_usd = uncached_input_tokens as f64 * rate.input_per_token
-        + cache_read_tokens as f64 * rate.cache_read_per_token
-        + cache_creation_tokens as f64 * rate.cache_creation_per_token
-        + output_tokens as f64 * rate.output_per_token;
-    Some(crate::money::from_usd(cost_usd))
+    let cost_usd = tokens.uncached_input() as f64 * rate.input_per_token
+        + tokens.cache_read as f64 * rate.cache_read_per_token
+        + tokens.cache_creation as f64 * rate.cache_creation_per_token
+        + tokens.output as f64 * rate.output_per_token;
+    let savings_usd = tokens.cache_read as f64 * (rate.input_per_token - rate.cache_read_per_token);
+    Some((
+        crate::money::from_usd(cost_usd),
+        crate::money::from_usd(savings_usd),
+    ))
 }
 
 fn parse_rate_table(document: &Value) -> HashMap<String, ModelRate> {
@@ -359,35 +367,15 @@ fn is_unpriceable_model(model: &str) -> bool {
 
 /// Test-only pricer over a private catalog, so repricing tests never touch
 /// the process-wide catalog other tests rely on being empty.
-/// Maps `(provider, model, cache creation, uncached input, cached input, output)` to
-/// `(cost, cache savings)`.
 #[cfg(test)]
 pub(crate) fn test_pricer(
     document: &Value,
-) -> impl Fn(ProviderKind, &str, u64, u64, u64, u64) -> Option<(u64, u64)> + use<> {
+) -> impl Fn(ProviderKind, &str, RequestTokens) -> Option<(u64, u64)> + use<> {
     let catalog = PricingCatalog {
         fetched_at: Utc::now(),
         rates: parse_rate_table(document),
     };
-    move |provider, model, creation, uncached, cached, output| {
-        let cost = cost_for_catalog(
-            &catalog,
-            provider,
-            Some(model),
-            creation,
-            uncached,
-            cached,
-            output,
-        )?;
-        let savings = lookup_rate(&catalog, provider, model)
-            .map(|rate| {
-                crate::money::from_usd(
-                    cached as f64 * (rate.input_per_token - rate.cache_read_per_token),
-                )
-            })
-            .unwrap_or(0);
-        Some((cost, savings))
-    }
+    move |provider, model, tokens| price_with(&catalog, provider, model, tokens)
 }
 
 #[cfg(test)]
@@ -403,6 +391,25 @@ mod tests {
         assert_eq!(minutes(3), 60);
         assert_eq!(minutes(5), 240);
         assert_eq!(minutes(40), 240);
+    }
+
+    /// Cost of `(cache creation, uncached input, cache read, output)` tokens.
+    fn cost(
+        catalog: &PricingCatalog,
+        provider: ProviderKind,
+        model: &str,
+        cache_creation: u64,
+        uncached: u64,
+        cache_read: u64,
+        output: u64,
+    ) -> Option<u64> {
+        let tokens = RequestTokens {
+            input: uncached + cache_read + cache_creation,
+            cache_read,
+            cache_creation,
+            output,
+        };
+        price_with(catalog, provider, model, tokens).map(|(cost, _)| cost)
     }
 
     fn catalog(document: Value) -> PricingCatalog {
@@ -423,10 +430,10 @@ mod tests {
             }
         }));
         assert_eq!(
-            cost_for_catalog(
+            cost(
                 &catalog,
                 ProviderKind::Codex,
-                Some("gpt-6-astra"),
+                "gpt-6-astra",
                 100,
                 200,
                 300,
@@ -449,11 +456,11 @@ mod tests {
             }
         }));
         assert_eq!(
-            cost_for_catalog(&catalog, ProviderKind::Codex, Some("missing"), 0, 1, 0, 1),
+            cost(&catalog, ProviderKind::Codex, "missing", 0, 1, 0, 1),
             None
         );
         assert_eq!(
-            cost_for_catalog(&catalog, ProviderKind::Cursor, Some("example"), 0, 1, 0, 1),
+            cost(&catalog, ProviderKind::Cursor, "example", 0, 1, 0, 1),
             None
         );
     }
@@ -467,10 +474,10 @@ mod tests {
             }
         }));
         assert_eq!(
-            cost_for_catalog(
+            cost(
                 &catalog,
                 ProviderKind::Cursor,
-                Some("claude-opus-5"),
+                "claude-opus-5",
                 0,
                 1_000,
                 0,
@@ -490,15 +497,7 @@ mod tests {
         }));
         for model in ["auto", "composer-2.5"] {
             assert_eq!(
-                cost_for_catalog(
-                    &catalog,
-                    ProviderKind::Cursor,
-                    Some(model),
-                    0,
-                    1_000,
-                    0,
-                    100
-                ),
+                cost(&catalog, ProviderKind::Cursor, model, 0, 1_000, 0, 100),
                 Some(2_600)
             );
         }

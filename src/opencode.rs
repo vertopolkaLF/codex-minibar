@@ -7,7 +7,7 @@
 use std::{collections::BTreeMap, env, path::PathBuf, time::Duration};
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Local, NaiveDate, Utc};
+use chrono::{DateTime, Local, Utc};
 use directories::BaseDirs;
 use rusqlite::{Connection, OpenFlags, params};
 use serde::Deserialize;
@@ -19,7 +19,7 @@ use crate::{
     limits::{AdditionalLimit, LimitWindow, RateLimits},
     provider_registry::ProviderKind,
     secrets, store,
-    usage::{DailyTokenUsage, TokenUsage, UsageStatistics, statistics_from_daily},
+    usage::{Rollup, RollupBuilder, TokenUsage, UsageStatistics, statistics_from_daily},
     worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
 };
 
@@ -173,18 +173,14 @@ impl OpenCodeClient {
         parse_go_usage(&body, Utc::now())
     }
 
-    fn read_local_usage(&self, history_days: u16) -> Result<UsageStatistics> {
+    fn read_local_usage(&self) -> Result<Rollup> {
         let Some(path) = database_path() else {
             bail!("OpenCode data directory is unavailable")
         };
-        self.read_local_usage_from_path(&path, history_days)
+        self.read_local_usage_from_path(&path)
     }
 
-    fn read_local_usage_from_path(
-        &self,
-        path: &PathBuf,
-        history_days: u16,
-    ) -> Result<UsageStatistics> {
+    fn read_local_usage_from_path(&self, path: &PathBuf) -> Result<Rollup> {
         let connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -219,9 +215,7 @@ impl OpenCodeClient {
             Ok((timestamp_ms, cost, input, cache_read, output, reasoning))
         })?;
 
-        let mut daily = BTreeMap::<NaiveDate, TokenUsage>::new();
-        let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
-        let hourly_since = crate::local_time::hourly_window_start(Local::now());
+        let mut rollup = RollupBuilder::new(Local::now());
         for row in rows {
             let (timestamp_ms, cost, input, cache_read, output, reasoning) = row?;
             if !cost.is_finite() || cost < 0.0 {
@@ -242,30 +236,9 @@ impl OpenCodeClient {
                 priced_requests: 1,
                 ..Default::default()
             };
-            daily
-                .entry(timestamp.with_timezone(&Local).date_naive())
-                .or_default()
-                .add(&usage);
-            if timestamp >= hourly_since {
-                hourly
-                    .entry(crate::local_time::truncate_hour(
-                        timestamp.with_timezone(&Local),
-                    ))
-                    .or_default()
-                    .add(&usage);
-            }
+            rollup.add(timestamp.with_timezone(&Local), &usage, None, None);
         }
-        let hourly_rows = hourly.into_iter().collect::<Vec<_>>();
-        if let Err(error) =
-            store::with_store(|store| store.replace_usage_hourly(self.provider, &hourly_rows))
-        {
-            crate::logger::info(format!("failed to store OpenCode hourly usage: {error:#}"));
-        }
-        let days = daily
-            .into_iter()
-            .map(|(date, usage)| DailyTokenUsage { date, usage })
-            .collect::<Vec<_>>();
-        Ok(statistics_from_daily(&days, history_days))
+        Ok(rollup.finish())
     }
 }
 
@@ -277,17 +250,19 @@ impl LimitProvider for OpenCodeClient {
 
 impl UsageProvider for OpenCodeClient {
     fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
-        store::with_store(|store| store.load_usage_daily(self.provider, history_days))
-            .or_else(|_| Ok(UsageStatistics::default()))
+        store::with_store(|store| store.load_usage_daily(self.provider, history_days)).or_else(
+            |error| {
+                crate::logger::info(format!("failed to read cached OpenCode usage: {error:#}"));
+                Ok(UsageStatistics::default())
+            },
+        )
     }
 
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
-        match self.read_local_usage(history_days) {
-            Ok(statistics) => {
-                store::with_store(|store| {
-                    store.replace_usage_daily(self.provider, &statistics.daily)
-                })?;
-                Ok(statistics)
+        match self.read_local_usage() {
+            Ok(rollup) => {
+                store::with_store(|store| store.save_rollup(self.provider, &rollup, None))?;
+                Ok(statistics_from_daily(&rollup.daily, history_days))
             }
             Err(error) => {
                 store::with_store(|store| store.load_usage_daily(self.provider, history_days))
@@ -758,7 +733,8 @@ mod tests {
             ProviderKind::OpenCodeZen,
         ))
         .unwrap();
-        let zen_stats = zen.read_local_usage_from_path(&path, 30).unwrap();
+        let zen_stats =
+            statistics_from_daily(&zen.read_local_usage_from_path(&path).unwrap().daily, 30);
         assert_eq!(zen_stats.history.requests, 1);
         assert_eq!(zen_stats.today.estimated_cost_microusd, 1_250_000);
         assert_eq!(zen_stats.today.input_tokens, 10);
@@ -767,7 +743,8 @@ mod tests {
 
         let go = OpenCodeClient::new(crate::instances::ProviderId::from(ProviderKind::OpenCodeGo))
             .unwrap();
-        let go_stats = go.read_local_usage_from_path(&path, 30).unwrap();
+        let go_stats =
+            statistics_from_daily(&go.read_local_usage_from_path(&path).unwrap().daily, 30);
         assert_eq!(go_stats.history.requests, 1);
         assert_eq!(go_stats.history.estimated_cost_microusd, 0);
         assert!(go_stats.history.requests > 0);
