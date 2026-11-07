@@ -2381,9 +2381,24 @@ impl Settings {
             .as_file()
             .sync_all()
             .context("flush temporary settings")?;
-        temporary
-            .persist(path)
-            .with_context(|| format!("commit {}", path.display()))?;
+        // Antivirus scanners and the search indexer briefly open a file that
+        // was just written or read without FILE_SHARE_DELETE; replacing it
+        // then fails with access denied until they let go.
+        for attempt in 1.. {
+            match temporary.persist(path) {
+                Ok(_) => break,
+                Err(error)
+                    if error.error.kind() == std::io::ErrorKind::PermissionDenied
+                        && attempt < 10 =>
+                {
+                    temporary = error.file;
+                    std::thread::sleep(std::time::Duration::from_millis(20 * attempt));
+                }
+                Err(error) => {
+                    return Err(error.error).with_context(|| format!("commit {}", path.display()));
+                }
+            }
+        }
         Ok(())
     }
 
