@@ -14,17 +14,14 @@ use crate::local_time::{HOURLY_WINDOW_HOURS, RETENTION_DAYS, hourly_window_start
 use crate::pricing::{self, RequestTokens};
 use crate::{instances::ProviderId, provider_registry::ProviderKind, store};
 
-// Version 9 upgrades attributed event identity to include the record offset.
-// Version 8 rebuilt event source links after the account-source migration.
-// Version 7 matched T3/ccusage Codex transcript rules and the current pricing
-// table: first session_meta
+// A different version rebuilds every Codex daily total from the logs. Bump it
+// when the scan rules change; they follow T3/ccusage: the first session_meta
 // wins, fork/subagent copied history is dropped, and unchanged token_count
-// re-emits are ignored. Older daily totals must be rebuilt from the logs.
+// re-emits are ignored.
 pub(crate) const CODEX_CACHE_VERSION: u8 = 9;
-// Version 4 only accepts Claude `assistant` usage lines, matching T3 and the
-// current model pricing table. Cache reads are folded into input tokens for
-// newly scanned lines only; bumping the version would rebuild from logs Claude
-// Code may already have deleted.
+// Only Claude `assistant` usage lines count, matching T3. Cache reads are
+// folded into input tokens only for lines scanned since version 4; bumping the
+// version would rebuild from logs Claude Code may already have deleted.
 pub(crate) const CLAUDE_CACHE_VERSION: u8 = 4;
 
 /// Locally recorded Codex token usage. This is deliberately derived only from
@@ -1177,7 +1174,7 @@ fn claude_cwd_from_line(line: &[u8]) -> Option<String> {
 /// The few fields a Claude log line contributes. Everything else (message
 /// content, tool output, attachments) is skipped while parsing instead of
 /// being materialized as a `Value` tree. Scalars stay `Value` so a field of an
-/// unexpected type is ignored exactly as before rather than rejecting the line.
+/// unexpected type is ignored rather than rejecting the line.
 #[derive(Deserialize)]
 struct ClaudeLogLine {
     #[serde(rename = "type")]

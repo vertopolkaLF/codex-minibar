@@ -131,8 +131,8 @@ pub trait UsageProvider: Send + 'static {
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics>;
 
     /// Some providers have useful local history even when their remote quota
-    /// endpoint is unavailable. The default keeps the existing lazy behavior
-    /// for Codex, Claude, and Cursor.
+    /// endpoint is unavailable. By default the usage scan waits for the first
+    /// successful quota read.
     fn refresh_without_limits(&self) -> bool {
         false
     }
@@ -924,7 +924,7 @@ fn tick(
 
     // When automatic activation succeeds, publish the activation result before
     // its fresh limit snapshot. The bridge can then combine the reset and
-    // activation toasts without changing the legacy order for other polls.
+    // activation toasts without changing the usual order for other polls.
     let activation_succeeded = automatic_activation
         && events
             .iter()
@@ -1863,7 +1863,7 @@ mod tests {
         });
         commands_tx.send(WorkerCommand::ClearUsageData(1)).unwrap();
         recv_cleared(&events_rx, 1);
-        // No UsageUpdated(default) is produced by the worker any more.
+        // The worker itself never produces UsageUpdated(default).
         assert!(no_usage_update(&events_rx, Duration::from_millis(200)));
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();

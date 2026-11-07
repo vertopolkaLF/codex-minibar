@@ -1,7 +1,7 @@
 //! SQLite-backed provider store for limits and usage caches.
 //!
-//! Hot UI path still reads `AppState` in memory. Workers and startup hydrate
-//! from this WAL database — the only on-disk persistence for provider data.
+//! The UI reads `AppState` in memory; workers and startup hydrate from this
+//! WAL database, the only on-disk persistence for provider data.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -1466,7 +1466,6 @@ impl ProviderStore {
 
         // Claude (and any other event-scanned provider) never writes
         // usage_file_daily — only usage_events + rolled-up usage_daily.
-        // Counting files there always returned 0 while spend was real.
         let start_ts = start_of_local_day(start).with_timezone(&Utc).to_rfc3339();
         let end_ts = start_of_local_day(end + Duration::days(1))
             .with_timezone(&Utc)
@@ -1908,7 +1907,6 @@ struct LegacyCursorUsageCache {
     daily: Vec<DailyTokenUsage>,
 }
 
-/// The primary instance keeps the original key so existing analytics survive.
 const HOURLY_RETENTION_HOURS: i64 = 4 * HOURLY_WINDOW_HOURS;
 
 /// Canonical UTC key for `usage_hourly.hour`; lexical order equals time order.

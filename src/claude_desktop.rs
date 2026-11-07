@@ -34,8 +34,8 @@ const GCM_TAG_LEN: usize = 16;
 const CLAUDE_CODE_SCOPE: &str = "claude_code";
 
 /// A decrypted desktop OAuth session. `subscription_type` and `rate_limit_tier`
-/// ride along in the token cache, so the desktop path can label the plan
-/// without the extra account-settings request the CLI path needs.
+/// ride along in the token cache, so the plan can be labelled without a
+/// profile request.
 pub struct DesktopSession {
     pub access_token: String,
     pub expires_at: Option<DateTime<Utc>>,
@@ -43,10 +43,10 @@ pub struct DesktopSession {
     pub rate_limit_tier: Option<String>,
 }
 
-/// `%APPDATA%\Claude` — the desktop app's Electron user-data directory.
-/// Every known Claude Desktop user-data directory. The direct installer uses
-/// `%APPDATA%\\Claude`, while the Microsoft Store/MSIX build is sandboxed under
-/// `%LOCALAPPDATA%\\Packages\\Claude_pzs8sxrjxfjjc\\LocalCache\\Roaming\\Claude`.
+/// Every known Claude Desktop (Electron) user-data directory. The direct
+/// installer uses `%APPDATA%\Claude`, while the Microsoft Store/MSIX build is
+/// sandboxed under
+/// `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude`.
 /// The latter is discovered from the package identity rather than an installed
 /// version, because WindowsApps versions change on every Store update.
 fn config_roots() -> Vec<PathBuf> {

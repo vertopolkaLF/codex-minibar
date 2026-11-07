@@ -62,8 +62,8 @@ fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<W
     ))
 }
 
-/// Its local installation or its VS Code state database. No database is
-/// opened and no network call is made.
+/// Looks for Cursor's installation and its VS Code state database. The
+/// database is never opened and no network call is made.
 fn detect(instance: &ProviderInstance) -> InstallStatus {
     let app = installation_path(instance.binary_path.as_deref());
     InstallStatus {

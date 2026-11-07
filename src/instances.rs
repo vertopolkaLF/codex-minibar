@@ -20,8 +20,7 @@ use serde::{Deserialize, Serialize};
 use crate::provider_registry::ProviderKind;
 use crate::settings::{LimitRefreshInterval, OpenRouterAccount};
 
-/// Identity of one provider instance. `Copy` so it can replace the former
-/// provider enum everywhere a provider was used as a key.
+/// Identity of one provider instance, `Copy` so it works as a cheap key.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ProviderId {
     kind: ProviderKind,

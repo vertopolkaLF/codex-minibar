@@ -122,7 +122,7 @@ impl CodexActivator {
 
     pub fn activate_minimal(&self) -> Result<()> {
         // Persist a real (tiny) session so the ChatGPT 5-hour window starts.
-        // `--ephemeral` previously returned exit 0 without opening quota.
+        // `--ephemeral` exits 0 without opening the window.
         let workspace = activation_workspace_dir(self.home.as_deref())?;
         let last_message_path = workspace.join("last-message.txt");
         crate::logger::info(format!(
