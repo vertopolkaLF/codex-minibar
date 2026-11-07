@@ -1,4 +1,5 @@
 pub mod antigravity;
+pub mod app;
 pub mod app_event;
 pub mod app_ids;
 pub mod app_paths;

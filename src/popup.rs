@@ -154,45 +154,55 @@ pub fn apply_popup_appearance(
     }
 }
 
-/// Show the popup near a tray click (physical screen pixels).
-pub fn show_near(anchor_x: i32, anchor_y: i32) {
-    show(anchor_x, anchor_y, false);
+/// Where a request to show the popup comes from. It decides where the popup
+/// opens and whether a popup that is closing still counts as up.
+#[derive(Clone, Copy, Debug)]
+pub enum Origin {
+    /// A tray icon click, in physical screen pixels.
+    Tray(i32, i32),
+    /// A taskbar widget click. The popup opens at the end of the taskbar
+    /// nearest the widget, so a widget at its start opens it on that side.
+    TaskbarWidget(i32, i32),
+    /// Beside the pointer: the shortcut and requests that carry no position.
+    /// The pointer still gives the expected monitor and taskbar anchor.
+    Cursor,
+    /// The primary monitor's tray corner. Stream Deck keys have no display
+    /// of their own; following the cursor would drop the flyout on whichever
+    /// screen the mouse happens to occupy.
+    PrimaryMonitor,
 }
 
-/// Show the popup at the end of the taskbar nearest a taskbar widget, so a
-/// widget at the start of the taskbar opens it on that side.
-pub fn show_beside(anchor_x: i32, anchor_y: i32) {
-    show(anchor_x, anchor_y, true);
+/// Visible and not on its way out.
+pub fn is_open() -> bool {
+    is_visible() && !is_closing()
 }
 
-fn show(anchor_x: i32, anchor_y: i32, beside: bool) {
+/// Whether a toggle from `origin` finds the popup up. The press of a tray or
+/// taskbar click lands outside the popup and already started closing it;
+/// that click must not reopen it.
+pub fn is_up_for(origin: Origin) -> bool {
+    match origin {
+        Origin::Tray(..) | Origin::TaskbarWidget(..) => is_visible(),
+        Origin::Cursor | Origin::PrimaryMonitor => is_open(),
+    }
+}
+
+pub fn show(origin: Origin) {
+    let ((x, y), beside) = match origin {
+        Origin::Tray(x, y) => ((x, y), false),
+        Origin::TaskbarWidget(x, y) => ((x, y), true),
+        Origin::Cursor => (cursor_position(), false),
+        Origin::PrimaryMonitor => (primary_monitor_center(), false),
+    };
     // Optimistic: the tray bridge reads this flag before the GPUI thread has
     // processed the command, and a second tray click must toggle it closed.
     POPUP_VISIBLE.store(true, Ordering::SeqCst);
     POPUP_CLOSING.store(false, Ordering::SeqCst);
     arm_outside_click_grace();
     crate::popup_window::send_command(crate::popup_window::PopupCommand::Show {
-        anchor: Some((anchor_x, anchor_y)),
+        anchor: Some((x, y)),
         beside,
     });
-}
-
-/// Show the popup beside the current pointer location.
-///
-/// Settings opened from the tray menu do not carry a tray-click position, but
-/// the pointer still gives the expected monitor and taskbar anchor.
-pub fn show_near_cursor() {
-    let (x, y) = cursor_position();
-    show_near(x, y);
-}
-
-/// Show the popup on the primary monitor's tray corner.
-///
-/// Stream Deck keys have no display of their own; following the cursor would
-/// drop the flyout on whichever screen the mouse happens to occupy.
-pub fn show_on_primary() {
-    let (x, y) = primary_monitor_center();
-    show_near(x, y);
 }
 
 pub fn hide() {
@@ -201,14 +211,6 @@ pub fn hide() {
     }
     POPUP_CLOSING.store(true, Ordering::SeqCst);
     crate::popup_window::send_command(crate::popup_window::PopupCommand::Hide);
-}
-
-pub fn toggle_near(anchor_x: i32, anchor_y: i32) {
-    if is_visible() && !is_closing() {
-        hide();
-    } else {
-        show_near(anchor_x, anchor_y);
-    }
 }
 
 /// Respect the Windows "Animation effects" accessibility preference.

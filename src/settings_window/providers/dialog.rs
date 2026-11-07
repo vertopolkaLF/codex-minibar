@@ -1153,28 +1153,9 @@ impl SettingsWindow {
                 if !account_exists(&account_id) {
                     return self.fail_dialog(crate::i18n::tr("this-account-no-longer-exists"), cx);
                 }
-                let local_name = name;
                 self.run_dialog_work(cx, move || {
                     crate::openrouter::verify_api_key(&key)?;
-                    let key_id = key_id.unwrap_or_else(OpenRouterAccount::new_api_key_id);
-                    let saved_key = key_id.clone();
-                    persist_openrouter_credentials(
-                        account_id.clone(),
-                        vec![crate::openrouter::AccountSecretChange::api_key(
-                            account_id,
-                            key_id,
-                            Some(key),
-                        )],
-                        move |account| {
-                            if !account.api_key_ids.contains(&saved_key) {
-                                account.api_key_ids.push(saved_key.clone());
-                            }
-                            if !local_name.is_empty() {
-                                account.api_key_names.insert(saved_key, local_name);
-                            }
-                            Ok(())
-                        },
-                    )?;
+                    crate::app::actions::track_openrouter_api_key(account_id, key_id, key, name)?;
                     Ok(DialogOutcome {
                         notice: crate::i18n::tr("api-key-saved-in-windows-user-storage").into(),
                     })
@@ -1247,30 +1228,17 @@ impl SettingsWindow {
                 );
             }
             ProviderDialogKind::RemoveOpenRouterApiKey { account_id, key_id } => {
-                let change = crate::openrouter::AccountSecretChange::api_key(
-                    account_id.clone(),
-                    key_id.clone(),
-                    None,
-                );
                 self.run_dialog_then(
                     cx,
                     move || {
-                        persist_openrouter_credentials(account_id, vec![change], move |account| {
-                            let before = account.api_key_ids.len();
-                            account.api_key_ids.retain(|id| id != &key_id);
-                            account.api_key_names.remove(&key_id);
-                            anyhow::ensure!(
-                                account.api_key_ids.len() != before,
-                                crate::i18n::tr("openrouter-api-key-no-longer-exists")
-                            );
-                            Ok(())
-                        })
-                        .map_err(|error| {
-                            anyhow::anyhow!(crate::i18n::format(
-                                "could-not-remove-the-key-error",
-                                &[("error", format!("{:#}", error))],
-                            ))
-                        })
+                        crate::app::actions::untrack_openrouter_api_key(account_id, key_id).map_err(
+                            |error| {
+                                anyhow::anyhow!(crate::i18n::format(
+                                    "could-not-remove-the-key-error",
+                                    &[("error", format!("{:#}", error))],
+                                ))
+                            },
+                        )
                     },
                     |this, (), cx| {
                         this.reload_settings();

@@ -24,8 +24,8 @@ use super::{
     },
     theme::{Fonts, Theme},
 };
+use crate::app::AppState;
 use crate::drivers::InstallStatus;
-use crate::popup_window::AppState;
 use crate::popup_window::ui::fx;
 use crate::provider_registry::ProviderKind;
 use crate::settings::{ProviderId, ProviderInstance, Settings, TrayWidget, store};
@@ -263,11 +263,9 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
         edit: impl Fn(&mut Settings) + Send + 'static,
     ) {
-        edit(&mut self.settings);
-        self.settings.normalize_all();
+        store::edit_snapshot(&mut self.settings, edit);
         crate::settings_runtime::apply_presentation(&self.settings);
         cx.refresh_windows();
-        store::queue(move |settings| edit(settings));
         cx.notify();
     }
 

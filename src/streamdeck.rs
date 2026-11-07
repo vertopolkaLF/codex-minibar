@@ -22,8 +22,8 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    app::AppState,
     instances::ProviderId,
-    popup_window::AppState,
     provider_registry,
     widget_data::{self, ProviderSnapshot},
 };

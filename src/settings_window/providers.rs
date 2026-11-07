@@ -11,6 +11,10 @@ use crate::settings::{
 mod dialog;
 mod page;
 
+use crate::app::actions::{
+    find_account_instance, persist_openrouter_account, persist_openrouter_credentials,
+};
+
 pub(crate) use dialog::{ProviderDialog, ProviderDialogKind};
 
 fn not_openrouter_key() -> &'static str {
@@ -78,19 +82,6 @@ fn money(microusd: u64) -> String {
     format!("${:.2}", microusd as f64 / 1_000_000.0)
 }
 
-/// The OpenRouter instance that owns `account_id`.
-fn find_account_instance<'a>(
-    instances: &'a [ProviderInstance],
-    account_id: &str,
-) -> Option<&'a ProviderInstance> {
-    instances.iter().find(|instance| {
-        instance
-            .openrouter
-            .as_ref()
-            .is_some_and(|account| account.id == account_id)
-    })
-}
-
 // ---------------------------------------------------------------------------
 // Persistence
 // ---------------------------------------------------------------------------
@@ -111,63 +102,6 @@ fn persist_instance(
         instance.normalize();
         Ok(())
     })
-}
-
-/// Apply a change to one OpenRouter account. Accounts are addressed by stable
-/// id so list shifts cannot move keys between instances. Renaming key labels
-/// must not bump the credentials revision; popup headings overlay names.
-fn persist_openrouter_account(
-    account_id: String,
-    bump_credentials: bool,
-    previous_availability: Option<bool>,
-    mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()> + Send + 'static,
-) -> anyhow::Result<()> {
-    crate::settings::store::update_blocking(move |settings| {
-        let provider = find_account_instance(&settings.instances, &account_id)
-            .map(ProviderInstance::provider_id)
-            .ok_or_else(|| {
-                anyhow::anyhow!(crate::i18n::tr("openrouter-account-no-longer-exists"))
-            })?;
-        let instance = settings
-            .instance_mut(provider)
-            .expect("instance just found");
-        let account = instance
-            .openrouter
-            .as_mut()
-            .expect("OpenRouter instance has an account");
-        mutate(account)?;
-        let after = crate::openrouter::has_management_key(std::slice::from_ref(account));
-        if bump_credentials {
-            instance.credentials_revision = instance.credentials_revision.wrapping_add(1);
-        }
-        if let Some(before) = previous_availability {
-            settings.sync_openrouter_usage_availability(provider, before, after);
-        }
-        Ok(())
-    })
-}
-
-/// Commits protected OpenRouter secrets as one file update, then commits the
-/// matching account metadata. If the settings write fails, protected storage
-/// is restored to its exact previous values so neither side can be orphaned.
-pub(crate) fn persist_openrouter_credentials(
-    account_id: String,
-    changes: Vec<crate::openrouter::AccountSecretChange>,
-    mutate: impl FnOnce(&mut OpenRouterAccount) -> anyhow::Result<()> + Send + 'static,
-) -> anyhow::Result<()> {
-    // Availability depends only on the protected store, so no settings read
-    // (and no race with queued writes) is needed to know the previous state.
-    let before = crate::openrouter::management_key_is_configured(&account_id);
-    let rollback = crate::openrouter::apply_account_secret_changes(&changes)?;
-    if let Err(error) = persist_openrouter_account(account_id, true, Some(before), mutate) {
-        return match rollback.restore() {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(anyhow::anyhow!(
-                "could not save account metadata ({error:#}); restoring protected credentials also failed ({rollback_error:#})"
-            )),
-        };
-    }
-    Ok(())
 }
 
 fn bump_credentials(provider: ProviderId) -> anyhow::Result<()> {

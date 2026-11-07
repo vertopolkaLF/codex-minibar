@@ -315,8 +315,8 @@ impl ToastHost {
         self.popup
             .read(cx)
             .map(|root| DisplayPrefs {
-                used: root.ui.show_used_percentage,
-                colored_icons: root.ui.use_colored_provider_icons,
+                used: root.ui.settings.show_used_percentage,
+                colored_icons: root.ui.settings.use_colored_provider_icons,
             })
             .unwrap_or(DisplayPrefs {
                 used: false,

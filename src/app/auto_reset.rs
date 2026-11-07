@@ -12,7 +12,7 @@ use std::{
 
 use chrono::{DateTime, Utc};
 
-use super::state::{AppState, refresh_all_workers};
+use super::state::AppState;
 use crate::app_event::AppEvent;
 use crate::banked_reset::{AutoResetChoice, Outcome};
 use crate::instances::{Capabilities, ProviderId, ProviderInstance};
@@ -338,7 +338,7 @@ impl AutoReset {
                 ));
             }
             // Sibling instances sharing the account see the spent credit.
-            refresh_all_workers(&state.worker_commands());
+            state.refresh_all();
             running.lock().unwrap().remove(&provider);
         });
     }

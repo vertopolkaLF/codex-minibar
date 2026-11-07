@@ -500,6 +500,7 @@ impl PopupRoot {
 
     pub(super) fn openrouter_account(&self, provider: ProviderId) -> Option<OpenRouterAccount> {
         self.ui
+            .settings
             .instances
             .iter()
             .find(|instance| instance.provider_id() == provider)
@@ -708,7 +709,7 @@ impl PopupRoot {
         }
         for (worker, commands) in self.state.worker_commands() {
             if worker == provider {
-                let _ = commands.send(WorkerCommand::Refresh);
+                let _ = commands.send(crate::worker::WorkerCommand::Refresh);
             }
         }
     }
@@ -956,7 +957,7 @@ impl PopupRoot {
                             .insert((row.account.clone(), key_id.clone()));
                         let account = row.account.clone();
                         std::thread::spawn(move || {
-                            crate::popup_window::remove_openrouter_api_key(account, key_id)
+                            crate::app::actions::forget_openrouter_api_key(account, key_id)
                         });
                     }
                     this.after_key_change(provider, &row.account);
@@ -987,12 +988,12 @@ impl PopupRoot {
         }
         let (account, removed) = (row.account.clone(), key_id.clone());
         cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    crate::popup_window::try_remove_openrouter_api_key(account, removed)
-                })
-                .await;
+            let result =
+                cx.background_executor()
+                    .spawn(async move {
+                        crate::app::actions::untrack_openrouter_api_key(account, removed)
+                    })
+                    .await;
             let _ = this.update(cx, |this, cx| {
                 match result {
                     Ok(()) => {
@@ -1028,6 +1029,7 @@ impl PopupRoot {
     /// The instance whose account owns `account`.
     fn key_provider(&self, account: &str) -> Option<ProviderId> {
         self.ui
+            .settings
             .instances
             .iter()
             .find(|instance| {
@@ -1190,24 +1192,11 @@ impl PopupRoot {
             let result = cx
                 .background_executor()
                 .spawn(async move {
-                    let key_id = OpenRouterAccount::new_api_key_id();
-                    let saved = key_id.clone();
-                    crate::settings_window::persist_openrouter_credentials(
-                        account_for_task.clone(),
-                        vec![crate::openrouter::AccountSecretChange::api_key(
-                            account_for_task,
-                            key_id,
-                            Some(secret.to_string()),
-                        )],
-                        move |account| {
-                            if !account.api_key_ids.contains(&saved) {
-                                account.api_key_ids.push(saved.clone());
-                            }
-                            if !name.is_empty() {
-                                account.api_key_names.insert(saved, name);
-                            }
-                            Ok(())
-                        },
+                    crate::app::actions::track_openrouter_api_key(
+                        account_for_task,
+                        None,
+                        secret.to_string(),
+                        name,
                     )
                 })
                 .await;
@@ -1831,7 +1820,7 @@ impl PopupRoot {
         }
         let mut content = div().relative().flex().flex_col().gap(px(4.0)).child(top);
         if let Some(percent) = view.percent.filter(|_| !inactive) {
-            let shown = if self.ui.show_used_percentage {
+            let shown = if self.ui.settings.show_used_percentage {
                 percent
             } else {
                 100.0 - percent

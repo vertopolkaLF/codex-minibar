@@ -1,69 +1,47 @@
-//! Tray popup: data bridge, view state and the GPUI renderer.
+//! Tray popup: view state and the GPUI renderer.
 //!
-//! `bridge` folds worker events into [`UiState`] on the tray thread and
-//! publishes snapshots to the GPUI thread through [`PopupCommand`]s. The
-//! renderer in [`ui`] owns everything visual; [`model`] keeps the card
-//! visibility rules framework-free and unit-tested.
+//! The bridge in [`crate::app`] folds worker events into [`UiState`] on the
+//! tray thread and publishes snapshots to the GPUI thread through
+//! [`PopupCommand`]s. The renderer in [`ui`] owns everything visual;
+//! [`model`] keeps the card visibility rules framework-free and unit-tested.
 
-use std::{
-    collections::HashMap,
-    sync::{
-        Arc, LazyLock, Mutex,
-        mpsc::{Receiver, Sender},
-    },
-    thread,
-    time::Duration,
-};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use chrono::{DateTime, Duration as ChronoDuration, Local, Utc};
 
 use crate::{
-    app_event::{AppEvent, ProviderEvent},
+    app::AppState,
     instances::{ProviderId, ProviderInstance},
     limits::{LimitWindow, ProviderLimits, RateLimits, SpendingSummary, UsageAmount},
-    notifications,
-    notifications::LimitNotificationTracker,
     popup,
     provider_registry::{
-        LimitSectionKind, ProviderKind, UsageStats, additional_limit_brick_id, credits_brick_id,
-        limit_section_brick_id, resets_brick_id, spending_brick_id, usage_brick_id,
+        ProviderKind, UsageStats, additional_limit_brick_id, credits_brick_id, resets_brick_id,
+        spending_brick_id, usage_brick_id,
     },
     settings::{
-        AccentColor, AppTheme, HomeCardLayout, HomeWidgetId, NotificationSettings, PopupSurface,
-        PopupTabMode, PopupTheme, PopupVisibility, Settings, TimeFormat, TotalSpendPeriod,
-        TotalSpendPresentation, TrayWidget,
+        HomeCardLayout, HomeWidgetId, PopupSurface, PopupTabMode, PopupVisibility, Settings,
+        TimeFormat, TotalSpendPeriod, TotalSpendPresentation,
     },
-    tray::{TrayManager, TrayMenuAction},
-    updater::{UpdateController, UpdatePhase},
-    worker::{RequestKind, UsageAction, WorkerCommand, WorkerEvent},
 };
 
-mod actions;
-mod auto_reset;
-mod bridge;
-mod formatting;
-mod limits_persist;
+pub(crate) mod formatting;
 pub(crate) mod model;
 mod navigation;
 mod state;
 pub(crate) mod ui;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
-pub use state::AppState;
 pub(crate) use state::UiState;
 
 use crate::format::{
     capitalize_plan_name, format_micro_usd, format_reset_in, format_time_ago, format_time_late,
     format_token_count, format_usd,
 };
-pub(crate) use actions::*;
-use bridge::*;
 use formatting::*;
 pub(crate) use navigation::PopupView;
 use navigation::*;
-use state::*;
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum PendingPopupView {
@@ -132,35 +110,44 @@ pub(crate) fn publish_ui(ui: &UiState) {
     send_command(PopupCommand::Publish(Box::new(ui.clone())));
 }
 
-/// Start the popup: the GPUI renderer thread and the tray/worker bridge.
-///
-pub fn start(state: Arc<AppState>) {
+/// Start the GPUI renderer thread. Returns false when it already runs.
+pub(crate) fn start(state: Arc<AppState>) -> bool {
     let Some(receiver) = COMMANDS.1.lock().ok().and_then(|mut slot| slot.take()) else {
-        return;
+        return false;
     };
-    ui::start(Arc::clone(&state), receiver);
-    start_background_bridge(state);
+    ui::start(state, receiver);
+    true
 }
 
-/// Requests a provider tab for the next popup show. The request is
-/// intentionally ephemeral, matching clicks from the tray and Stream Deck.
-pub fn request_provider_view(provider: ProviderId) {
-    request_view(PendingPopupView::Provider(provider));
+/// What a tray click, a taskbar widget, the shortcut and a Stream Deck key
+/// do: hide a popup that is up, unless Settings or onboarding previews in it,
+/// otherwise open it on `view` (the last page when `None`).
+pub(crate) fn toggle(origin: popup::Origin, view: Option<PendingPopupView>) {
+    if popup::is_up_for(origin) {
+        if !crate::settings_window::is_open() {
+            popup::hide();
+        }
+    } else {
+        if let Some(view) = view {
+            request_view(view);
+        }
+        popup::show(origin);
+    }
 }
 
-pub fn request_home_view() {
-    request_view(PendingPopupView::Home);
+/// Shows the popup unless it is up already. Returns whether it was shown.
+pub(crate) fn ensure_shown(origin: popup::Origin) -> bool {
+    let show = !popup::is_up_for(origin);
+    if show {
+        popup::show(origin);
+    }
+    show
 }
 
-/// Requests the page nearest `provider` for the next popup show: Home when
-/// it shows the instance, otherwise the instance's tab. Taskbar widgets
-/// open this way.
-pub fn request_nearest_view(provider: ProviderId) {
-    request_view(PendingPopupView::Nearest(provider));
-}
-
-fn request_view(view: PendingPopupView) {
-    if popup::is_visible() && !popup::is_closing() {
+/// Requests a page for the next popup show; an open popup switches at once.
+/// The request is intentionally ephemeral, like the clicks that make it.
+pub(crate) fn request_view(view: PendingPopupView) {
+    if popup::is_open() {
         // An open popup switches pages right away, with its usual slide.
         send_command(match view {
             PendingPopupView::Home => PopupCommand::SelectView(PopupView::Home),
@@ -176,9 +163,7 @@ fn request_view(view: PendingPopupView) {
 
 /// Shows the popup in Home edit mode, wherever the request comes from.
 pub(crate) fn start_home_editing() {
-    if !popup::is_visible() || popup::is_closing() {
-        popup::show_near_cursor();
-    }
+    ensure_shown(popup::Origin::Cursor);
     send_command(PopupCommand::StartHomeEditing);
 }
 

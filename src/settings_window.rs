@@ -22,7 +22,8 @@ use gpui::{
     WindowHandle, WindowKind, WindowOptions, px, size,
 };
 
-use crate::popup_window::{AppState, PopupCommand};
+use crate::app::AppState;
+use crate::popup_window::PopupCommand;
 use crate::settings::Settings;
 
 mod about;
@@ -51,7 +52,7 @@ mod window;
 #[cfg(test)]
 mod tests;
 
-pub(crate) use providers::{OpenRouterSettingsSnapshot, persist_openrouter_credentials};
+pub(crate) use providers::OpenRouterSettingsSnapshot;
 
 const WINDOW_WIDTH: f32 = 1000.0;
 const WINDOW_HEIGHT: f32 = 740.0;
@@ -409,10 +410,8 @@ fn open_onboarding_window(cx: &mut AsyncApp) {
             // The popup stays up beside onboarding as a live preview of
             // every choice (`is_open` keeps it from being dismissed).
             // Home lists every provider onboarding turns on.
-            crate::popup_window::request_home_view();
-            if !crate::popup::is_visible() || crate::popup::is_closing() {
-                crate::popup::show_on_primary();
-            }
+            crate::popup_window::request_view(crate::popup_window::PendingPopupView::Home);
+            crate::popup_window::ensure_shown(crate::popup::Origin::PrimaryMonitor);
             let _ = handle.update(cx, |_, window, _| window.activate_window());
         }
         Ok(Err(error)) => eprintln!("Could not open onboarding: {error:#}"),

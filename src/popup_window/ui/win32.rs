@@ -240,7 +240,7 @@ unsafe extern "system" fn popup_subclass_proc(
             unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
         }
         crate::app_ids::SHOW_MESSAGE => {
-            crate::popup::show_near_cursor();
+            crate::popup_window::ensure_shown(crate::popup::Origin::Cursor);
             0
         }
         // The client area is the entire window: no frame, no resize border,

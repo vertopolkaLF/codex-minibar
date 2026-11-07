@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex, mpsc};
 use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
+    app::AppState,
     app_event::AppEvent,
     app_paths, logger, notifications,
-    popup_window::AppState,
     provider::start_enabled_workers,
     provider_status, reset_feed,
     scheduler::ActivationState,
@@ -118,6 +118,7 @@ fn run() -> Result<()> {
         limits: Mutex::new(hydrated_limits),
         forced_resets: Mutex::new(Vec::new()),
         provider_statuses: Mutex::new(Vec::new()),
+        changes: Default::default(),
         commands: Mutex::new(commands),
         workers: Mutex::new(workers),
         worker_events_rx: Mutex::new(Some(worker_events_rx)),
@@ -137,7 +138,7 @@ fn run() -> Result<()> {
         move || state.shutdown_worker()
     });
 
-    codex_minibar::popup_window::start(Arc::clone(&state));
+    codex_minibar::app::start(Arc::clone(&state));
     codex_minibar::whats_new::start(&state.settings, just_updated);
     if onboarding_needed {
         codex_minibar::settings_window::open_onboarding();

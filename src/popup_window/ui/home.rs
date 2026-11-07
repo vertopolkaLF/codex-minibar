@@ -152,21 +152,13 @@ impl PopupRoot {
                 Some(self.render_total_spend(is_first, can_reorder, window, cx))
             } else {
                 model::home_widget_provider(&ui, &widget).map(|provider| {
-                    let options = CardOptions {
-                        keep_reset_card: self.reset_busy.contains(&provider)
-                            || self.reset_status.contains_key(&provider),
-                        popup_visibility: &ui.popup_visibility,
-                        surface: PopupSurface::HomeTab,
-                        show_provider_tabs: show_tabs,
-                        include_usage_stats: ui.usage_stats_provider_enabled(provider),
-                        show_account_name: ui.show_account_name,
-                        drag_handle: can_reorder,
-                        provider_error: ui.provider_error(provider),
-                        provider_status: provider_statuses
-                            .iter()
-                            .find(|status| status.kind == provider.kind()),
-                        now: Utc::now(),
-                    };
+                    let options = self.card_options(
+                        &ui,
+                        &provider_statuses,
+                        provider,
+                        PopupSurface::HomeTab,
+                        can_reorder,
+                    );
                     let cards = provider_cards(
                         provider,
                         is_first,
@@ -283,15 +275,9 @@ impl PopupRoot {
                 }
                 this.fx
                     .snap(fx::key(("card-layout-fade", provider.id())), 0.0);
-                let id = provider.id().to_owned();
-                let local_id = id.clone();
-                this.persist(
-                    cx,
-                    move |ui| set_card_layout(&mut ui.popup_home_card_layouts, local_id, next),
-                    move |settings| {
-                        set_card_layout(&mut settings.popup_home_card_layouts, id, next);
-                    },
-                );
+                this.persist(cx, move |settings| {
+                    set_card_layout(&mut settings.popup_home_card_layouts, provider.id(), next);
+                });
             },
             window,
             cx,
@@ -501,19 +487,10 @@ impl PopupRoot {
             return;
         };
         self.animate_widget_reflow(&order, &right);
-        let local_order = order.clone();
-        let local_right = right.clone();
-        self.persist(
-            cx,
-            |ui| {
-                ui.popup_home_order = local_order;
-                ui.popup_home_right_column = Some(local_right);
-            },
-            move |settings| {
-                settings.popup_home_order = order;
-                settings.popup_home_right_column = Some(right);
-            },
-        );
+        self.persist(cx, move |settings| {
+            settings.popup_home_order = order.clone();
+            settings.popup_home_right_column = Some(right.clone());
+        });
     }
 
     /// FLIP: predict where each block lands in the new order (from the last
@@ -586,7 +563,7 @@ impl PopupRoot {
     ) -> AnyElement {
         let gap = self.card_gap();
         let palette = self.palette.clone();
-        let period = self.ui.total_spend_period;
+        let period = self.ui.settings.total_spend_period;
         let enabled = self.enabled_spend();
         let key = format!(
             "spend|{}|{:?}|{}|{}|{}|{}",
@@ -650,12 +627,8 @@ impl PopupRoot {
             periods.iter().position(|item| *item == period).unwrap_or(2),
             move |this, index, cx| {
                 let period = periods[index];
-                if this.ui.total_spend_period != period {
-                    this.persist(
-                        cx,
-                        |ui| ui.total_spend_period = period,
-                        move |settings| settings.total_spend_period = period,
-                    );
+                if this.ui.settings.total_spend_period != period {
+                    this.persist(cx, move |settings| settings.total_spend_period = period);
                 }
             },
             window,
@@ -694,7 +667,7 @@ impl PopupRoot {
                 ))
                 .into_any_element()
         } else {
-            match self.ui.total_spend_presentation {
+            match self.ui.settings.total_spend_presentation {
                 TotalSpendPresentation::Donut => self.spend_donut_content(&entries, total, window),
                 TotalSpendPresentation::ProgressBar => {
                     self.spend_hero_content(&entries, total, window)
@@ -740,7 +713,7 @@ impl PopupRoot {
         const TILE_HEIGHT: f32 = 40.0;
         const ROW_PITCH: f32 = TILE_HEIGHT + 16.0;
         let palette = self.palette.clone();
-        let colored = self.ui.use_colored_provider_icons;
+        let colored = self.ui.settings.use_colored_provider_icons;
         let slots = self.spend_slots(SCOPE, entries, COLUMNS);
         let rows = entries.len().div_ceil(COLUMNS) as f32;
         let height = self.fx.value(
@@ -839,7 +812,7 @@ impl PopupRoot {
             (label_size * 4.0 / 3.0).ceil(),
             window,
         );
-        let colored = self.ui.use_colored_provider_icons;
+        let colored = self.ui.settings.use_colored_provider_icons;
         let slots = self.spend_slots(SCOPE, entries, 1);
         let height = self.fx.value(
             fx::key((SCOPE, "height")),
@@ -1060,13 +1033,13 @@ impl PopupRoot {
 /// Ordinary cards are the default, so they leave no entry behind.
 fn set_card_layout(
     layouts: &mut std::collections::BTreeMap<String, HomeCardLayout>,
-    id: String,
+    id: &str,
     layout: HomeCardLayout,
 ) {
     if layout == HomeCardLayout::Cards {
-        layouts.remove(&id);
+        layouts.remove(id);
     } else {
-        layouts.insert(id, layout);
+        layouts.insert(id.to_owned(), layout);
     }
 }
 

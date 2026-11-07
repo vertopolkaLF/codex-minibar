@@ -654,7 +654,7 @@ impl PopupRoot {
                 components::provider_mark(
                     crate::provider_registry::icon(driver),
                     16.0,
-                    palette.provider_icon(driver, self.ui.use_colored_provider_icons),
+                    palette.provider_icon(driver, self.ui.settings.use_colored_provider_icons),
                     heading.provider.badge().as_ref(),
                     &palette,
                 )
@@ -1229,7 +1229,7 @@ impl PopupRoot {
                 let account_id = account_id.clone();
                 let key_id = key_id.clone();
                 std::thread::spawn(move || {
-                    crate::popup_window::remove_openrouter_api_key(account_id, key_id)
+                    crate::app::actions::forget_openrouter_api_key(account_id, key_id)
                 });
             });
         if let Some(layer) = components::hover_layer(&palette, hover, 4.0) {
@@ -1338,7 +1338,7 @@ impl PopupRoot {
         let busy = self.reset_busy.contains(&provider);
         let confirming = self.reset_confirm == Some(provider);
         let can_use = count > 0
-            && self.ui.instance(provider).is_some_and(|instance| {
+            && self.ui.settings.instance(provider).is_some_and(|instance| {
                 !instance.uses_manual_credential()
                     && match crate::provider_registry::descriptor(provider.kind()).banked_resets {
                         crate::provider_registry::BankedResets::Unsupported => false,

@@ -1,6 +1,6 @@
 use super::*;
 
-pub(super) fn format_activation_at(at: DateTime<Utc>) -> String {
+pub(crate) fn format_activation_at(at: DateTime<Utc>) -> String {
     let local = at.with_timezone(&Local);
     format!(
         "{} {}",
@@ -33,7 +33,7 @@ pub(super) fn window_started_at(window: &LimitWindow) -> Option<DateTime<Utc>> {
     }
 }
 
-pub(super) fn format_last_activation(
+pub(crate) fn format_last_activation(
     limits: &RateLimits,
     fallback_attempt: Option<DateTime<Utc>>,
 ) -> String {

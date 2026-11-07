@@ -7,6 +7,7 @@ use super::*;
 use crate::choice::Choice;
 use crate::limits::OpenRouterAccountSnapshot;
 use crate::settings::{PopupSurface, PopupVisibility};
+use crate::worker::RequestKind;
 
 fn id(kind: ProviderKind) -> ProviderId {
     ProviderId::primary(kind)
@@ -14,9 +15,7 @@ fn id(kind: ProviderKind) -> ProviderId {
 
 /// The popup state the bridge would publish for `settings`.
 fn ui_from(settings: &Settings) -> UiState {
-    let mut ui = UiState::popup_layout_from_settings(settings);
-    ui.apply_settings(settings);
-    ui
+    UiState::new(settings.clone())
 }
 
 fn plan_limits(plan_type: &str) -> RateLimits {
@@ -351,7 +350,7 @@ fn show_on_home_off_drops_only_that_instance_from_home() {
         ProviderKind::Codex,
         true,
         &limits,
-        &ui.popup_visibility,
+        &ui.settings.popup_visibility,
         PopupSurface::ProviderTab,
         true,
         true,
@@ -541,72 +540,6 @@ fn sections_keep_banked_resets_singleton() {
 }
 
 #[test]
-fn every_limits_sample_forces_a_reactive_state_change() {
-    let mut ui = UiState::default();
-    let initial = ui.clone();
-
-    ui.observe_limits_update();
-    assert_ne!(ui, initial);
-    assert_eq!(ui.limits_revision, 1);
-    assert_eq!(ui.usage_revision, 0);
-
-    // A Plus sample can have the same footer metadata as the preceding
-    // Free sample; the revision still guarantees a rerender of the shared
-    // snapshot.
-    ui.observe_limits_update();
-    assert_eq!(ui.limits_revision, 2);
-    assert_eq!(ui.usage_revision, 0);
-    assert_eq!(ui.last_activation, initial.last_activation);
-    assert_eq!(ui.error, initial.error);
-
-    ui.observe_usage_update();
-    assert_eq!(ui.usage_revision, 1);
-}
-
-#[test]
-fn credential_worker_events_are_accepted_only_for_the_current_revision() {
-    let mut settings = Settings::default();
-    for instance in &mut settings.instances {
-        instance.enabled = true;
-    }
-    settings
-        .instance_mut(id(ProviderKind::OpenRouter))
-        .unwrap()
-        .credentials_revision = 7;
-    settings
-        .instance_mut(id(ProviderKind::Claude))
-        .unwrap()
-        .credentials_revision = 3;
-    let work = settings.add_instance(ProviderInstance::new(ProviderKind::Claude, "Work"));
-    let ui = ui_from(&settings);
-
-    let current =
-        |provider, revision| bridge::provider_worker_event_is_current(&ui, provider, revision);
-    assert!(current(id(ProviderKind::OpenRouter), 7));
-    assert!(!current(id(ProviderKind::OpenRouter), 6));
-    assert!(current(id(ProviderKind::Claude), 3));
-    assert!(!current(id(ProviderKind::Claude), 2));
-    // Another instance of the same driver has its own revision.
-    assert!(current(work, 0));
-    assert!(!current(work, 3));
-    assert!(current(id(ProviderKind::OpenCodeZen), 0));
-    // Disabled and removed instances drop queued output.
-    let mut disabled = settings.clone();
-    disabled.set_enabled(id(ProviderKind::Codex), false);
-    let ui = ui_from(&disabled);
-    assert!(!bridge::provider_worker_event_is_current(
-        &ui,
-        id(ProviderKind::Codex),
-        0
-    ));
-    assert!(!bridge::provider_worker_event_is_current(
-        &ui,
-        ProviderId::new(ProviderKind::Claude, "claude-removed"),
-        0
-    ));
-}
-
-#[test]
 fn provider_error_survives_until_that_provider_succeeds() {
     let mut ui = UiState::default();
 
@@ -730,23 +663,6 @@ fn usage_error_uses_provider_error_presentation_without_overwriting_quota_error(
 
     ui.clear_usage_error(id(ProviderKind::OpenRouter));
     assert_eq!(ui.provider_error(id(ProviderKind::OpenRouter)), None);
-}
-
-#[test]
-fn nested_usage_errors_are_promoted_to_provider_error_state() {
-    let mut statistics = crate::usage::UsageStatistics::default();
-    statistics.accounts.insert(
-        "account".into(),
-        crate::usage::UsageStatistics {
-            error: Some("analytics request failed".into()),
-            ..Default::default()
-        },
-    );
-
-    assert_eq!(
-        usage_error_message(&statistics).as_deref(),
-        Some("analytics request failed")
-    );
 }
 
 #[test]
@@ -1044,7 +960,7 @@ fn pager_slides_clear_both_pages_for_every_compact_and_wide_view_pair() {
 
 /// Every primary plus a second Claude and a second Codex instance, placed
 /// right after their drivers' primaries.
-fn instance_fixture() -> Settings {
+pub(crate) fn instance_fixture() -> Settings {
     let mut settings = Settings::default();
     let mut claude = ProviderInstance::new(ProviderKind::Claude, "Work");
     claude.id = "claude-work".into();
@@ -1079,11 +995,11 @@ fn every_enabled_instance_combination_has_matching_tabs() {
                 let showing = tabs.iter().filter(|tab| tab.shows(*provider)).count();
                 assert_eq!(showing, 1, "mask={mask} {mode:?} {provider:?}");
                 let tab = tab_for_provider(&ui, *provider).unwrap();
-                assert!(tab_members(&ui.instances, tab).contains(provider));
+                assert!(tab_members(&ui.settings.instances, tab).contains(provider));
             }
             let members = tabs
                 .iter()
-                .flat_map(|tab| tab_members(&ui.instances, *tab))
+                .flat_map(|tab| tab_members(&ui.settings.instances, *tab))
                 .collect::<Vec<_>>();
             assert_eq!(members.len(), enabled.len());
             for tab in &tabs {
@@ -1098,7 +1014,7 @@ fn every_enabled_instance_combination_has_matching_tabs() {
                         assert!(mode.is_grouped());
                         assert!(ui.enabled_instances_of(*driver).len() > 1);
                         assert_eq!(
-                            tab_members(&ui.instances, *tab),
+                            tab_members(&ui.settings.instances, *tab),
                             ui.enabled_instances_of(*driver)
                         );
                     }
@@ -1177,7 +1093,7 @@ fn grouped_tabs_reorder_as_blocks_and_keep_disabled_slots() {
     let cursor = PopupView::Provider(id(ProviderKind::Cursor));
     let claude = PopupView::Group(ProviderKind::Claude);
     assert_eq!(tabs, vec![claude, cursor]);
-    let order = reordered_instance_ids(&ui.instances, &tabs, cursor, claude).unwrap();
+    let order = reordered_instance_ids(&ui.settings.instances, &tabs, cursor, claude).unwrap();
     let mut reordered = settings.clone();
     reordered.apply_instance_order(&order);
     let ids = reordered
@@ -1195,7 +1111,7 @@ fn grouped_tabs_reorder_as_blocks_and_keep_disabled_slots() {
         }
     }
     assert_eq!(provider_tabs(&ui_from(&reordered)), vec![cursor, claude]);
-    assert!(reordered_instance_ids(&ui.instances, &tabs, claude, claude).is_none());
+    assert!(reordered_instance_ids(&ui.settings.instances, &tabs, claude, claude).is_none());
 }
 
 #[test]
@@ -1228,7 +1144,7 @@ fn home_instances_move_independently_and_restore_hidden_positions() {
         .instance_mut(ProviderId::new(ProviderKind::Claude, "claude-work"))
         .unwrap()
         .show_on_home = false;
-    ui.apply_settings(&settings);
+    ui.set_settings(settings.clone());
     assert!(!visible_home_widgets(&ui, false).contains(&work));
     let hidden_slot = home_widget_order(&ui)
         .iter()
@@ -1241,7 +1157,7 @@ fn home_instances_move_independently_and_restore_hidden_positions() {
         .instance_mut(ProviderId::new(ProviderKind::Claude, "claude-work"))
         .unwrap()
         .show_on_home = true;
-    ui.apply_settings(&settings);
+    ui.set_settings(settings.clone());
     assert!(visible_home_widgets(&ui, false).contains(&work));
     assert!(home_widget_right_column(&ui, false).contains(&work));
 }
@@ -1278,84 +1194,16 @@ fn new_instances_join_home_after_their_driver() {
 }
 
 #[test]
-fn popup_startup_snapshots_restore_layout_instances_and_saved_columns() {
-    for enabled in [false, true] {
-        for right in [
-            None,
-            Some(Vec::new()),
-            Some(vec![
-                HomeWidgetId::provider(id(ProviderKind::Codex)),
-                HomeWidgetId::provider(id(ProviderKind::Kiro)),
-            ]),
-        ] {
-            for mode in PopupTabMode::ALL.iter().copied() {
-                let settings = Settings {
-                    popup_two_columns: enabled,
-                    popup_home_right_column: right.clone(),
-                    popup_tab_mode: mode,
-                    ..instance_fixture()
-                };
-                let saved = toml::to_string(&settings).unwrap();
-                let restored: Settings = toml::from_str(&saved).unwrap();
-                // Both startup snapshots use this shared seed, before any live settings push.
-                let ui = UiState::popup_layout_from_settings(&restored);
-                assert_eq!(ui.popup_two_columns, enabled);
-                assert_eq!(ui.popup_home_right_column, right);
-                assert_eq!(ui.popup_tab_mode, mode);
-                assert_eq!(ui.instances, settings.instances);
-            }
-        }
-    }
-}
-
-#[test]
 fn popup_first_frame_excludes_openrouter_usage_without_a_management_key() {
     let mut settings = Settings::default();
     settings.set_usage_stats_provider_enabled(id(ProviderKind::Claude), false);
     // The raw preference may still include OpenRouter. The first render must
     // use the same effective filter as live updates.
     assert!(settings.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
-    let initial = UiState::popup_layout_from_settings(&settings);
+    let initial = ui_from(&settings);
     assert!(!initial.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
     assert!(!initial.usage_stats_provider_enabled(id(ProviderKind::Claude)));
     assert!(initial.usage_stats_provider_enabled(id(ProviderKind::Codex)));
-    assert_eq!(
-        initial.usage_stats_providers,
-        settings.usage_stats_providers()
-    );
-}
-
-#[test]
-fn only_read_relevant_changes_restart_an_instance_worker() {
-    let before = instance_fixture().instances;
-    let mut after = before.clone();
-    for instance in after.iter_mut().chain(&mut before.clone()) {
-        instance.enabled = true;
-    }
-    let before = after.clone();
-    let work = after
-        .iter_mut()
-        .find(|instance| instance.id == "claude-work")
-        .unwrap();
-    work.name = "Renamed".into();
-    work.badge = "RN".into();
-    work.show_on_home = false;
-    assert!(bridge::instances_needing_restart(&before, &after).is_empty());
-    let work = after
-        .iter_mut()
-        .find(|instance| instance.id == "claude-work")
-        .unwrap();
-    work.binary_path = Some("C:/tools".into());
-    assert_eq!(
-        bridge::instances_needing_restart(&before, &after),
-        vec![ProviderId::new(ProviderKind::Claude, "claude-work")]
-    );
-    let codex = after
-        .iter_mut()
-        .find(|instance| instance.id == "codex")
-        .unwrap();
-    codex.credentials_revision += 1;
-    assert_eq!(bridge::instances_needing_restart(&before, &after).len(), 2);
 }
 
 #[test]
@@ -1507,15 +1355,14 @@ fn action_bar_visibility_setting_only_controls_the_regular_popup() {
                 show_popup_action_bar: shown,
                 ..Settings::default()
             };
-            let mut ui = UiState::popup_layout_from_settings(&settings);
+            let mut ui = ui_from(&settings);
             assert_eq!(ui.compact_bar_visible(), floating || shown);
             let updated = Settings {
                 popup_floating: floating,
                 show_popup_action_bar: !shown,
                 ..settings
             };
-            ui.apply_settings(&updated);
-            assert_eq!(ui.show_popup_action_bar, !shown);
+            ui.set_settings(updated);
             assert_eq!(ui.compact_bar_visible(), floating || !shown);
         }
     }

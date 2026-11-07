@@ -693,7 +693,7 @@ pub(crate) fn instance_layout_key(
 
 /// Provider tabs for the current settings.
 pub(crate) fn provider_tabs(ui: &UiState) -> Vec<PopupView> {
-    provider_tab_views(&ui.instances, ui.popup_tab_mode)
+    provider_tab_views(&ui.settings.instances, ui.settings.popup_tab_mode)
 }
 
 /// Provider tabs are shown only when there is more than one to choose from.
@@ -705,7 +705,8 @@ pub(crate) fn show_provider_tabs(ui: &UiState) -> bool {
 /// still enabled, otherwise the driver's first enabled instance.
 pub(crate) fn selected_group_member(ui: &UiState, driver: ProviderKind) -> Option<ProviderId> {
     let members = ui.enabled_instances_of(driver);
-    ui.grouped_tab_selection
+    ui.settings
+        .grouped_tab_selection
         .get(driver.id())
         .and_then(|id| members.iter().copied().find(|member| member.id() == id))
         .or_else(|| members.first().copied())
@@ -722,7 +723,8 @@ pub(crate) fn tab_for_provider(ui: &UiState, provider: ProviderId) -> Option<Pop
 
 /// Instances counted in the Usage tab and combined total spend.
 pub(crate) fn spend_providers(ui: &UiState) -> Vec<ProviderId> {
-    ui.enabled_providers()
+    ui.settings
+        .enabled_providers()
         .into_iter()
         .filter(|provider| {
             ui.usage_overview_included(*provider)
@@ -732,18 +734,24 @@ pub(crate) fn spend_providers(ui: &UiState) -> Vec<ProviderId> {
 }
 
 pub(crate) fn show_total_spend(ui: &UiState) -> bool {
-    ui.usage_stats_enabled && ui.show_total_spend_on_all_tab && spend_providers(ui).len() > 1
+    ui.settings.usage_stats_enabled
+        && ui.settings.show_total_spend_on_all_tab
+        && spend_providers(ui).len() > 1
 }
 
 pub(crate) fn any_provider_enabled(ui: &UiState) -> bool {
-    ui.instances.iter().any(|instance| instance.enabled)
+    ui.settings
+        .instances
+        .iter()
+        .any(|instance| instance.enabled)
 }
 
 pub(crate) fn home_widget_label(ui: &UiState, widget: &HomeWidgetId) -> String {
     if widget.is_total_spend() {
         return crate::i18n::tr("home-usage-title").into();
     }
-    ui.instances
+    ui.settings
+        .instances
         .iter()
         .find(|instance| instance.id == widget.id())
         .map(|instance| instance.provider_id().qualified_name())
@@ -751,7 +759,8 @@ pub(crate) fn home_widget_label(ui: &UiState, widget: &HomeWidgetId) -> String {
 }
 
 fn widget_driver(ui: &UiState, widget: &HomeWidgetId) -> Option<ProviderKind> {
-    ui.instances
+    ui.settings
+        .instances
         .iter()
         .find(|instance| instance.id == widget.id())
         .map(|instance| instance.driver)
@@ -762,15 +771,16 @@ fn widget_driver(ui: &UiState, widget: &HomeWidgetId) -> Option<ProviderKind> {
 pub(crate) fn home_widget_order(ui: &UiState) -> Vec<HomeWidgetId> {
     let mut available = vec![HomeWidgetId::total_spend()];
     available.extend(
-        ui.instances
+        ui.settings
+            .instances
             .iter()
             .map(|instance| HomeWidgetId::provider(instance.provider_id())),
     );
-    if ui.popup_home_order.is_empty() {
+    if ui.settings.popup_home_order.is_empty() {
         return available;
     }
     let mut order = Vec::new();
-    for widget in &ui.popup_home_order {
+    for widget in &ui.settings.popup_home_order {
         if available.contains(widget) && !order.contains(widget) {
             order.push(widget.clone());
         }
@@ -791,12 +801,14 @@ pub(crate) fn home_widget_order(ui: &UiState) -> Vec<HomeWidgetId> {
 /// The instance behind a Home block, when it is shown on Home.
 pub(crate) fn home_widget_provider(ui: &UiState, widget: &HomeWidgetId) -> Option<ProviderId> {
     let instance = ui
+        .settings
         .instances
         .iter()
         .find(|instance| instance.id == widget.id())?;
     (instance.enabled
         && instance.show_on_home
         && ui
+            .settings
             .popup_visibility
             .instance_visible_on_home(&instance.id, instance.driver))
     .then(|| instance.provider_id())
@@ -816,7 +828,7 @@ pub(crate) fn visible_home_widgets(ui: &UiState, show_spend: bool) -> Vec<HomeWi
 }
 
 pub(crate) fn home_widget_right_column(ui: &UiState, show_spend: bool) -> Vec<HomeWidgetId> {
-    if let Some(right) = &ui.popup_home_right_column {
+    if let Some(right) = &ui.settings.popup_home_right_column {
         return right.clone();
     }
     visible_home_widgets(ui, show_spend)

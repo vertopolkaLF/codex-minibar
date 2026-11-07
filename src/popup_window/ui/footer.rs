@@ -67,7 +67,7 @@ struct TabSpec {
 
 impl PopupRoot {
     fn render_pin_button(&mut self, button: f32, glyph: f32, cx: &mut Context<Self>) -> AnyElement {
-        let pinned = self.ui.popup_pinned;
+        let pinned = self.ui.settings.popup_pinned;
         self.render_action_button(
             "pin",
             if pinned {
@@ -88,7 +88,7 @@ impl PopupRoot {
         let editing = self.home_editing;
         let edit_presence = self.fx.toggle(
             fx::key("compact-edit-presence"),
-            self.ui.show_edit_home_button || editing,
+            self.ui.settings.show_edit_home_button || editing,
             fx::NORMAL,
         );
         let edit = self.render_action_button(
@@ -113,7 +113,7 @@ impl PopupRoot {
             crate::i18n::tr("use-two-columns").into(),
             24.0,
             16.0,
-            self.ui.popup_two_columns,
+            self.ui.settings.popup_two_columns,
             cx.listener(|this, _: &ClickEvent, _, cx| this.toggle_two_columns(cx)),
             cx,
         );
@@ -188,7 +188,7 @@ impl PopupRoot {
             has_error: false,
             selected: current == PopupView::Home,
         }];
-        if ui.usage_stats_enabled {
+        if ui.settings.usage_stats_enabled {
             tabs.push(TabSpec {
                 id: "usage".into(),
                 icon: "fluent-chart",
@@ -224,7 +224,7 @@ impl PopupRoot {
                     badge: None,
                     tip: driver.display_name().into(),
                     view,
-                    has_error: tab_members(&ui.instances, view)
+                    has_error: tab_members(&ui.settings.instances, view)
                         .into_iter()
                         .any(|member| ui.has_provider_error(member)),
                     selected: current == view,
@@ -254,7 +254,7 @@ impl PopupRoot {
         let editing = self.home_editing;
         let edit_presence = self.fx.toggle(
             fx::key("footer-edit-presence"),
-            !self.ui.compact_bar_visible() && (self.ui.show_edit_home_button || editing),
+            !self.ui.compact_bar_visible() && (self.ui.settings.show_edit_home_button || editing),
             fx::NORMAL,
         );
         let pin_presence = self.fx.toggle(
@@ -458,7 +458,7 @@ impl PopupRoot {
             index as f32 * step,
             fx::NORMAL,
         );
-        let colored = self.ui.use_colored_provider_icons;
+        let colored = self.ui.settings.use_colored_provider_icons;
         let idle = palette.tab_icon(tab.driver, colored);
         let icon_color = if colored && tab.driver.is_some() {
             idle
@@ -558,26 +558,14 @@ impl PopupRoot {
         self.tab_drag = None;
         self.tab_drop = None;
         let tabs = model::provider_tabs(&self.ui);
-        let Some(order) = reordered_instance_ids(&self.ui.instances, &tabs, from, to) else {
+        let Some(order) = reordered_instance_ids(&self.ui.settings.instances, &tabs, from, to)
+        else {
             cx.notify();
             return;
         };
-        let local_order = order.clone();
-        self.persist(
-            cx,
-            move |ui| {
-                let mut remaining = std::mem::take(&mut ui.instances);
-                for id in &local_order {
-                    if let Some(index) = remaining.iter().position(|instance| &instance.id == id) {
-                        ui.instances.push(remaining.remove(index));
-                    }
-                }
-                ui.instances.append(&mut remaining);
-            },
-            move |settings| {
-                settings.apply_instance_order(&order);
-            },
-        );
+        self.persist(cx, move |settings| {
+            settings.apply_instance_order(&order);
+        });
     }
 
     fn render_refresh_button(

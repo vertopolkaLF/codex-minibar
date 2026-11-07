@@ -87,7 +87,7 @@ pub(crate) struct ShowPlan {
 
 /// Whether popup motion runs: the app toggle and Windows "Animation effects".
 pub(crate) fn animations_enabled(ui: &UiState) -> bool {
-    ui.animations_enabled && crate::popup::system_animations_enabled()
+    ui.settings.animations_enabled && crate::popup::system_animations_enabled()
 }
 
 /// Which corner of the work area the popup stands in.
@@ -153,22 +153,31 @@ fn taskbar_edge(monitor: Monitor) -> Edge {
     }
 }
 
-/// The fixed technical host: anchored to the work area's edge on the
-/// placement's side, standing on its bottom (or top) margin, wide and tall
-/// enough for every layout.
+/// Host width and height in pixels: the capsule plus its margin, as tall as
+/// the monitor.
 #[cfg(windows)]
-pub(crate) fn host_rect(monitor: Monitor, placement: Placement) -> win32::Rect {
-    let scale = monitor.scale();
-    let margin = crate::popup::EDGE_MARGIN_PX;
-    let wide = f64::from(monitor.bounds.width() - margin * 2) / scale
-        >= f64::from(crate::popup::POPUP_WIDE_WIDTH);
+fn host_size(monitor: Monitor, wide: bool) -> (i32, i32) {
     let width_dip = if wide {
         crate::popup::POPUP_WIDE_WIDTH
     } else {
         crate::popup::POPUP_WIDTH
     };
-    let width = (f64::from(width_dip) * scale).round() as i32 + margin;
-    let height = monitor.bounds.height();
+    let width = (f64::from(width_dip) * monitor.scale()).round() as i32;
+    (
+        width + crate::popup::EDGE_MARGIN_PX,
+        monitor.bounds.height(),
+    )
+}
+
+/// The fixed technical host: anchored to the work area's edge on the
+/// placement's side, standing on its bottom (or top) margin, wide and tall
+/// enough for every layout.
+#[cfg(windows)]
+pub(crate) fn host_rect(monitor: Monitor, placement: Placement) -> win32::Rect {
+    let margin = crate::popup::EDGE_MARGIN_PX;
+    let wide = f64::from(monitor.bounds.width() - margin * 2) / monitor.scale()
+        >= f64::from(crate::popup::POPUP_WIDE_WIDTH);
+    let (width, height) = host_size(monitor, wide);
     let work = monitor.work;
     let (left, right) = if placement.left {
         (work.left, work.left + width)
@@ -199,15 +208,8 @@ pub(crate) fn floating_host_rect(
     y: i32,
     two_columns: bool,
 ) -> win32::Rect {
-    let margin = crate::popup::EDGE_MARGIN_PX;
-    let width_dip = if two_columns {
-        crate::popup::POPUP_WIDE_WIDTH
-    } else {
-        crate::popup::POPUP_WIDTH
-    };
-    let width = (f64::from(width_dip) * monitor.scale()).round() as i32 + margin;
-    let height = monitor.bounds.height();
-    let left = x.saturating_sub(margin);
+    let (width, height) = host_size(monitor, two_columns);
+    let left = x.saturating_sub(crate::popup::EDGE_MARGIN_PX);
     win32::Rect {
         left,
         top: y,
@@ -312,9 +314,10 @@ fn handle_command(
             #[cfg(windows)]
             let geometry_changed = window
                 .update(cx, |root, _, _| {
-                    root.ui.popup_floating != ui.popup_floating
-                        || root.ui.popup_position != ui.popup_position
-                        || (ui.popup_floating && root.ui.popup_two_columns != ui.popup_two_columns)
+                    root.ui.settings.popup_floating != ui.settings.popup_floating
+                        || root.ui.settings.popup_position != ui.settings.popup_position
+                        || (ui.settings.popup_floating
+                            && root.ui.settings.popup_two_columns != ui.settings.popup_two_columns)
                 })
                 .unwrap_or(false);
             let _ = window.update(cx, |root, window, cx| root.apply_ui(*ui, window, cx));
@@ -454,7 +457,8 @@ fn handle_command(
             if let Some(bottom) = fixed_bottom {
                 let plan = window
                     .update(cx, |root, window, _| {
-                        if !root.ui.popup_floating || root.host.phase != root::Phase::Open {
+                        if !root.ui.settings.popup_floating || root.host.phase != root::Phase::Open
+                        {
                             return None;
                         }
                         let hwnd = root.host.hwnd?;

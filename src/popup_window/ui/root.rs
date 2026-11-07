@@ -364,13 +364,15 @@ impl PopupRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let ui = initial_ui_state(&state);
-        let accent = theme::accent_ramp(ui.accent_color);
-        let (popup_theme, vscode) =
-            theme::popup_design(ui.popup_theme, ui.popup_vscode_theme.as_deref());
+        let ui = UiState::initial(&state);
+        let accent = theme::accent_ramp(ui.settings.accent_color);
+        let (popup_theme, vscode) = theme::popup_design(
+            ui.settings.popup_theme,
+            ui.settings.popup_vscode_theme.as_deref(),
+        );
         let dark = theme::palette_dark(
             vscode.as_deref(),
-            theme::resolve_dark(ui.theme, system_dark(window)),
+            theme::resolve_dark(ui.settings.theme, system_dark(window)),
         );
         let palette = Palette::new(
             popup_theme,
@@ -378,12 +380,16 @@ impl PopupRoot {
             dark,
             accent,
             crate::popup::background_material(),
-            theme::popup_font_family(popup_theme, ui.font_family.as_deref(), &default_font),
+            theme::popup_font_family(
+                popup_theme,
+                ui.settings.font_family.as_deref(),
+                &default_font,
+            ),
         )
-        .with_contrast(ui.popup_vscode_contrast)
-        .with_tint(ui.popup_vscode_tint)
-        .with_borders(ui.popup_borders)
-        .with_window_border(ui.popup_window_border);
+        .with_contrast(ui.settings.popup_vscode_contrast)
+        .with_tint(ui.settings.popup_vscode_tint)
+        .with_borders(ui.settings.popup_borders)
+        .with_window_border(ui.settings.popup_window_border);
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.refresh_palette(window);
             cx.notify();
@@ -474,10 +480,11 @@ impl PopupRoot {
     // ----- external updates -------------------------------------------------
 
     pub(crate) fn apply_ui(&mut self, ui: UiState, window: &mut Window, cx: &mut Context<Self>) {
-        let accent_changed = ui.accent_color != self.ui.accent_color;
+        let accent_changed = ui.settings.accent_color != self.ui.settings.accent_color;
         let same_account = |provider| {
-            ui.instance(provider)
-                .zip(self.ui.instance(provider))
+            ui.settings
+                .instance(provider)
+                .zip(self.ui.settings.instance(provider))
                 .is_some_and(|(new, old)| new.enabled && new.runtime_key() == old.runtime_key())
         };
         self.reset_status
@@ -495,7 +502,7 @@ impl PopupRoot {
         self.provider_statuses = Rc::new(self.state.current_provider_statuses());
         self.ui = Rc::new(ui);
         if accent_changed {
-            self.accent = theme::accent_ramp(self.ui.accent_color);
+            self.accent = theme::accent_ramp(self.ui.settings.accent_color);
         }
         self.refresh_palette(window);
         if self.ui.refreshing && self.refresh_started.is_none() {
@@ -512,16 +519,18 @@ impl PopupRoot {
     pub(super) fn refresh_palette(&mut self, window: &Window) {
         self.preview_generation = theme::preview_generation();
         // Looked up on every refresh: reinstalling a theme replaces its entry.
-        let (popup_theme, vscode) =
-            theme::popup_design(self.ui.popup_theme, self.ui.popup_vscode_theme.as_deref());
+        let (popup_theme, vscode) = theme::popup_design(
+            self.ui.settings.popup_theme,
+            self.ui.settings.popup_vscode_theme.as_deref(),
+        );
         let dark = theme::palette_dark(
             vscode.as_deref(),
-            theme::resolve_dark(self.ui.theme, system_dark(window)),
+            theme::resolve_dark(self.ui.settings.theme, system_dark(window)),
         );
         let material = crate::popup::background_material();
         let font = theme::popup_font_family(
             popup_theme,
-            self.ui.font_family.as_deref(),
+            self.ui.settings.font_family.as_deref(),
             &self.default_font,
         );
         let same_vscode = match (&self.palette.vscode, &vscode) {
@@ -534,18 +543,18 @@ impl PopupRoot {
             || self.palette.dark != dark
             || self.palette.font_family != font
             || self.palette.material != material
-            || self.palette.borders != self.ui.popup_borders
-            || self.palette.window_outline != self.ui.popup_window_border
-            || self.palette.contrast != self.ui.popup_vscode_contrast
-            || self.palette.tint != self.ui.popup_vscode_tint
+            || self.palette.borders != self.ui.settings.popup_borders
+            || self.palette.window_outline != self.ui.settings.popup_window_border
+            || self.palette.contrast != self.ui.settings.popup_vscode_contrast
+            || self.palette.tint != self.ui.settings.popup_vscode_tint
             || (vscode.is_none()
                 && self.palette.accent != Palette::accent_for(popup_theme, dark, self.accent))
         {
             let palette = Palette::new(popup_theme, vscode, dark, self.accent, material, font)
-                .with_contrast(self.ui.popup_vscode_contrast)
-                .with_tint(self.ui.popup_vscode_tint)
-                .with_borders(self.ui.popup_borders)
-                .with_window_border(self.ui.popup_window_border);
+                .with_contrast(self.ui.settings.popup_vscode_contrast)
+                .with_tint(self.ui.settings.popup_vscode_tint)
+                .with_borders(self.ui.settings.popup_borders)
+                .with_window_border(self.ui.settings.popup_window_border);
             #[cfg(windows)]
             if (self.palette.material != material
                 || self.palette.backdrop_luminosity() != palette.backdrop_luminosity())
@@ -560,28 +569,30 @@ impl PopupRoot {
     /// The popup's design for another surface (the notification host) with
     /// its own system appearance, on an opaque background.
     pub(super) fn palette_for(&self, system_dark: bool) -> Palette {
-        let (popup_theme, vscode) =
-            theme::popup_design(self.ui.popup_theme, self.ui.popup_vscode_theme.as_deref());
+        let (popup_theme, vscode) = theme::popup_design(
+            self.ui.settings.popup_theme,
+            self.ui.settings.popup_vscode_theme.as_deref(),
+        );
         let dark = theme::palette_dark(
             vscode.as_deref(),
-            theme::resolve_dark(self.ui.theme, system_dark),
+            theme::resolve_dark(self.ui.settings.theme, system_dark),
         );
         Palette::new(
             popup_theme,
             vscode,
             dark,
-            theme::accent_ramp(self.ui.accent_color),
+            theme::accent_ramp(self.ui.settings.accent_color),
             crate::settings::PopupBackgroundMaterial::Solid,
             theme::popup_font_family(
                 popup_theme,
-                self.ui.font_family.as_deref(),
+                self.ui.settings.font_family.as_deref(),
                 &self.default_font,
             ),
         )
-        .with_contrast(self.ui.popup_vscode_contrast)
-        .with_tint(self.ui.popup_vscode_tint)
-        .with_borders(self.ui.popup_borders)
-        .with_window_border(self.ui.popup_window_border)
+        .with_contrast(self.ui.settings.popup_vscode_contrast)
+        .with_tint(self.ui.settings.popup_vscode_tint)
+        .with_borders(self.ui.settings.popup_borders)
+        .with_window_border(self.ui.settings.popup_window_border)
     }
 
     /// Screen x of the visible popup capsule's left edge, in pixels.
@@ -657,7 +668,7 @@ impl PopupRoot {
     fn view_available(&self, view: PopupView) -> bool {
         match view {
             PopupView::Home => true,
-            PopupView::Usage => self.ui.usage_stats_enabled,
+            PopupView::Usage => self.ui.settings.usage_stats_enabled,
             other => model::provider_tabs(&self.ui).contains(&other),
         }
     }
@@ -672,20 +683,11 @@ impl PopupRoot {
         if model::selected_group_member(&self.ui, driver) == Some(provider) {
             return;
         }
-        let driver_id = driver.id().to_owned();
-        let instance_id = provider.id().to_owned();
-        let (local_driver, local_id) = (driver_id.clone(), instance_id.clone());
-        self.persist(
-            cx,
-            move |ui| {
-                ui.grouped_tab_selection.insert(local_driver, local_id);
-            },
-            move |settings| {
-                settings
-                    .grouped_tab_selection
-                    .insert(driver_id, instance_id);
-            },
-        );
+        self.persist(cx, move |settings| {
+            settings
+                .grouped_tab_selection
+                .insert(driver.id().to_owned(), provider.id().to_owned());
+        });
     }
 
     fn sync_pager_with_settings(&mut self) {
@@ -814,7 +816,7 @@ impl PopupRoot {
         let rect = self.prepare_geometry(Some(anchor), beside);
         self.remember_floating_origin(rect, cx);
         // The system accent can change while the popup is hidden.
-        self.accent = theme::accent_ramp(self.ui.accent_color);
+        self.accent = theme::accent_ramp(self.ui.settings.accent_color);
         self.refresh_palette(window);
         self.limits = Rc::new(self.state.current_limits());
         self.forced_resets = Rc::new(self.state.current_forced_resets());
@@ -1035,9 +1037,9 @@ impl PopupRoot {
     #[cfg(windows)]
     pub(super) fn animate_reposition(&mut self, cx: &mut Context<Self>) -> bool {
         // Resizing a floating window preserves its live HWND origin.
-        if self.ui.popup_floating
+        if self.ui.settings.popup_floating
             && self.host.floating_rect.is_some()
-            && self.ui.popup_position.is_some()
+            && self.ui.settings.popup_position.is_some()
         {
             return false;
         }
@@ -1080,10 +1082,10 @@ impl PopupRoot {
                 )
             })
         });
-        let (monitor, rect) = if self.ui.popup_floating {
+        let (monitor, rect) = if self.ui.settings.popup_floating {
             let live_origin = origin.filter(|_| {
                 self.host.floating_rect.is_some()
-                    && self.ui.popup_position.is_some()
+                    && self.ui.settings.popup_position.is_some()
                     && matches!(
                         self.host.phase,
                         Phase::Open | Phase::Opening(_) | Phase::Closing(..)
@@ -1096,6 +1098,7 @@ impl PopupRoot {
                 })
                 .or_else(|| {
                     self.ui
+                        .settings
                         .popup_position
                         .as_ref()
                         .map(super::win32::restore_position)
@@ -1115,7 +1118,7 @@ impl PopupRoot {
                 left: true,
                 top: true,
             };
-            let rect = super::floating_host_rect(monitor, x, y, self.ui.popup_two_columns);
+            let rect = super::floating_host_rect(monitor, x, y, self.ui.settings.popup_two_columns);
             self.host.floating_rect = Some(rect);
             (monitor, rect)
         } else {
@@ -1139,7 +1142,7 @@ impl PopupRoot {
 
     #[cfg(windows)]
     pub(super) fn save_floating_position(&mut self, cx: &mut Context<Self>) {
-        if !self.ui.popup_floating {
+        if !self.ui.settings.popup_floating {
             return;
         }
         let Some(hwnd) = self.host.hwnd else {
@@ -1155,7 +1158,7 @@ impl PopupRoot {
         rect: super::win32::Rect,
         cx: &mut Context<Self>,
     ) {
-        if self.ui.popup_floating && self.ui.popup_position.is_none() {
+        if self.ui.settings.popup_floating && self.ui.settings.popup_position.is_none() {
             self.persist_floating_origin(rect, cx);
         }
     }
@@ -1165,16 +1168,40 @@ impl PopupRoot {
         // Floating capsules always start at the host's left margin and top.
         let position =
             super::win32::save_position(rect.left + crate::popup::EDGE_MARGIN_PX, rect.top);
-        let saved = position.clone();
-        self.persist(
-            cx,
-            move |ui| ui.popup_position = Some(position),
-            move |s| s.popup_position = Some(saved),
-        );
+        self.persist(cx, move |settings| {
+            settings.popup_position = Some(position.clone())
+        });
+    }
+
+    /// What Home widgets and provider pages tell the card plan.
+    pub(super) fn card_options<'a>(
+        &self,
+        ui: &'a UiState,
+        statuses: &'a [crate::provider_status::ProviderStatus],
+        provider: ProviderId,
+        surface: PopupSurface,
+        drag_handle: bool,
+    ) -> CardOptions<'a> {
+        CardOptions {
+            keep_reset_card: self.reset_busy.contains(&provider)
+                || self.reset_status.contains_key(&provider),
+            popup_visibility: &ui.settings.popup_visibility,
+            surface,
+            show_provider_tabs: self.show_provider_tabs(),
+            include_usage_stats: ui.usage_stats_provider_enabled(provider),
+            show_account_name: ui.settings.show_account_name,
+            drag_handle,
+            provider_error: ui.provider_error(provider),
+            provider_status: statuses
+                .iter()
+                .find(|status| status.kind == provider.kind()),
+            now: Utc::now(),
+        }
     }
 
     pub(super) fn two_columns(&self) -> bool {
-        self.ui.popup_two_columns && (self.ui.popup_floating || self.host.wide_available())
+        self.ui.settings.popup_two_columns
+            && (self.ui.settings.popup_floating || self.host.wide_available())
     }
 
     /// GPUI's view cache keys include bounds/mask/text, but not inherited
@@ -1225,7 +1252,7 @@ impl PopupRoot {
     /// The instance switcher shows on a grouped tab in switcher mode.
     pub(super) fn show_profile_strip(&self) -> bool {
         matches!(self.pager.current, PopupView::Group(_))
-            && self.ui.popup_tab_mode == PopupTabMode::GroupedSwitcher
+            && self.ui.settings.popup_tab_mode == PopupTabMode::GroupedSwitcher
     }
 
     pub(super) fn chrome_height(&self) -> f32 {
@@ -1249,7 +1276,7 @@ impl PopupRoot {
         if self.host.resizing_height {
             return (self.host.height.position as f32).clamp(minimum, maximum);
         }
-        if let Some(height) = self.ui.popup_height_dip {
+        if let Some(height) = self.ui.settings.popup_height_dip {
             return (height as f32).clamp(minimum, maximum);
         }
         maximum
@@ -1286,13 +1313,9 @@ impl PopupRoot {
         self.host.height.snap(f64::from(height));
         self.host.last_region = None;
         if finished {
-            self.persist(
-                cx,
-                move |ui| ui.popup_height_dip = Some(saved),
-                move |settings| settings.popup_height_dip = Some(saved),
-            );
+            self.persist(cx, move |settings| settings.popup_height_dip = Some(saved));
         } else {
-            Rc::make_mut(&mut self.ui).popup_height_dip = Some(saved);
+            Arc::make_mut(&mut Rc::make_mut(&mut self.ui).settings).popup_height_dip = Some(saved);
             cx.notify();
         }
     }
@@ -1451,14 +1474,14 @@ impl PopupRoot {
                         bottom: surface.3,
                     },
                     top_anchored: self.host.placement.top,
-                    floating: self.ui.popup_floating,
+                    floating: self.ui.settings.popup_floating,
                     scale,
                     minimum,
                     maximum,
                 },
             ));
             super::win32::set_drag_header(
-                (self.ui.popup_floating && self.host.phase == Phase::Open).then(|| {
+                (self.ui.settings.popup_floating && self.host.phase == Phase::Open).then(|| {
                     let (left, top, right, bottom) = pixels(
                         x + CHROME_INSET,
                         y + CHROME_INSET,
@@ -1493,7 +1516,10 @@ impl PopupRoot {
             }
             // The clip can stay put while the capsule resizes inside it;
             // outside clicks still go by the visible capsule.
-            if self.ui.popup_floating || region_changed || self.host.last_surface != Some(surface) {
+            if self.ui.settings.popup_floating
+                || region_changed
+                || self.host.last_surface != Some(surface)
+            {
                 self.host.last_surface = Some(surface);
                 let (left, top, right, bottom) = surface;
                 let origin = super::win32::window_rect(hwnd);
@@ -1622,7 +1648,13 @@ impl PopupRoot {
     // ----- actions ------------------------------------------------------------
 
     pub(super) fn use_reset(&mut self, provider: ProviderId, cx: &mut Context<Self>) {
-        let Some(instance) = self.ui.instance(provider).filter(|i| i.enabled).cloned() else {
+        let Some(instance) = self
+            .ui
+            .settings
+            .instance(provider)
+            .filter(|i| i.enabled)
+            .cloned()
+        else {
             return;
         };
         if !self.reset_busy.insert(provider) {
@@ -1643,6 +1675,7 @@ impl PopupRoot {
                 // attach the previous account's result to the new profile.
                 if this
                     .ui
+                    .settings
                     .instance(provider)
                     .is_some_and(|i| i.runtime_key() == runtime_key && i.enabled)
                 {
@@ -1683,7 +1716,7 @@ impl PopupRoot {
 
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
         self.keys.mark_stale();
-        if refresh_all_workers(&self.state.worker_commands()) {
+        if self.state.refresh_all() {
             let mut ui = (*self.ui).clone();
             ui.refreshing = true;
             self.ui = Rc::new(ui);
@@ -1695,24 +1728,13 @@ impl PopupRoot {
     }
 
     pub(super) fn toggle_user_pin(&mut self, cx: &mut Context<Self>) {
-        let pinned = !self.ui.popup_pinned;
-        // Dismissal reads the flag on the bridge thread; do not wait for the
-        // settings writer to round-trip.
-        crate::popup::set_user_pinned(pinned);
-        self.persist(
-            cx,
-            move |ui| ui.popup_pinned = pinned,
-            move |settings| settings.popup_pinned = pinned,
-        );
+        let pinned = !self.ui.settings.popup_pinned;
+        self.persist(cx, move |settings| settings.popup_pinned = pinned);
     }
 
     pub(super) fn toggle_two_columns(&mut self, cx: &mut Context<Self>) {
-        let enabled = !self.ui.popup_two_columns;
-        self.persist(
-            cx,
-            move |ui| ui.popup_two_columns = enabled,
-            move |settings| settings.popup_two_columns = enabled,
-        );
+        let enabled = !self.ui.settings.popup_two_columns;
+        self.persist(cx, move |settings| settings.popup_two_columns = enabled);
         // The optimistic snapshot already contains the new value when the
         // settings broadcast returns. Expand the technical host now so Home
         // and Usage are not clipped. When shrinking, keep the larger host
@@ -1733,20 +1755,18 @@ impl PopupRoot {
         });
     }
 
-    /// Optimistically apply a popup-owned settings change, then persist it.
+    /// Applies a popup-owned settings change at once, then persists it on
+    /// the serial settings writer, off the render thread. Process-wide
+    /// values such as the pin take effect before the write round-trips.
     pub(super) fn persist(
         &mut self,
         cx: &mut Context<Self>,
-        local: impl FnOnce(&mut UiState),
-        update: impl FnOnce(&mut Settings) + Send + 'static,
+        edit: impl Fn(&mut Settings) + Send + 'static,
     ) {
-        let mut ui = (*self.ui).clone();
-        local(&mut ui);
-        self.ui = Rc::new(ui);
+        let ui = Rc::make_mut(&mut self.ui);
+        ui.edit_settings(edit);
+        crate::settings_runtime::apply_presentation(&ui.settings);
         cx.notify();
-        // Disk I/O and the settings broadcast run on the serial settings
-        // writer, off the render thread and ordered with every other write.
-        crate::settings::store::queue(update);
     }
 
     // ----- snapshots ------------------------------------------------------------
@@ -1846,27 +1866,6 @@ pub(super) fn system_dark(window: &Window) -> bool {
     )
 }
 
-/// Seed identical to the background bridge so the very first frame already
-/// reflects persisted settings, before the bridge publishes.
-fn initial_ui_state(state: &AppState) -> UiState {
-    let settings = &state.settings;
-    let mut ui = UiState {
-        provider_errors: state
-            .startup_provider_errors
-            .iter()
-            .map(|(provider, error)| (*provider, UiState::error_for_ui(error)))
-            .collect(),
-        last_activation: format_last_activation(&RateLimits::default(), state.last_activation_at),
-        update_version: state
-            .updates
-            .available_update()
-            .map(|update| update.version),
-        ..UiState::popup_layout_from_settings(settings)
-    };
-    ui.apply_settings(settings);
-    ui
-}
-
 // ----- render -------------------------------------------------------------------
 
 impl Render for PopupRoot {
@@ -1940,8 +1939,8 @@ impl Render for PopupRoot {
                         instance_layout_key(
                             limits.get(member),
                             ui.has_provider_error(member),
-                            ui.show_used_percentage,
-                            ui.show_usage_pace,
+                            ui.settings.show_used_percentage,
+                            ui.settings.show_usage_pace,
                         )
                     )
                 })
@@ -2451,10 +2450,10 @@ impl PopupRoot {
         // errors don't apply to it.
         let (accounts, every_error) = match view {
             PopupView::Usage => (Vec::new(), false),
-            PopupView::Home => (ui.enabled_providers(), false),
+            PopupView::Home => (ui.settings.enabled_providers(), false),
             other => match self.page_provider(other) {
                 Some(provider) => (vec![provider], true),
-                None => (tab_members(&ui.instances, other), false),
+                None => (tab_members(&ui.settings.instances, other), false),
             },
         };
         self.body_presence.clear();
@@ -2498,7 +2497,9 @@ impl PopupRoot {
     pub(super) fn page_provider(&self, view: PopupView) -> Option<ProviderId> {
         match view {
             PopupView::Provider(provider) => Some(provider),
-            PopupView::Group(driver) if self.ui.popup_tab_mode == PopupTabMode::GroupedSwitcher => {
+            PopupView::Group(driver)
+                if self.ui.settings.popup_tab_mode == PopupTabMode::GroupedSwitcher =>
+            {
                 model::selected_group_member(&self.ui, driver)
             }
             _ => None,
@@ -2579,7 +2580,7 @@ impl PopupRoot {
     fn account_bar_spec(&self, provider: ProviderId, every_error: bool) -> Option<AccountBarSpec> {
         let ui = &self.ui;
         let error = ui.provider_error(provider);
-        let notice = ui.instance(provider).and_then(|instance| {
+        let notice = ui.settings.instance(provider).and_then(|instance| {
             model::login_notice(instance, error, self.limits.get(provider), Utc::now())
         });
         let name = provider.qualified_name();
@@ -2653,34 +2654,24 @@ impl PopupRoot {
         let gap = self.card_gap();
         let members = match self.page_provider(view) {
             Some(provider) => vec![provider],
-            None => tab_members(&self.ui.instances, view),
+            None => tab_members(&self.ui.settings.instances, view),
         };
         let stacked = members.len() > 1;
         let ui = Rc::clone(&self.ui);
         let limits = Rc::clone(&self.limits);
         let forced_resets = Rc::clone(&self.forced_resets);
         let provider_statuses = Rc::clone(&self.provider_statuses);
-        let show_tabs = self.show_provider_tabs();
         let mut sections = Vec::with_capacity(members.len());
         for (index, provider) in members.into_iter().enumerate() {
             // A stacked page has no page-wide bar for one instance; each
             // section's heading carries its own error marker.
-            let error_message = ui.provider_error(provider).map(str::to_owned);
-            let options = CardOptions {
-                keep_reset_card: self.reset_busy.contains(&provider)
-                    || self.reset_status.contains_key(&provider),
-                popup_visibility: &ui.popup_visibility,
-                surface: PopupSurface::ProviderTab,
-                show_provider_tabs: show_tabs,
-                include_usage_stats: ui.usage_stats_provider_enabled(provider),
-                show_account_name: ui.show_account_name,
-                drag_handle: false,
-                provider_error: error_message.as_deref(),
-                provider_status: provider_statuses
-                    .iter()
-                    .find(|status| status.kind == provider.kind()),
-                now: Utc::now(),
-            };
+            let options = self.card_options(
+                &ui,
+                &provider_statuses,
+                provider,
+                PopupSurface::ProviderTab,
+                false,
+            );
             let openrouter = provider.kind() == ProviderKind::OpenRouter;
             // A New key or reveal page replaces this account's section.
             if openrouter && let Some(page) = self.render_key_page(provider, window, cx) {
@@ -2725,9 +2716,9 @@ impl PopupRoot {
 
     pub(super) fn card_style(&self) -> CardStyle {
         CardStyle {
-            show_used_percentage: self.ui.show_used_percentage,
-            show_usage_values: self.ui.show_usage_values,
-            show_usage_pace: self.ui.show_usage_pace,
+            show_used_percentage: self.ui.settings.show_used_percentage,
+            show_usage_values: self.ui.settings.show_usage_values,
+            show_usage_pace: self.ui.settings.show_usage_pace,
             compact: true,
         }
     }

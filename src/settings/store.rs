@@ -103,6 +103,14 @@ pub fn queue(edit: impl FnOnce(&mut Settings) + Send + 'static) {
     });
 }
 
+/// Applies `edit` to a window's own snapshot at once, so the change shows
+/// before it commits, then queues the same edit for the file.
+pub fn edit_snapshot(local: &mut Settings, edit: impl Fn(&mut Settings) + Send + 'static) {
+    edit(local);
+    local.normalize_all();
+    queue(edit);
+}
+
 /// Queues an edit that can fail and may return a value. The receiver yields
 /// the outcome once the change is committed (or failed).
 pub fn queue_fallible<T: Send + 'static>(

@@ -1,4 +1,16 @@
-use super::*;
+use std::time::Duration;
+
+use super::formatting::credits_display_value;
+use crate::{
+    instances::{ProviderId, ProviderInstance},
+    limits::RateLimits,
+    popup,
+    provider_registry::{
+        LimitSectionKind, ProviderKind, credits_brick_id, limit_section_brick_id, resets_brick_id,
+        usage_brick_id,
+    },
+    settings::PopupTabMode,
+};
 
 /// The popup either shows the Home feed, the Usage page, one provider
 /// instance, or one driver whose instances share a grouped tab.

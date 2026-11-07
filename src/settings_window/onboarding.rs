@@ -321,7 +321,7 @@ impl OnboardingWindow {
             self.enabled[index] = value;
             self.publish();
             // Keep the popup on Home, where the change shows.
-            crate::popup_window::request_home_view();
+            crate::popup_window::request_view(crate::popup_window::PendingPopupView::Home);
         }
         cx.notify();
     }
@@ -395,10 +395,8 @@ impl OnboardingWindow {
                         this.settled = true;
                         // The popup has been previewing beside onboarding;
                         // keep it up so Done always lands on it.
-                        if crate::popup::is_visible() && !crate::popup::is_closing() {
+                        if !crate::popup_window::ensure_shown(crate::popup::Origin::Cursor) {
                             crate::popup::arm_outside_click_grace();
-                        } else {
-                            crate::popup::show_near_cursor();
                         }
                         super::window_closed(true);
                         window.remove_window();

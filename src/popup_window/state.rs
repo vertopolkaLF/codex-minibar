@@ -1,605 +1,124 @@
-use super::*;
+//! The popup's view state: the settings snapshot it renders plus what the
+//! bridge learned at runtime (errors, requests, activation text).
 
-pub(super) fn refresh_all_workers(commands: &[(ProviderId, Sender<WorkerCommand>)]) -> bool {
-    let mut requested = false;
-    for (_, commands) in commands {
-        requested |= commands.send(WorkerCommand::Refresh).is_ok();
-    }
-    requested
-}
+use std::{collections::HashMap, sync::Arc};
 
-/// Flatten provider usage errors, including per-account errors exposed by
-/// OpenRouter, into the provider-scoped presentation used by the popup.
-pub(super) fn usage_error_message(statistics: &crate::usage::UsageStatistics) -> Option<String> {
-    let mut errors = Vec::new();
-    let mut add_error = |error: Option<&str>| {
-        let Some(error) = error else {
-            return;
-        };
-        let error = error.trim();
-        if !error.is_empty() && !errors.iter().any(|seen| seen == error) {
-            errors.push(error.to_owned());
-        }
-    };
-    add_error(statistics.error.as_deref());
-    for account in statistics.accounts.values() {
-        add_error(account.error.as_deref());
-    }
-    (!errors.is_empty()).then(|| errors.join("; "))
-}
+use crate::{
+    app::AppState,
+    instances::ProviderId,
+    limits::RateLimits,
+    provider_registry::ProviderKind,
+    settings::{HomeCardLayout, Settings},
+    worker::RequestKind,
+};
 
-fn limits_persister() -> &'static super::limits_persist::LimitsPersister {
-    static PERSISTER: std::sync::OnceLock<super::limits_persist::LimitsPersister> =
-        std::sync::OnceLock::new();
-    PERSISTER.get_or_init(|| {
-        super::limits_persist::LimitsPersister::spawn(|provider, limits| {
-            if let Err(error) =
-                crate::store::with_store(|store| store.save_limits(provider, limits))
-            {
-                eprintln!(
-                    "failed to persist {} limits: {error:#}",
-                    provider.display_name()
-                );
-            }
-        })
-    })
-}
+use super::formatting::format_last_activation;
 
-/// Shared startup state handed from `main` into the reactor render tree.
-pub struct AppState {
-    pub settings: Settings,
-    /// The sole live rate-limit snapshot. Both the tray and popup read this
-    /// store, and worker results replace it atomically before either surface
-    /// is repainted.
-    pub limits: Mutex<ProviderLimits>,
-    /// Latest valid public forced-reset announcements. Kept outside UiState so
-    /// hidden popups avoid a full native-tree publish on every feed poll.
-    pub forced_resets: Mutex<Vec<crate::reset_detection::AnnouncedReset>>,
-    /// Ongoing status-page incidents of watched drivers.
-    pub provider_statuses: Mutex<Vec<crate::provider_status::ProviderStatus>>,
-    pub commands: Mutex<HashMap<ProviderId, Sender<WorkerCommand>>>,
-    pub workers: Mutex<crate::provider::ProviderWorkers>,
-    pub worker_events_rx: Mutex<Option<Receiver<crate::app_event::AppEvent>>>,
-    pub worker_events_tx: Sender<crate::app_event::AppEvent>,
-    /// Independent public-feed worker for announced Codex forced resets.
-    pub reset_feed_worker: Mutex<Option<crate::reset_feed::ResetFeedWorker>>,
-    /// Public status-page poller for provider incidents.
-    pub provider_status_worker: Mutex<Option<crate::provider_status::ProviderStatusWorker>>,
-    pub activation_path: std::path::PathBuf,
-    /// Provider-scoped errors from workers that could not be created at startup.
-    /// They remain visible until that provider returns a successful limits
-    /// response, just like errors received from a running worker.
-    pub startup_provider_errors: Vec<(ProviderId, String)>,
-    /// Last activation attempt loaded from persisted activation state.
-    pub last_activation_at: Option<DateTime<Utc>>,
-    /// Live settings pushes from the settings window; drained by the tray bridge.
-    pub settings_rx: Mutex<Option<Receiver<Settings>>>,
-    /// Destructive usage actions are serialized by the tray bridge and then
-    /// fanned out to every provider usage worker.
-    pub usage_actions_rx: Mutex<Option<Receiver<UsageAction>>>,
-    pub usage_actions_tx: Sender<UsageAction>,
-    pub updates: Arc<UpdateController>,
-}
-
-impl AppState {
-    pub(super) fn current_limits(&self) -> ProviderLimits {
-        self.limits
-            .lock()
-            .map(|limits| limits.clone())
-            .unwrap_or_default()
-    }
-
-    /// Overlay locally chosen OpenRouter account names onto the live quota
-    /// snapshot. A rename is a settings-only change and must not wait for the
-    /// next worker poll or an app restart.
-    pub(super) fn apply_openrouter_account_names(&self, settings: &Settings) -> bool {
-        let mut changed = false;
-        for instance in settings
-            .instances
-            .iter()
-            .filter(|instance| instance.driver == ProviderKind::OpenRouter)
-        {
-            let provider = instance.provider_id();
-            let mut limits = self.current_limits().get(provider).clone();
-            if crate::openrouter::apply_account_names(&mut limits, instance) {
-                self.replace_limits(provider, limits);
-                changed = true;
-            }
-        }
-        changed
-    }
-
-    pub(super) fn replace_limits(&self, provider: ProviderId, mut limits: RateLimits) {
-        if let Ok(mut current) = self.limits.lock() {
-            // Quota polling must not erase the independently refreshed usage
-            // history between its ten-minute scans.
-            limits.usage = current.get(provider).usage.clone();
-            *current.get_mut(provider) = limits.clone();
-        } else {
-            return;
-        }
-        // Never wait for storage on the caller (the tray thread): usage scans
-        // hold the store for seconds. The persister coalesces to the latest
-        // snapshot per provider and writes in the background.
-        limits_persister().save(provider, limits);
-    }
-
-    /// Blocks (bounded) until queued limit snapshots reach storage.
-    pub fn flush_limits_persistence() {
-        limits_persister().flush(Duration::from_secs(3));
-    }
-
-    pub(super) fn replace_usage(&self, provider: ProviderId, usage: crate::usage::UsageStatistics) {
-        if let Ok(mut current) = self.limits.lock() {
-            current.get_mut(provider).usage = usage;
-        }
-    }
-
-    pub(super) fn clear_usage_snapshot(&self) {
-        if let Ok(mut limits) = self.limits.lock() {
-            let providers = limits
-                .iter()
-                .map(|(provider, _)| provider)
-                .collect::<Vec<_>>();
-            for provider in providers {
-                limits.get_mut(provider).usage = crate::usage::UsageStatistics::default();
-            }
-        }
-    }
-
-    pub(super) fn take_worker_events(&self) -> Option<Receiver<crate::app_event::AppEvent>> {
-        self.worker_events_rx.lock().ok()?.take()
-    }
-
-    pub(super) fn worker_commands(&self) -> Vec<(ProviderId, Sender<WorkerCommand>)> {
-        self.commands
-            .lock()
-            .map(|commands| {
-                commands
-                    .iter()
-                    .map(|(provider, commands)| (*provider, commands.clone()))
-                    .collect()
-            })
-            .unwrap_or_default()
-    }
-
-    pub(super) fn current_forced_resets(&self) -> Vec<crate::reset_detection::AnnouncedReset> {
-        self.forced_resets
-            .lock()
-            .map(|resets| resets.clone())
-            .unwrap_or_default()
-    }
-
-    pub(super) fn replace_forced_resets(
-        &self,
-        resets: Vec<crate::reset_detection::AnnouncedReset>,
-    ) {
-        if let Ok(mut current) = self.forced_resets.lock() {
-            *current = resets;
-        }
-    }
-
-    pub(super) fn sync_reset_feed(&self, settings: &Settings) {
-        let Ok(worker) = self.reset_feed_worker.lock() else {
-            return;
-        };
-        let Some(worker) = worker.as_ref() else {
-            return;
-        };
-        let _ = worker
-            .commands
-            .send(crate::reset_feed::ResetFeedCommand::SetEnabled(
-                settings.notifications.forced_reset_feed_enabled,
-            ));
-        let _ = worker
-            .commands
-            .send(crate::reset_feed::ResetFeedCommand::SetRefreshInterval(
-                Duration::from_secs(settings.reset_announcement_refresh_interval.seconds()),
-            ));
-    }
-
-    pub(super) fn current_provider_statuses(&self) -> Vec<crate::provider_status::ProviderStatus> {
-        self.provider_statuses
-            .lock()
-            .map(|statuses| statuses.clone())
-            .unwrap_or_default()
-    }
-
-    pub(super) fn replace_provider_statuses(
-        &self,
-        statuses: Vec<crate::provider_status::ProviderStatus>,
-    ) {
-        if let Ok(mut current) = self.provider_statuses.lock() {
-            *current = statuses;
-        }
-    }
-
-    fn send_provider_status(&self, command: crate::provider_status::ProviderStatusCommand) {
-        if let Ok(worker) = self.provider_status_worker.lock()
-            && let Some(worker) = worker.as_ref()
-        {
-            let _ = worker.commands.send(command);
-        }
-    }
-
-    pub(super) fn sync_provider_status(&self, settings: &Settings) {
-        self.send_provider_status(crate::provider_status::ProviderStatusCommand::Watch(
-            crate::provider_status::watched_kinds(settings),
-        ));
-    }
-
-    pub(super) fn mark_provider_incident_notified(&self, id: String) {
-        self.send_provider_status(crate::provider_status::ProviderStatusCommand::MarkNotified(
-            id,
-        ));
-    }
-
-    fn send_reset_feed(&self, command: crate::reset_feed::ResetFeedCommand) {
-        if let Ok(worker) = self.reset_feed_worker.lock()
-            && let Some(worker) = worker.as_ref()
-        {
-            let _ = worker.commands.send(command);
-        }
-    }
-
-    pub(super) fn mark_forced_reset_info_notified(&self, id: String) {
-        self.send_reset_feed(crate::reset_feed::ResetFeedCommand::MarkNotified(id));
-    }
-
-    /// Feeds a Codex quota sample to announced-reset detection. The previous
-    /// snapshot goes first: on the very first run it is the persisted sample
-    /// from the last session, which lets a reset that landed while the app
-    /// was closed be recognized. Samples the detector already has are ignored.
-    pub(super) fn observe_reset_limits(
-        &self,
-        provider: ProviderId,
-        previous: Option<&RateLimits>,
-        current: &RateLimits,
-    ) {
-        if provider.kind() != ProviderKind::Codex {
-            return;
-        }
-        for limits in previous.into_iter().chain([current]) {
-            if let Some(observation) = crate::reset_detection::Observation::from_limits(limits) {
-                self.send_reset_feed(crate::reset_feed::ResetFeedCommand::Observe(
-                    provider.id().to_owned(),
-                    Box::new(observation),
-                ));
-            }
-        }
-    }
-
-    /// A reset credit spent from the popup, so detection does not mistake
-    /// its effect for an announced forced reset.
-    pub(super) fn record_banked_reset_use(&self, provider: ProviderId) {
-        if provider.kind() == ProviderKind::Codex {
-            self.send_reset_feed(crate::reset_feed::ResetFeedCommand::RecordBankedUse(
-                provider.id().to_owned(),
-                Utc::now(),
-            ));
-        }
-    }
-
-    /// Applies instance toggles without disturbing workers that remain
-    /// enabled. Workers of removed or disabled instances stop, and instances
-    /// listed in `restart` get a fresh worker.
-    pub(super) fn sync_provider_workers(
-        &self,
-        settings: &Settings,
-        restart: &[ProviderId],
-    ) -> Vec<(ProviderId, String)> {
-        let enabled = settings.enabled_providers();
-        let stopped = self.workers.lock().map_or_else(
-            |_| Vec::new(),
-            |mut workers| {
-                let remove = workers
-                    .keys()
-                    .copied()
-                    .filter(|provider| !enabled.contains(provider) || restart.contains(provider))
-                    .collect::<Vec<_>>();
-                remove
-                    .into_iter()
-                    .filter_map(|provider| workers.remove(&provider))
-                    .collect::<Vec<_>>()
-            },
-        );
-        for worker in stopped {
-            worker.shutdown();
-        }
-        if let Ok(mut commands) = self.commands.lock() {
-            commands
-                .retain(|provider, _| enabled.contains(provider) && !restart.contains(provider));
-        }
-        if let Ok(mut limits) = self.limits.lock() {
-            // Disabled instances drop their live sample; removed ones vanish.
-            limits.retain(|provider| settings.instance(provider).is_some());
-            for provider in settings.provider_ids() {
-                if !enabled.contains(&provider) {
-                    *limits.get_mut(provider) = RateLimits::default();
-                }
-            }
-        }
-
-        let mut errors = Vec::new();
-        for provider in enabled {
-            if self
-                .workers
-                .lock()
-                .is_ok_and(|workers| workers.contains_key(&provider))
-            {
-                continue;
-            }
-            match crate::provider::start_provider_worker(
-                provider,
-                settings,
-                self.activation_path.clone(),
-                self.worker_events_tx.clone(),
-            ) {
-                Ok(worker) => {
-                    if let Ok(mut commands) = self.commands.lock() {
-                        commands.insert(provider, worker.commands.clone());
-                    }
-                    if let Ok(mut workers) = self.workers.lock() {
-                        workers.insert(provider, worker);
-                    }
-                }
-                Err(error) => errors.push((provider, format!("{error:#}"))),
-            }
-        }
-        errors
-    }
-
-    pub fn shutdown_worker(&self) {
-        if let Ok(mut workers) = self.workers.lock() {
-            for (_, worker) in std::mem::take(&mut *workers) {
-                worker.shutdown();
-            }
-        }
-        if let Ok(mut commands) = self.commands.lock() {
-            commands.clear();
-        }
-        if let Ok(mut worker) = self.reset_feed_worker.lock()
-            && let Some(worker) = worker.take()
-        {
-            worker.shutdown();
-        }
-        if let Ok(mut worker) = self.provider_status_worker.lock()
-            && let Some(worker) = worker.take()
-        {
-            worker.shutdown();
-        }
-    }
-}
-
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub(crate) struct UiState {
-    pub(super) theme: AppTheme,
-    pub(super) accent_color: AccentColor,
-    pub(super) font_family: Option<String>,
-    pub(super) animations_enabled: bool,
-    pub(super) popup_theme: PopupTheme,
-    pub(super) popup_vscode_theme: Option<String>,
-    pub(super) popup_vscode_contrast: u16,
-    pub(super) popup_vscode_tint: u16,
-    pub(super) popup_borders: bool,
-    pub(super) popup_window_border: bool,
-    pub(super) time_format: TimeFormat,
-    pub(super) last_activation: String,
-    pub(super) provider_errors: HashMap<ProviderId, String>,
-    pub(super) usage_errors: HashMap<ProviderId, String>,
-    pub(super) error: Option<String>,
-    /// Changes for every settings transaction so layout-sensitive toggles
-    /// force a fresh body measurement and popup resize.
-    pub(super) settings_revision: u64,
-    /// Changes for every successful worker sample.  Rate-limit data lives only
-    /// in `AppState`, but this revision makes that external snapshot observable
-    /// to the reactive render loop even when all other view metadata is equal.
-    pub(super) limits_revision: u64,
+    /// What the popup renders. Popup edits land here first and reach the
+    /// file through the settings writer; every commit replaces it.
+    pub(crate) settings: Arc<Settings>,
+    /// Derived from `settings`; computing it reads the credential vault.
+    usage_stats_providers: Vec<ProviderId>,
+    pub(crate) last_activation: String,
+    pub(crate) provider_errors: HashMap<ProviderId, String>,
+    pub(crate) usage_errors: HashMap<ProviderId, String>,
+    pub(crate) error: Option<String>,
     /// Changes for every successful usage refresh or usage-data clear. Usage
     /// snapshot memoization keys off this revision rather than quota polls.
-    pub(super) usage_revision: u64,
-    /// Same bridge for the independently polled forced-reset feed.
-    pub(super) forced_resets_revision: u64,
-    pub(super) provider_status_revision: u64,
+    pub(crate) usage_revision: u64,
     /// Provider limit/usage requests currently in flight. The refresh icon
     /// stays active until every operation started by the workers has finished.
-    pub(super) active_requests: Vec<(ProviderId, RequestKind)>,
-    pub(super) refreshing: bool,
-    pub(super) show_used_percentage: bool,
-    pub(super) show_usage_values: bool,
-    pub(super) show_usage_pace: bool,
-    pub(super) popup_visibility: PopupVisibility,
-    pub(super) usage_stats_enabled: bool,
-    /// Instances whose usage statistics are collected and shown.
-    pub(super) usage_stats_providers: Vec<ProviderId>,
-    pub(super) show_total_spend_on_all_tab: bool,
-    pub(super) total_spend_presentation: TotalSpendPresentation,
-    pub(super) total_spend_period: TotalSpendPeriod,
-    pub(super) show_account_name: bool,
-    pub(super) show_edit_home_button: bool,
-    pub(super) show_popup_action_bar: bool,
-    pub(super) popup_pinned: bool,
-    pub(super) popup_floating: bool,
-    pub(super) popup_height_dip: Option<u32>,
-    pub(super) popup_position: Option<crate::settings::PopupPosition>,
-    /// Every configured instance in display order, enabled or not.
-    pub(super) instances: Vec<ProviderInstance>,
-    pub(super) popup_tab_mode: PopupTabMode,
-    /// Driver id -> instance id selected in a grouped tab's switcher.
-    pub(super) grouped_tab_selection: std::collections::BTreeMap<String, String>,
-    pub(super) popup_two_columns: bool,
-    pub(super) popup_home_order: Vec<HomeWidgetId>,
-    pub(super) popup_home_right_column: Option<Vec<HomeWidgetId>>,
-    pub(super) popup_home_card_layouts: std::collections::BTreeMap<String, HomeCardLayout>,
-    pub(super) use_colored_provider_icons: bool,
-    pub(super) replace_chatgpt_logo_with_codex: bool,
-    pub(super) update_version: Option<String>,
+    pub(crate) active_requests: Vec<(ProviderId, RequestKind)>,
+    pub(crate) refreshing: bool,
+    pub(crate) update_version: Option<String>,
 }
 
 impl Default for UiState {
     fn default() -> Self {
-        Self {
-            theme: AppTheme::Auto,
-            accent_color: AccentColor::Windows,
-            font_family: None,
-            animations_enabled: true,
-            popup_theme: PopupTheme::Fluent,
-            popup_vscode_theme: None,
-            popup_vscode_contrast: crate::settings::POPUP_VSCODE_CONTRAST_DEFAULT,
-            popup_vscode_tint: crate::settings::POPUP_VSCODE_TINT_DEFAULT,
-            popup_borders: true,
-            popup_window_border: true,
-            time_format: TimeFormat::from_windows(),
-            last_activation: crate::i18n::tr("never").into(),
-            provider_errors: HashMap::new(),
-            usage_errors: HashMap::new(),
-            error: None,
-            settings_revision: 0,
-            limits_revision: 0,
-            usage_revision: 0,
-            forced_resets_revision: 0,
-            provider_status_revision: 0,
-            active_requests: Vec::new(),
-            refreshing: false,
-            show_used_percentage: false,
-            show_usage_values: true,
-            show_usage_pace: true,
-            popup_visibility: PopupVisibility::build_defaults(),
-            usage_stats_enabled: true,
-            usage_stats_providers: Vec::new(),
-            show_total_spend_on_all_tab: true,
-            total_spend_presentation: TotalSpendPresentation::default(),
-            total_spend_period: TotalSpendPeriod::default(),
-            show_account_name: false,
-            show_edit_home_button: true,
-            show_popup_action_bar: true,
-            popup_pinned: false,
-            popup_floating: false,
-            popup_height_dip: None,
-            popup_position: None,
-            instances: Settings::default().instances,
-            popup_tab_mode: PopupTabMode::default(),
-            grouped_tab_selection: Default::default(),
-            popup_two_columns: false,
-            popup_home_order: Vec::new(),
-            popup_home_right_column: None,
-            popup_home_card_layouts: Default::default(),
-            use_colored_provider_icons: true,
-            replace_chatgpt_logo_with_codex: false,
-            update_version: None,
-        }
+        Self::new(Settings::default())
     }
 }
 
 impl UiState {
-    pub(super) fn compact_bar_visible(&self) -> bool {
-        self.popup_floating || self.show_popup_action_bar
-    }
-    /// Shared seed for both the render tree and the background bridge. The
-    /// bridge publishes a complete snapshot, so it must restore layout and
-    /// effective usage eligibility before either path can produce a first frame.
-    pub(super) fn popup_layout_from_settings(settings: &Settings) -> Self {
+    pub(crate) fn new(settings: Settings) -> Self {
         Self {
             usage_stats_providers: settings.usage_stats_providers(),
-            instances: settings.instances.clone(),
-            popup_tab_mode: settings.popup_tab_mode,
-            grouped_tab_selection: settings.grouped_tab_selection.clone(),
-            popup_two_columns: settings.popup_two_columns,
-            show_popup_action_bar: settings.show_popup_action_bar,
-            popup_floating: settings.popup_floating,
-            popup_home_order: settings.popup_home_order.clone(),
-            popup_home_right_column: settings.popup_home_right_column.clone(),
-            popup_home_card_layouts: settings.popup_home_card_layouts.clone(),
-            ..Self::default()
+            settings: Arc::new(settings),
+            last_activation: crate::i18n::tr("never").into(),
+            provider_errors: HashMap::new(),
+            usage_errors: HashMap::new(),
+            error: None,
+            usage_revision: 0,
+            active_requests: Vec::new(),
+            refreshing: false,
+            update_version: None,
         }
     }
 
-    /// Copies every settings-owned popup field. Runtime state (errors,
-    /// requests, revisions, update banner) is left untouched.
-    pub(super) fn apply_settings(&mut self, settings: &Settings) {
-        self.theme = settings.theme;
-        self.accent_color = settings.accent_color;
-        self.font_family = settings.font_family.clone();
-        self.animations_enabled = settings.animations_enabled;
-        self.popup_theme = settings.popup_theme;
-        self.popup_vscode_theme = settings.popup_vscode_theme.clone();
-        self.popup_vscode_contrast = settings.popup_vscode_contrast;
-        self.popup_vscode_tint = settings.popup_vscode_tint;
-        self.popup_borders = settings.popup_borders;
-        self.popup_window_border = settings.popup_window_border;
-        self.time_format = settings.time_format;
-        self.show_used_percentage = settings.show_used_percentage;
-        self.show_usage_values = settings.show_usage_values;
-        self.show_usage_pace = settings.show_usage_pace;
-        self.popup_visibility = settings.popup_visibility.clone();
-        self.usage_stats_enabled = settings.usage_stats_enabled;
+    /// The state both the popup's first frame and the bridge start from.
+    pub(crate) fn initial(state: &AppState) -> Self {
+        let mut ui = Self::new(state.settings.clone());
+        ui.provider_errors = state
+            .startup_provider_errors
+            .iter()
+            .map(|(provider, error)| (*provider, Self::error_for_ui(error)))
+            .collect();
+        ui.last_activation =
+            format_last_activation(&RateLimits::default(), state.last_activation_at);
+        ui.update_version = state
+            .updates
+            .available_update()
+            .map(|update| update.version);
+        ui
+    }
+
+    /// Replaces the snapshot with a committed one.
+    pub(crate) fn set_settings(&mut self, settings: Settings) {
         self.usage_stats_providers = settings.usage_stats_providers();
-        self.show_total_spend_on_all_tab = settings.show_total_spend_on_all_tab;
-        self.total_spend_presentation = settings.total_spend_presentation;
-        self.total_spend_period = settings.total_spend_period;
-        self.show_account_name = settings.show_account_name;
-        self.show_edit_home_button = settings.show_edit_home_button;
-        self.show_popup_action_bar = settings.show_popup_action_bar;
-        self.popup_pinned = settings.popup_pinned;
-        self.popup_floating = settings.popup_floating;
-        self.popup_height_dip = settings.popup_height_dip;
-        self.popup_position = settings.popup_position.clone();
-        self.instances = settings.instances.clone();
-        self.popup_tab_mode = settings.popup_tab_mode;
-        self.grouped_tab_selection = settings.grouped_tab_selection.clone();
-        self.popup_two_columns = settings.popup_two_columns;
-        self.popup_home_order = settings.popup_home_order.clone();
-        self.popup_home_right_column = settings.popup_home_right_column.clone();
-        self.popup_home_card_layouts = settings.popup_home_card_layouts.clone();
-        self.use_colored_provider_icons = settings.use_colored_provider_icons;
-        self.replace_chatgpt_logo_with_codex = settings.replace_chatgpt_logo_with_codex;
+        self.settings = Arc::new(settings);
+    }
+
+    /// Applies an edit to the snapshot at once and queues the same edit for
+    /// the settings file.
+    pub(crate) fn edit_settings(&mut self, edit: impl Fn(&mut Settings) + Send + 'static) {
+        crate::settings::store::edit_snapshot(Arc::make_mut(&mut self.settings), edit);
+        self.usage_stats_providers = self.settings.usage_stats_providers();
+    }
+
+    pub(super) fn compact_bar_visible(&self) -> bool {
+        self.settings.popup_floating || self.settings.show_popup_action_bar
     }
 
     pub(super) fn home_card_layout(&self, provider: ProviderId) -> HomeCardLayout {
-        self.popup_home_card_layouts
+        self.settings
+            .popup_home_card_layouts
             .get(provider.id())
             .copied()
             .unwrap_or_default()
     }
 
-    pub(super) fn instance(&self, provider: ProviderId) -> Option<&ProviderInstance> {
-        self.instances
-            .iter()
-            .find(|instance| instance.id == provider.id())
-    }
-
-    /// Enabled instances in display order.
-    pub(super) fn enabled_providers(&self) -> Vec<ProviderId> {
-        self.instances
-            .iter()
-            .filter(|instance| instance.enabled)
-            .map(ProviderInstance::provider_id)
-            .collect()
-    }
-
-    pub(super) fn provider_enabled(&self, provider: ProviderId) -> bool {
-        self.instance(provider)
-            .is_some_and(|instance| instance.enabled)
-    }
-
     /// Enabled instances of one driver, in display order.
     pub(super) fn enabled_instances_of(&self, driver: ProviderKind) -> Vec<ProviderId> {
-        self.instances
+        self.settings
+            .instances
             .iter()
             .filter(|instance| instance.enabled && instance.driver == driver)
-            .map(ProviderInstance::provider_id)
+            .map(|instance| instance.provider_id())
             .collect()
     }
 
     /// Credential revision of the running worker's instance.
-    pub(super) fn credentials_revision(&self, provider: ProviderId) -> u64 {
-        self.instance(provider)
+    pub(crate) fn credentials_revision(&self, provider: ProviderId) -> u64 {
+        self.settings
+            .instance(provider)
             .map_or(0, |instance| instance.credentials_revision)
     }
 
     /// Turn transport/status chains into short product-facing messages. The
     /// original diagnostic is retained by the logging paths, never in this UI.
-    pub(super) fn error_for_ui(error: &str) -> String {
+    pub(crate) fn error_for_ui(error: &str) -> String {
         let lower = error.to_ascii_lowercase();
         let tokens = lower
             .split(|c: char| !c.is_ascii_alphanumeric())
@@ -730,7 +249,7 @@ impl UiState {
     /// Shows an app-level error in the popup and records it once per distinct
     /// message. Provider polling uses [`set_provider_error`] instead so one
     /// provider cannot overwrite another provider's diagnostic state.
-    pub(super) fn set_popup_error(&mut self, error: impl Into<String>) {
+    pub(crate) fn set_popup_error(&mut self, error: impl Into<String>) {
         let raw_error = error.into();
         let display_error = Self::error_for_ui(&raw_error);
         if self.error.as_deref() != Some(display_error.as_str()) {
@@ -742,7 +261,7 @@ impl UiState {
     /// Retain the latest provider error until that provider produces a
     /// successful limits response. A changing message updates the detail while
     /// keeping the red marker continuously visible.
-    pub(super) fn set_provider_error(&mut self, provider: ProviderId, error: impl Into<String>) {
+    pub(crate) fn set_provider_error(&mut self, provider: ProviderId, error: impl Into<String>) {
         let raw_error = error.into();
         let display_error = Self::error_for_ui(&raw_error);
         if self.provider_errors.get(&provider) != Some(&display_error) {
@@ -754,7 +273,7 @@ impl UiState {
         self.provider_errors.insert(provider, display_error);
     }
 
-    pub(super) fn clear_provider_error(&mut self, provider: ProviderId) {
+    pub(crate) fn clear_provider_error(&mut self, provider: ProviderId) {
         self.provider_errors.remove(&provider);
     }
 
@@ -774,7 +293,7 @@ impl UiState {
         self.provider_errors.contains_key(&provider) || self.usage_errors.contains_key(&provider)
     }
 
-    pub(super) fn set_usage_error(&mut self, provider: ProviderId, error: impl Into<String>) {
+    pub(crate) fn set_usage_error(&mut self, provider: ProviderId, error: impl Into<String>) {
         let raw_error = error.into();
         let display_error = Self::error_for_ui(&raw_error);
         if self.usage_errors.get(&provider) != Some(&display_error) {
@@ -786,7 +305,7 @@ impl UiState {
         self.usage_errors.insert(provider, display_error);
     }
 
-    pub(super) fn clear_usage_error(&mut self, provider: ProviderId) {
+    pub(crate) fn clear_usage_error(&mut self, provider: ProviderId) {
         self.usage_errors.remove(&provider);
     }
 
@@ -798,17 +317,18 @@ impl UiState {
     pub(super) fn usage_overview_included(&self, provider: ProviderId) -> bool {
         self.usage_stats_provider_enabled(provider)
             && self
+                .settings
                 .instances
                 .iter()
                 .any(|instance| instance.provider_id() == provider && instance.in_usage_overview)
     }
 
-    pub(super) fn request_started(&mut self, provider: ProviderId, kind: RequestKind) {
+    pub(crate) fn request_started(&mut self, provider: ProviderId, kind: RequestKind) {
         self.active_requests.push((provider, kind));
         self.refreshing = true;
     }
 
-    pub(super) fn request_finished(&mut self, provider: ProviderId, kind: RequestKind) {
+    pub(crate) fn request_finished(&mut self, provider: ProviderId, kind: RequestKind) {
         if let Some(index) = self
             .active_requests
             .iter()
@@ -819,29 +339,9 @@ impl UiState {
         self.refreshing = !self.active_requests.is_empty();
     }
 
-    pub(super) fn clear_provider_requests(&mut self, provider: ProviderId) {
+    pub(crate) fn clear_provider_requests(&mut self, provider: ProviderId) {
         self.active_requests
             .retain(|(active_provider, _)| *active_provider != provider);
         self.refreshing = !self.active_requests.is_empty();
-    }
-}
-
-impl UiState {
-    /// Marks the shared rate-limit snapshot as changed so `AsyncSetState` does
-    /// not discard an otherwise identical UI state as a no-op.
-    pub(super) fn observe_limits_update(&mut self) {
-        self.limits_revision = self.limits_revision.wrapping_add(1);
-    }
-
-    pub(super) fn observe_usage_update(&mut self) {
-        self.usage_revision = self.usage_revision.wrapping_add(1);
-    }
-
-    pub(super) fn observe_forced_resets_update(&mut self) {
-        self.forced_resets_revision = self.forced_resets_revision.wrapping_add(1);
-    }
-
-    pub(super) fn observe_provider_status_update(&mut self) {
-        self.provider_status_revision = self.provider_status_revision.wrapping_add(1);
     }
 }

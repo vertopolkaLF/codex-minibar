@@ -41,13 +41,15 @@ pub fn start(settings: &Settings, bridge: Sender<Settings>) {
     });
 }
 
-/// Process-wide values the windows read while painting. A window also runs
-/// this on its own unsaved snapshot, so an edit shows before it commits.
+/// Process-wide values the windows read while painting or dismissing. A
+/// window also runs this on its own unsaved snapshot, so an edit shows before
+/// it commits.
 pub fn apply_presentation(settings: &Settings) {
     settings.language.apply();
     crate::theme::set_animations_enabled(settings.animations_enabled);
     settings.time_format.apply();
     crate::provider_registry::apply_logo_settings(settings.replace_chatgpt_logo_with_codex);
+    crate::popup::set_user_pinned(settings.popup_pinned);
 }
 
 /// Everything settings drive outside the windows' own snapshots.
@@ -66,7 +68,6 @@ pub fn apply(settings: &Settings) {
         &settings.game_mode_games,
         &settings.game_mode_ignored,
     );
-    crate::popup::set_user_pinned(settings.popup_pinned);
     crate::popup::apply_popup_appearance(
         settings.bottom_bar_size,
         settings.popup_corner_radius,

@@ -707,7 +707,7 @@ impl PopupRoot {
             .iter()
             .fold(0_u64, |sum, (_, value)| sum.saturating_add(*value));
         let bar = self.share_bar("usage-share", &entries, shown_total);
-        let colored = self.ui.use_colored_provider_icons;
+        let colored = self.ui.settings.use_colored_provider_icons;
         // Tiles carry 6px of hover padding; the grid bleeds it back out so
         // the text stays aligned with the headline. Tiles sit on animated
         // cells so a new ranking slides each provider to its new place.
@@ -1221,7 +1221,7 @@ impl PopupRoot {
         let palette = self.palette.clone();
         let breakdown = self.overview_breakdown;
         let control = self.usage_breakdown_control(window, cx);
-        let colored = self.ui.use_colored_provider_icons;
+        let colored = self.ui.settings.use_colored_provider_icons;
         let table = match breakdown {
             BreakdownMode::Model => breakdown_table(
                 crate::i18n::tr("model"),
