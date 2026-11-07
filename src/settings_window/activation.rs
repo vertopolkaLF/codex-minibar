@@ -5,9 +5,9 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 
-use super::kit::{self, Button, Kit, Row, eid};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
+use crate::gui::kit::{self, Button, Kit, Row, eid};
 use crate::settings::{
     AutoActivationPause, AutoResetLead, ProviderId, ProviderInstance, ScheduledActivation,
     TimeFormat,
@@ -605,9 +605,8 @@ impl SettingsWindow {
                     .items_center()
                     .child(checkbox),
             );
-            let key = crate::popup_window::ui::fx::key(("pause-times", rule.id.as_str()));
-            let shown =
-                k.fx.toggle(key, !all_day, crate::popup_window::ui::fx::NORMAL);
+            let key = crate::gui::fx::key(("pause-times", rule.id.as_str()));
+            let shown = k.fx.toggle(key, !all_day, crate::gui::fx::NORMAL);
             for picker in pickers {
                 let mut slot = div().flex_none().child(picker);
                 if shown < 0.999 {

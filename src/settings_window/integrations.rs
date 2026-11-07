@@ -3,8 +3,8 @@
 use futures::StreamExt;
 use gpui::{AnyElement, Context, IntoElement};
 
-use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
+use crate::gui::kit::{self, Button, Kit, Row};
 use crate::streamdeck::InstallPhase;
 
 fn install_description(phase: &InstallPhase) -> &'static str {

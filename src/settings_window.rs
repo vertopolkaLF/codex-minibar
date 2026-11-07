@@ -34,16 +34,13 @@ mod backdrop;
 mod command_palette;
 mod customize;
 mod general;
-pub(crate) mod input;
 mod integrations;
-pub(crate) mod kit;
 mod log;
 mod nav;
 mod notifications;
 mod onboarding;
 mod providers;
 mod taskbar;
-pub(crate) mod theme;
 mod tray;
 mod troubleshoot;
 mod vscode_themes;
@@ -218,12 +215,6 @@ pub fn publish_openrouter_snapshot(limits: &crate::limits::ProviderLimits) {
     if changed && SETTINGS_OPEN.load(Ordering::SeqCst) {
         post(Command::OpenRouter(snapshot));
     }
-}
-
-/// Register key bindings used by the Settings windows. Called once when the
-/// GPUI application starts.
-pub(crate) fn init(cx: &mut gpui::App) {
-    input::bind_keys(cx);
 }
 
 /// Execute a [`Command`] on the GPUI thread.

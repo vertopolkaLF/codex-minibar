@@ -6,10 +6,10 @@ use gpui::{
     px,
 };
 
-use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
-use crate::popup_window::ui::fx;
+use crate::gui::fx;
+use crate::gui::kit::{self, Button, Kit, Row};
 use crate::settings::{GameMode, Settings};
 use crate::worker::UsageAction;
 

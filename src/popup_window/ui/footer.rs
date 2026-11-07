@@ -9,11 +9,11 @@ use gpui::{
 };
 
 use super::{
-    components::{self, icon},
-    fx,
+    components,
     root::{PopupRoot, eid, view_key},
-    theme::{HslaExt, Palette},
+    theme::Palette,
 };
+use crate::gui::{color::HslaExt, fx, mark::icon};
 use crate::popup_window::{model, *};
 
 pub(super) const FLOATING_HEADER_HEIGHT: f32 = 32.0;
@@ -43,12 +43,12 @@ impl Render for TabDrag {
             .flex()
             .items_center()
             .justify_center()
-            .child(components::provider_mark(
+            .child(crate::gui::mark::provider_mark(
                 self.icon,
                 self.glyph,
                 self.color,
                 self.badge.as_ref(),
-                &self.palette,
+                self.palette.plate(),
             ))
     }
 }
@@ -143,10 +143,7 @@ impl PopupRoot {
                     .gap(px(8.0))
                     .text_size(px(12.0))
                     .text_color(self.palette.text_secondary)
-                    .child(crate::settings_window::kit::image(
-                        "color/app-icon-32.png",
-                        16.0,
-                    ))
+                    .child(crate::gui::mark::image("color/app-icon-32.png", 16.0))
                     .child("Codex Minibar"),
             )
             .child(
@@ -498,12 +495,12 @@ impl PopupRoot {
                     .border_color(palette.accent),
             );
         }
-        element = element.child(components::provider_mark(
+        element = element.child(crate::gui::mark::provider_mark(
             tab.icon,
             glyph,
             icon_color,
             tab.badge.as_ref(),
-            &palette,
+            palette.plate(),
         ));
         if tab.has_error {
             element = element.child(

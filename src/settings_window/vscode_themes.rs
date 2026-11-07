@@ -16,11 +16,11 @@ use gpui::{
 };
 
 use super::appearance::{ThemePicker, popup_mock};
-use super::input::{HasInputs, Inputs};
-use super::kit::{self, Button, ButtonSize, Handler, Kit, Row, eid};
-use super::theme::Fonts;
 use super::window::SettingsWindow;
-use crate::popup_window::ui::fx;
+use crate::gui::fx;
+use crate::gui::input::{HasInputs, Inputs};
+use crate::gui::kit::{self, Button, ButtonSize, Handler, Kit, Row, eid};
+use crate::gui::theme::Fonts;
 use crate::settings::{PopupTheme, Settings};
 use crate::vscode_themes::{self, ThemeSource, VsCodeTheme, open_vsx};
 
@@ -314,7 +314,7 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
             |this, text, event, _, cx| {
                 // Blur keeps the text; only Enter runs a search.
                 this.theme_browser_mut().query = text.clone();
-                if matches!(event, super::input::InputEvent::Submit) {
+                if matches!(event, crate::gui::input::InputEvent::Submit) {
                     this.search_open_vsx(text, cx);
                 }
             },
@@ -361,7 +361,7 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
                             .flex()
                             .items_start()
                             .gap(px(8.0))
-                            .child(div().pt(px(2.0)).child(kit::icon(
+                            .child(div().pt(px(2.0)).child(crate::gui::mark::icon(
                                 "warning-fill",
                                 14.0,
                                 k.theme.caution,
@@ -515,9 +515,10 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
             .items_center()
             .justify_center()
             .child(
-                kit::icon("caret-down-bold", 12.0, theme.text_secondary).with_transformation(
-                    Transformation::rotate(radians(std::f32::consts::PI * turn)),
-                ),
+                crate::gui::mark::icon("caret-down-bold", 12.0, theme.text_secondary)
+                    .with_transformation(Transformation::rotate(radians(
+                        std::f32::consts::PI * turn,
+                    ))),
             );
         let target = extension.clone();
         div()
@@ -554,7 +555,11 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
                                     .child(extension.display_name.clone()),
                             )
                             .when(extension.verified, |el| {
-                                el.child(kit::icon("seal-check-fill", 14.0, theme.accent_text))
+                                el.child(crate::gui::mark::icon(
+                                    "seal-check-fill",
+                                    14.0,
+                                    theme.accent_text,
+                                ))
                             }),
                     )
                     .child(
@@ -674,11 +679,11 @@ pub(super) trait ThemeBrowserUi: ThemeHost {
                 .flex()
                 .items_start()
                 .gap(px(8.0))
-                .child(
-                    div()
-                        .pt(px(1.0))
-                        .child(kit::icon("warning-fill", 14.0, k.theme.caution)),
-                )
+                .child(div().pt(px(1.0)).child(crate::gui::mark::icon(
+                    "warning-fill",
+                    14.0,
+                    k.theme.caution,
+                )))
                 .child(
                     div()
                         .flex_1()

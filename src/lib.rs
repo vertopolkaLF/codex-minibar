@@ -16,6 +16,7 @@ pub mod fake;
 pub mod format;
 pub mod game_mode;
 pub mod grok;
+mod gui;
 pub mod hotkey;
 pub mod i18n;
 pub mod instances;

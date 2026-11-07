@@ -10,11 +10,11 @@ use gpui::{
 
 use super::{
     components::{self, caption, card, nowrap},
-    fx,
     root::{PopupRoot, SnapshotSlot, eid},
-    theme::{HslaExt, Palette},
+    theme::Palette,
 };
 use crate::choice::Choice;
+use crate::gui::{color::HslaExt, fx};
 use crate::popup_window::{model::*, *};
 
 pub(super) const COLUMN_GAP: f32 = 20.0;
@@ -43,7 +43,7 @@ impl Render for WidgetDrag {
             .border_color(self.palette.accent.opacity(0.6))
             .shadow_md()
             .font_family(self.palette.font_family.clone())
-            .child(components::icon(
+            .child(crate::gui::mark::icon(
                 "fluent-drag",
                 14.0,
                 self.palette.chrome_icon,
@@ -604,7 +604,7 @@ impl PopupRoot {
             .on_click(cx.listener(|this, _: &ClickEvent, _, cx| {
                 this.navigate(PopupView::Usage, cx);
             }))
-            .child(components::icon(
+            .child(crate::gui::mark::icon(
                 "fluent-chart",
                 16.0,
                 palette.text_secondary.mix(palette.accent, title_hover),
@@ -743,12 +743,12 @@ impl PopupRoot {
                             .flex_row()
                             .items_center()
                             .gap(px(8.0))
-                            .child(components::provider_mark(
+                            .child(crate::gui::mark::provider_mark(
                                 crate::provider_registry::icon(provider.kind()),
                                 16.0,
                                 palette.provider_icon(provider.kind(), colored),
                                 provider.badge().as_ref(),
-                                &palette,
+                                palette.plate(),
                             ))
                             .child(nowrap(components::body_strong(
                                 provider.qualified_name(),
@@ -788,7 +788,7 @@ impl PopupRoot {
         let palette = self.palette.clone();
         // The total sits in the ring's 68 DIP hole; long amounts shrink
         // (text width scales linearly with size) instead of moving out.
-        let label_width = components::measure_text(
+        let label_width = crate::gui::measure_text(
             window.text_system(),
             palette.font_family.clone(),
             18.0,
@@ -833,12 +833,12 @@ impl PopupRoot {
                     .flex_row()
                     .items_center()
                     .gap(px(8.0))
-                    .child(components::provider_mark(
+                    .child(crate::gui::mark::provider_mark(
                         crate::provider_registry::icon(provider.kind()),
                         16.0,
                         palette.provider_icon(provider.kind(), colored),
                         provider.badge().as_ref(),
-                        &palette,
+                        palette.plate(),
                     ))
                     .child(
                         div()
@@ -859,7 +859,7 @@ impl PopupRoot {
         let mut segments = Vec::new();
         if empty > 0.0 {
             segments.push((
-                super::theme::rgb8((0x78, 0x78, 0x78)).opacity(empty),
+                crate::gui::color::rgb8((0x78, 0x78, 0x78)).opacity(empty),
                 -90.0,
                 270.0,
             ));

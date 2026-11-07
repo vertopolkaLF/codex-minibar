@@ -5,9 +5,9 @@ use gpui::{
     div, px, relative,
 };
 
-use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
+use crate::gui::kit::{self, Button, Kit, Row};
 use crate::settings::{ResetAnnouncementRefreshInterval, UsageRefreshInterval};
 
 pub(super) fn usage_refresh_labels() -> [&'static str; 7] {

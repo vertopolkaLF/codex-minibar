@@ -5,8 +5,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px,
 };
 
-use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
+use crate::gui::kit::{self, Button, Kit, Row};
 
 impl SettingsWindow {
     pub(super) fn log_page(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> Vec<AnyElement> {

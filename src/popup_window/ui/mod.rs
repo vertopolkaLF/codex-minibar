@@ -5,12 +5,10 @@
 //! through [`super::PopupCommand`].
 
 mod activity;
-pub(crate) mod assets;
 mod cards;
 pub(crate) mod components;
 pub(crate) mod controls;
 mod footer;
-pub(crate) mod fx;
 mod home;
 mod keys;
 #[cfg(test)]
@@ -83,11 +81,6 @@ pub(crate) struct ShowPlan {
     pub(crate) hwnd: windows_sys::Win32::Foundation::HWND,
     pub(crate) rect: win32::Rect,
     pub(crate) first_show: bool,
-}
-
-/// Whether popup motion runs: the app toggle and Windows "Animation effects".
-pub(crate) fn animations_enabled(ui: &UiState) -> bool {
-    ui.settings.animations_enabled && crate::popup::system_animations_enabled()
 }
 
 /// Which corner of the work area the popup stands in.
@@ -235,11 +228,11 @@ fn run(
     mut commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>,
 ) {
     Application::new()
-        .with_assets(assets::PopupAssets)
+        .with_assets(crate::gui::assets::Assets)
         .run(move |cx| {
-            theme::register_bundled_fonts(cx);
-            crate::settings_window::init(cx);
-            let default_font = theme::default_font_family(cx);
+            crate::gui::theme::register_bundled_fonts(cx);
+            crate::gui::input::bind_keys(cx);
+            let default_font = crate::gui::theme::default_font_family(cx);
             let settings_state = Arc::clone(&state);
             // The tray starts hidden. Do not allocate large swap-chain/MSAA
             // surfaces before the user has even opened the popup.
@@ -280,7 +273,7 @@ fn run(
                 #[cfg(windows)]
                 {
                     let hwnd = window
-                        .update(cx, |_, window, _| win32::hwnd_from_window(window))
+                        .update(cx, |_, window, _| crate::gui::hwnd_from_window(window))
                         .ok()
                         .flatten();
                     if let Some(hwnd) = hwnd {
@@ -365,7 +358,7 @@ fn handle_command(
                 if plan.first_show {
                     win32::show(plan.hwnd);
                 }
-                if !root_animations(window, cx) {
+                if !crate::theme::animations_enabled() {
                     win32::activate(plan.hwnd);
                 }
             }
@@ -531,12 +524,6 @@ async fn prewarm(window: gpui::WindowHandle<PopupRoot>, cx: &mut gpui::AsyncApp)
         }
     }
     let _ = window.update(cx, |root, _, cx| root.end_prewarm(cx));
-}
-
-fn root_animations(window: &gpui::WindowHandle<PopupRoot>, cx: &mut gpui::AsyncApp) -> bool {
-    window
-        .update(cx, |root, _, _| animations_enabled(&root.ui))
-        .unwrap_or(false)
 }
 
 #[cfg(all(test, windows))]

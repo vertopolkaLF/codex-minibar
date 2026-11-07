@@ -7,9 +7,9 @@ use gpui::{
     SharedString, StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
 };
 
-use super::kit::{self, Button, Kit, Row, eid};
 use super::window::SettingsWindow;
-use crate::popup_window::ui::theme::rgb8;
+use crate::gui::color::rgb8;
+use crate::gui::kit::{self, Button, Kit, Row, eid};
 use crate::provider_registry::ProviderKind;
 use crate::settings::{
     Choice, LimitValue, ProviderId, TimeFormat, TrayColorMode, TrayFixedColor, TrayIndicator,
@@ -520,7 +520,10 @@ impl SettingsWindow {
             .icon(preview)
             .description(k, widget_short_summary(widget))
             .trailing(menu)
-            .trailing(kit::icon("caret-right", 12.0, k.theme.text_secondary).into_any_element())
+            .trailing(
+                crate::gui::mark::icon("caret-right", 12.0, k.theme.text_secondary)
+                    .into_any_element(),
+            )
             .on_click(open)
             .render(k)
     }
@@ -965,7 +968,7 @@ impl SettingsWindow {
         let (glyph, tint, title) = match indicator.provider() {
             Some(provider) => (
                 crate::provider_registry::icon(provider.kind()),
-                theme.brand(provider.kind()),
+                crate::gui::color::brand(provider.kind(), theme.dark),
                 provider.qualified_name().to_string(),
             ),
             None => (
@@ -979,7 +982,7 @@ impl SettingsWindow {
             .child(kit::glyph_plate(
                 36.0,
                 theme.subtle_hover,
-                kit::icon(glyph, 18.0, tint).into_any_element(),
+                crate::gui::mark::icon(glyph, 18.0, tint).into_any_element(),
             ))
             .when(indicator.color_mode == TrayColorMode::Fixed, |el| {
                 let color = indicator.fixed_color;
@@ -1256,7 +1259,7 @@ impl SettingsWindow {
                         } else {
                             rgb8((255, 255, 255))
                         };
-                        el.child(kit::icon("check-bold", 14.0, mark))
+                        el.child(crate::gui::mark::icon("check-bold", 14.0, mark))
                     })
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| set(this, color, cx))),

@@ -1,34 +1,41 @@
-//! Shared animation and accent tokens for the GPUI popup and Settings window.
+//! Animation preference and accent shared by every surface: the GPUI
+//! windows, the taskbar widget and the tray glyphs.
 
-use std::{
-    sync::atomic::{AtomicBool, AtomicU32, Ordering},
-    time::Duration,
-};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 static APP_ANIMATIONS_ENABLED: AtomicBool = AtomicBool::new(true);
 static CURRENT_ACCENT_RGB: AtomicU32 = AtomicU32::new(0x0078D4);
-
-/// Fluent `ControlFasterAnimationDuration` — pointer-over / micro-interactions.
-pub const CONTROL_FASTER_ANIMATION: Duration = Duration::from_millis(83);
-/// Fluent `ControlFastAnimationDuration`.
-pub const CONTROL_FAST_ANIMATION: Duration = Duration::from_millis(167);
-/// Fluent `ControlNormalAnimationDuration`.
-pub const CONTROL_NORMAL_ANIMATION: Duration = Duration::from_millis(250);
 
 pub fn set_animations_enabled(enabled: bool) {
     APP_ANIMATIONS_ENABLED.store(enabled, Ordering::Relaxed);
 }
 
+/// Whether motion runs: the app's setting and the Windows "Animation
+/// effects" accessibility preference.
 pub fn animations_enabled() -> bool {
-    APP_ANIMATIONS_ENABLED.load(Ordering::Relaxed) && crate::popup::system_animations_enabled()
+    APP_ANIMATIONS_ENABLED.load(Ordering::Relaxed) && system_animations_enabled()
 }
 
-pub fn duration(duration: Duration) -> Duration {
-    if animations_enabled() {
-        duration
-    } else {
-        Duration::ZERO
-    }
+#[cfg(windows)]
+fn system_animations_enabled() -> bool {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
+    };
+    let mut enabled = 1i32;
+    let ok = unsafe {
+        SystemParametersInfoW(
+            SPI_GETCLIENTAREAANIMATION,
+            0,
+            &mut enabled as *mut i32 as *mut _,
+            0,
+        )
+    };
+    ok == 0 || enabled != 0
+}
+
+#[cfg(not(windows))]
+fn system_animations_enabled() -> bool {
+    true
 }
 
 pub fn current_accent_rgb() -> [u8; 3] {

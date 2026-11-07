@@ -7,14 +7,14 @@ use gpui::{
 
 use std::path::PathBuf;
 
-use super::super::input::InputEvent;
-use super::super::kit::{self, Button, Kit, MenuItem, Row};
 use super::super::window::SettingsWindow;
 use super::*;
 use crate::choice::Choice;
 use crate::drivers::FolderField;
+use crate::gui::fx;
+use crate::gui::input::InputEvent;
+use crate::gui::kit::{self, Button, Kit, MenuItem, Row};
 use crate::instances::PathField;
-use crate::popup_window::ui::fx;
 use crate::settings::{BadgeColor, LimitRefreshInterval, TimeFormat};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -150,7 +150,7 @@ impl SettingsWindow {
                 .py(px(40.0))
                 .rounded(px(kit::CARD_RADIUS))
                 .bg(k.theme.card)
-                .child(kit::icon(
+                .child(crate::gui::mark::icon(
                     "plugs-connected-fill",
                     36.0,
                     k.theme.text_tertiary,
@@ -253,7 +253,7 @@ impl SettingsWindow {
             status_row = status_row.child(kit::chip(k, crate::i18n::tr("limits-only")));
         }
         let color = if instance.enabled {
-            theme.brand(instance.driver)
+            crate::gui::color::brand(instance.driver, theme.dark)
         } else {
             theme.glyph()
         };
@@ -296,12 +296,12 @@ impl SettingsWindow {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(kit::provider_mark(
-                        k,
+                    .child(crate::gui::mark::provider_mark(
                         crate::provider_registry::icon(instance.driver),
                         28.0,
                         color,
                         badge.as_ref(),
+                        k.theme.plate(),
                     )),
             )
             .child(

@@ -1,4 +1,5 @@
-//! Fluent color tokens for the GPUI Settings and onboarding windows.
+//! Fluent color tokens of the component kit, which the Settings and
+//! onboarding windows paint with, and the font families every window uses.
 //!
 //! The layering follows Windows 11 (base, content plane, cards, controls) but
 //! surfaces are separated by fill alone: strokes are reserved for dividers. Everything resolves from the live theme and accent on every
@@ -6,15 +7,58 @@
 
 use gpui::{Hsla, SharedString, WindowAppearance};
 
-use crate::popup_window::ui::theme::{HslaExt, rgb8, rgba8};
+use super::color::{HslaExt, ink, rgb8, rgba8};
+use super::mark::Plate;
 use crate::settings::{AccentColor, AppTheme};
 
-fn ink(dark: bool, alpha: u8) -> Hsla {
-    if dark {
-        rgba8(255, 255, 255, alpha)
-    } else {
-        rgba8(0, 0, 0, alpha)
+/// Family name of the bundled Geist faces used by the Vercel popup theme.
+pub(crate) const GEIST_FAMILY: &str = "Geist";
+
+/// Registers the bundled fonts with GPUI's text system. Call once at startup,
+/// before any window resolves its font family.
+pub(crate) fn register_bundled_fonts(cx: &gpui::App) {
+    let fonts = vec![
+        std::borrow::Cow::Borrowed(
+            include_bytes!("../../assets/fonts/geist/Geist-Regular.ttf").as_slice(),
+        ),
+        std::borrow::Cow::Borrowed(
+            include_bytes!("../../assets/fonts/geist/Geist-Medium.ttf").as_slice(),
+        ),
+        std::borrow::Cow::Borrowed(
+            include_bytes!("../../assets/fonts/geist/Geist-SemiBold.ttf").as_slice(),
+        ),
+        std::borrow::Cow::Borrowed(
+            include_bytes!("../../assets/fonts/geist/Geist-Bold.ttf").as_slice(),
+        ),
+    ];
+    if let Err(error) = cx.text_system().add_fonts(fonts) {
+        eprintln!("could not register the bundled Geist font: {error:#}");
     }
+}
+
+/// The default UI family: Segoe UI Variable on Windows 11, Segoe UI on older
+/// systems that do not ship the variable font.
+pub(crate) fn default_font_family(cx: &gpui::App) -> SharedString {
+    let names = cx.text_system().all_font_names();
+    ["Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI"]
+        .into_iter()
+        .find(|candidate| names.iter().any(|name| name == candidate))
+        .unwrap_or("Segoe UI")
+        .into()
+}
+
+/// Font families installed on this PC, without GPUI's internal aliases and
+/// vertical (`@`) variants.
+pub(crate) fn installed_font_families(cx: &gpui::App) -> Vec<SharedString> {
+    let mut names = cx
+        .text_system()
+        .all_font_names()
+        .into_iter()
+        .filter(|name| !name.is_empty() && !name.starts_with(['.', '@']))
+        .collect::<Vec<_>>();
+    names.sort_by_key(|name| name.to_lowercase());
+    names.dedup();
+    names.into_iter().map(SharedString::from).collect()
 }
 
 #[derive(Clone, Debug)]
@@ -110,7 +154,7 @@ impl Fonts {
                 .map_or_else(|| SharedString::from(fallback), |name| (*name).into())
         };
         Self {
-            text: crate::popup_window::ui::theme::default_font_family(cx),
+            text: default_font_family(cx),
             mono: pick(&["Cascadia Mono", "Consolas"], "Consolas"),
             icons: pick(
                 &["Segoe Fluent Icons", "Segoe MDL2 Assets"],
@@ -127,15 +171,7 @@ impl Theme {
         appearance: WindowAppearance,
         fonts: Fonts,
     ) -> Self {
-        let system_dark = matches!(
-            appearance,
-            WindowAppearance::Dark | WindowAppearance::VibrantDark
-        );
-        let dark = match theme {
-            AppTheme::Auto => system_dark,
-            AppTheme::Light => false,
-            AppTheme::Dark => true,
-        };
+        let dark = super::color::resolve_dark(theme, super::color::appearance_dark(appearance));
         Self::new(dark, crate::theme::accent_ramp(accent), fonts)
     }
 
@@ -274,15 +310,6 @@ impl Theme {
         self
     }
 
-    /// Brand tint of a provider mark on this theme's surfaces.
-    pub(crate) fn brand(&self, provider: crate::provider_registry::ProviderKind) -> Hsla {
-        rgb8(
-            crate::provider_registry::descriptor(provider)
-                .icon_rgb
-                .pick(self.dark),
-        )
-    }
-
     /// Neutral icon tint used for monochrome marks.
     pub(crate) fn glyph(&self) -> Hsla {
         if self.dark {
@@ -292,12 +319,17 @@ impl Theme {
         }
     }
 
-    /// Badge plate colors: the badge color, or a neutral plate for `Auto`.
-    pub(crate) fn badge(&self, color: crate::settings::BadgeColor) -> (Hsla, Hsla) {
-        match color.rgb().zip(color.text_rgb()) {
-            Some((rgb, text)) => (rgb8(rgb), rgb8(text)),
-            None if self.dark => (rgb8((200, 200, 200)), rgb8((28, 28, 28))),
-            None => (rgb8((90, 90, 90)), rgb8((255, 255, 255))),
+    /// Badge plates on this theme's surfaces: a neutral plate for `Auto`.
+    pub(crate) fn plate(&self) -> Plate {
+        let (auto_fill, auto_text) = if self.dark {
+            (rgb8((200, 200, 200)), rgb8((28, 28, 28)))
+        } else {
+            (rgb8((90, 90, 90)), rgb8((255, 255, 255)))
+        };
+        Plate {
+            auto_fill,
+            auto_text,
+            outline: self.window_bg,
         }
     }
 }

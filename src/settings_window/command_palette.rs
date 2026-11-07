@@ -7,12 +7,12 @@
 use futures::StreamExt;
 use gpui::{AnyElement, Context, FontWeight, IntoElement, ParentElement, Styled, Window, div, px};
 
-use super::kit::{self, Button, Kit, Row};
 use super::tray::{IndicatorOwner, TrayDialog, dialog_section, preview_limits};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
 use crate::cmdpal::InstallPhase;
-use crate::popup_window::ui::theme::rgb8;
+use crate::gui::color::rgb8;
+use crate::gui::kit::{self, Button, Kit, Row};
 use crate::settings::{ProviderId, TaskbarResetDisplay, TaskbarWidget, TaskbarWidgetStyle};
 
 /// Width of the band editor.
@@ -264,12 +264,12 @@ impl SettingsWindow {
         let (title, subtitle) = crate::cmdpal::band_lines(widget, &view, &limits);
         let mark = view.icon.as_ref().map(|icon| {
             let [red, green, blue] = icon.tint;
-            kit::provider_mark(
-                k,
+            crate::gui::mark::provider_mark(
                 icon.name,
                 16.0,
                 rgb8((red, green, blue)),
                 view.provider.and_then(ProviderId::badge).as_ref(),
+                k.theme.plate(),
             )
         });
         let text = div()
@@ -352,7 +352,10 @@ impl SettingsWindow {
         Row::new(format!("dock-row-{id}"), band_title(index))
             .icon(self.dock_band(k, widget))
             .trailing(menu)
-            .trailing(kit::icon("caret-right", 12.0, k.theme.text_secondary).into_any_element())
+            .trailing(
+                crate::gui::mark::icon("caret-right", 12.0, k.theme.text_secondary)
+                    .into_any_element(),
+            )
             .on_click(open)
             .render(k)
     }

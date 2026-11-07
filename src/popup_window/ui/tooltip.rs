@@ -14,9 +14,9 @@ use gpui::{
 
 use super::{
     components::{self, caption, nowrap},
-    fx,
     root::PopupRoot,
 };
+use crate::gui::fx;
 
 pub(super) const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
 const EDGE_INSET: f32 = 6.0;
@@ -375,7 +375,7 @@ impl PopupRoot {
                             .flex_row()
                             .items_center()
                             .gap(px(8.0))
-                            .child(components::icon(icon, 14.0, color))
+                            .child(crate::gui::mark::icon(icon, 14.0, color))
                             .child(caption(label, palette.text_secondary)),
                         amount,
                         palette.accent_text,

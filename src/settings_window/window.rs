@@ -16,17 +16,20 @@ use gpui::{
 };
 
 use super::{
-    input::{HasInputs, InputEvent, Inputs, TextInput},
-    kit::{self, Button, Handler, Kit, eid, icon},
     nav::{NavMode, Page, Tab, first_provider_page, provider_nav_order, shows_badge},
     providers::{
         OpenRouterSettingsSnapshot, ProviderDialog, ProviderReadiness, provider_readiness,
     },
-    theme::{Fonts, Theme},
 };
 use crate::app::AppState;
 use crate::drivers::InstallStatus;
-use crate::popup_window::ui::fx;
+use crate::gui::fx;
+use crate::gui::{
+    input::{HasInputs, InputEvent, Inputs, TextInput},
+    kit::{self, Button, Handler, Kit, eid},
+    mark::icon,
+    theme::{Fonts, Theme},
+};
 use crate::provider_registry::ProviderKind;
 use crate::settings::{ProviderId, ProviderInstance, Settings, TrayWidget, store};
 use crate::updater::UpdatePhase;
@@ -193,7 +196,7 @@ impl SettingsWindow {
             settings,
             kit: Kit::default(),
             fonts,
-            font_families: crate::popup_window::ui::theme::installed_font_families(cx),
+            font_families: crate::gui::theme::installed_font_families(cx),
             font_picker: Default::default(),
             focus,
             mode: NavMode::Root,
@@ -586,7 +589,7 @@ impl SettingsWindow {
                     .gap(px(12.0))
                     .pl(px(16.0))
                     .flex_1()
-                    .child(kit::image("color/app-icon-32.png", 16.0))
+                    .child(crate::gui::mark::image("color/app-icon-32.png", 16.0))
                     .child(kit::text(
                         super::settings_window_title(),
                         12.0,
@@ -689,7 +692,7 @@ impl SettingsWindow {
             list = list.child(self.nav_item(
                 k,
                 format!("nav-{}", tab.tag()).into(),
-                Some(kit::image(tab.color_icon(), 18.0).into_any_element()),
+                Some(crate::gui::mark::image(tab.color_icon(), 18.0).into_any_element()),
                 tab.label().into(),
                 self.root_tab == tab,
                 false,
@@ -875,14 +878,18 @@ impl SettingsWindow {
                 .cursor_pointer()
                 .active(move |style| style.bg(pressed))
                 .on_click(move |_, _, _| open_url(url))
-                .child(kit::icon(glyph, 16.0, theme.accent_text))
+                .child(crate::gui::mark::icon(glyph, 16.0, theme.accent_text))
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .child(kit::text(label, 13.0, theme.text)),
                 )
-                .child(kit::icon("arrow-square-out", 12.0, theme.text_tertiary))
+                .child(crate::gui::mark::icon(
+                    "arrow-square-out",
+                    12.0,
+                    theme.text_tertiary,
+                ))
             };
         div()
             .flex()
@@ -905,7 +912,11 @@ impl SettingsWindow {
                             .flex()
                             .items_center()
                             .justify_center()
-                            .child(kit::icon("puzzle-piece-fill", 16.0, theme.accent_text)),
+                            .child(crate::gui::mark::icon(
+                                "puzzle-piece-fill",
+                                16.0,
+                                theme.accent_text,
+                            )),
                     )
                     .child(
                         div()
@@ -964,7 +975,7 @@ impl SettingsWindow {
         let theme = &k.theme;
         let provider = instance.provider_id();
         let color = if instance.enabled {
-            theme.brand(instance.driver)
+            crate::gui::color::brand(instance.driver, theme.dark)
         } else {
             theme.glyph()
         };
@@ -1001,13 +1012,16 @@ impl SettingsWindow {
         let item = self.nav_item(
             k,
             format!("nav-provider-{}", instance.id).into(),
-            Some(kit::provider_mark(
-                k,
-                crate::provider_registry::icon(instance.driver),
-                16.0,
-                color,
-                badge.as_ref(),
-            )),
+            Some(
+                crate::gui::mark::provider_mark(
+                    crate::provider_registry::icon(instance.driver),
+                    16.0,
+                    color,
+                    badge.as_ref(),
+                    k.theme.plate(),
+                )
+                .into_any_element(),
+            ),
             instance.display_name().into(),
             selected == Some(provider),
             !instance.enabled,
@@ -1052,7 +1066,7 @@ impl SettingsWindow {
         let is_selected = selected == Some(provider);
         let hover = theme.subtle_hover;
         let color = if is_selected {
-            theme.brand(instance.driver)
+            crate::gui::color::brand(instance.driver, theme.dark)
         } else {
             theme.glyph()
         };
@@ -1078,12 +1092,12 @@ impl SettingsWindow {
         .rounded(px(8.0))
         .cursor_pointer()
         .on_click(cx.listener(move |this, _, _, cx| this.select_provider(provider, cx)))
-        .child(kit::provider_mark(
-            k,
+        .child(crate::gui::mark::provider_mark(
             crate::provider_registry::icon(instance.driver),
             18.0,
             color,
             badge.as_ref(),
+            k.theme.plate(),
         ));
         let tile = kit::with_tooltip(k, tile, instance.display_name());
         let dragged = DraggedProvider {

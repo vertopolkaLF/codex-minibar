@@ -15,7 +15,7 @@ fn tab_tags_are_unique() {
 fn every_sidebar_icon_is_embedded() {
     for tab in Tab::ALL {
         assert!(
-            crate::popup_window::ui::assets::has_asset(tab.color_icon()),
+            crate::gui::assets::has_asset(tab.color_icon()),
             "{}",
             tab.color_icon()
         );

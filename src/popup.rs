@@ -213,29 +213,6 @@ pub fn hide() {
     crate::popup_window::send_command(crate::popup_window::PopupCommand::Hide);
 }
 
-/// Respect the Windows "Animation effects" accessibility preference.
-#[cfg(windows)]
-pub fn system_animations_enabled() -> bool {
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        SPI_GETCLIENTAREAANIMATION, SystemParametersInfoW,
-    };
-    let mut enabled = 1i32;
-    let ok = unsafe {
-        SystemParametersInfoW(
-            SPI_GETCLIENTAREAANIMATION,
-            0,
-            &mut enabled as *mut i32 as *mut _,
-            0,
-        )
-    };
-    ok == 0 || enabled != 0
-}
-
-#[cfg(not(windows))]
-pub fn system_animations_enabled() -> bool {
-    true
-}
-
 /// Dispatch messages for the thread that owns the tray icon.
 #[cfg(windows)]
 pub fn pump_messages() {

@@ -36,8 +36,11 @@ use crate::{
 use super::{
     PopupRoot,
     components::{self, caption, nowrap},
+    theme::Palette,
+};
+use crate::gui::{
+    color::{HslaExt, rgb8, rgba8, system_dark},
     fx::{self, Fx},
-    theme::{HslaExt, Palette, rgb8, rgba8},
 };
 
 const CARD_WIDTH: f32 = 360.0;
@@ -275,7 +278,7 @@ impl ToastHost {
         .detach();
         Self {
             popup,
-            default_font: super::theme::default_font_family(cx),
+            default_font: crate::gui::theme::default_font_family(cx),
             cards: Vec::new(),
             next_id: 0,
             dismissed_keys: Vec::new(),
@@ -291,7 +294,7 @@ impl ToastHost {
     }
 
     fn palette(&mut self, window: &Window, cx: &gpui::App) -> Palette {
-        let system_dark = super::root::system_dark(window);
+        let system_dark = system_dark(window);
         let Ok(root) = self.popup.read(cx) else {
             return self
                 .palette
@@ -640,13 +643,13 @@ async fn tick(this: gpui::WeakEntity<ToastHost>, cx: &mut AsyncApp) {
 }
 
 fn fallback_palette(dark: bool, font: &SharedString) -> Palette {
-    Palette::new(
-        crate::settings::PopupTheme::Fluent,
-        None,
+    let settings = crate::settings::Settings::default();
+    Palette::from_settings(
+        &settings,
         dark,
-        super::theme::accent_ramp(crate::settings::AccentColor::default()),
+        crate::theme::accent_ramp(settings.accent_color),
         crate::settings::PopupBackgroundMaterial::Solid,
-        font.clone(),
+        font,
     )
 }
 
@@ -963,7 +966,7 @@ impl ToastHost {
                 close.bg(palette.solid_background.opacity(0.85))
             })
             .hover(|style| style.bg(palette.subtle_fill))
-            .child(components::icon(
+            .child(crate::gui::mark::icon(
                 "fluent-dismiss",
                 12.0,
                 palette
@@ -1004,7 +1007,7 @@ impl ToastHost {
                 .child(
                     div()
                         .pt(px((LINE - GLYPH) / 2.0))
-                        .child(components::icon(glyph, GLYPH, tint)),
+                        .child(crate::gui::mark::icon(glyph, GLYPH, tint)),
                 )
                 .child(text),
         );
@@ -1174,12 +1177,12 @@ fn provider_heading(alert: &LimitAlert, prefs: DisplayPrefs, palette: &Palette) 
         .gap(px(4.0))
         .min_w_0()
         .child(
-            components::provider_mark(
+            crate::gui::mark::provider_mark(
                 crate::provider_registry::icon(driver),
                 16.0,
                 palette.provider_icon(driver, prefs.colored_icons),
                 badge.as_ref(),
-                palette,
+                palette.plate(),
             )
             .mr(px(if badge.is_some() { 10.0 } else { 4.0 })),
         )
@@ -1415,7 +1418,7 @@ fn open_host(popup: WindowHandle<PopupRoot>, cx: &mut AsyncApp) -> Option<Window
     #[cfg(windows)]
     {
         let hwnd = handle
-            .update(cx, |_, window, _| super::win32::hwnd_from_window(window))
+            .update(cx, |_, window, _| crate::gui::hwnd_from_window(window))
             .ok()
             .flatten();
         if let Some(hwnd) = hwnd {

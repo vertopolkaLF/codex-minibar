@@ -190,21 +190,21 @@ fn looks_like_openrouter_key(value: &str) -> bool {
 
 /// Badge color presets plus a custom color, in the accent picker's style.
 fn badge_color_swatches(
-    k: &super::kit::Kit,
+    k: &crate::gui::kit::Kit,
     id: impl Into<gpui::SharedString>,
     current: BadgeColor,
-    on_pick: super::kit::Handler<BadgeColor>,
+    on_pick: crate::gui::kit::Handler<BadgeColor>,
 ) -> gpui::AnyElement {
     let theme = &k.theme;
-    let plate = |color: BadgeColor| theme.badge(color);
+    let plate = |color: BadgeColor| theme.plate().colors(color);
     let on_select = on_pick.clone();
-    super::kit::ColorSwatches {
+    crate::gui::kit::ColorSwatches {
         id: id.into(),
         presets: BadgeColor::PRESETS
             .into_iter()
             .map(|color| {
                 let (fill, ink) = plate(color);
-                super::kit::Swatch {
+                crate::gui::kit::Swatch {
                     label: color.label().into(),
                     fill,
                     ink,

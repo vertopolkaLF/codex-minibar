@@ -15,11 +15,11 @@ use gpui::{
 use super::{
     components::{self, caption, card, nowrap},
     controls::QuietSegment,
-    fx,
     root::{PopupRoot, eid},
-    theme::{HslaExt, Palette},
+    theme::Palette,
     tooltip::{ActivityTip, TipContent},
 };
+use crate::gui::{color::HslaExt, fx};
 use crate::popup_window::*;
 use crate::provider_registry::UsageValue;
 use crate::usage::{DailyTokenUsage, TokenUsage, UsageStatistics};
@@ -142,10 +142,10 @@ impl Series {
     pub(crate) fn color(self, palette: &Palette) -> Hsla {
         match (self, palette.dark) {
             (Self::Cache, _) => palette.accent,
-            (Self::Input, true) => super::theme::rgb8((155, 166, 244)),
-            (Self::Input, false) => super::theme::rgb8((96, 89, 186)),
-            (Self::Output, true) => super::theme::rgb8((93, 211, 171)),
-            (Self::Output, false) => super::theme::rgb8((0, 126, 96)),
+            (Self::Input, true) => crate::gui::color::rgb8((155, 166, 244)),
+            (Self::Input, false) => crate::gui::color::rgb8((96, 89, 186)),
+            (Self::Output, true) => crate::gui::color::rgb8((93, 211, 171)),
+            (Self::Output, false) => crate::gui::color::rgb8((0, 126, 96)),
         }
     }
 }
@@ -284,7 +284,7 @@ pub(crate) fn model_color(model: &str, dark: bool) -> Hsla {
         _ => (chroma, 0.0, x),
     };
     let m = lightness - chroma / 2.0;
-    super::theme::rgb8((
+    crate::gui::color::rgb8((
         ((r + m) * 255.0).round() as u8,
         ((g + m) * 255.0).round() as u8,
         ((b + m) * 255.0).round() as u8,
@@ -976,7 +976,7 @@ impl PopupRoot {
         let split_width = split_labels
             .iter()
             .map(|label| {
-                components::measure_text(
+                crate::gui::measure_text(
                     window.text_system(),
                     palette.font_family.clone(),
                     12.0,
@@ -1245,7 +1245,7 @@ impl PopupRoot {
             .map(|(model, _)| short_model_name(model))
             .collect();
         let measure = |text: &str, weight: FontWeight| {
-            components::measure_text(
+            crate::gui::measure_text(
                 window.text_system(),
                 palette.font_family.clone(),
                 11.0,

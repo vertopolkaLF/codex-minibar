@@ -5,8 +5,8 @@ use gpui::{
     StatefulInteractiveElement, Styled, div, px, relative,
 };
 
-use super::kit::{self, Button, Kit, Row, eid};
 use super::window::{SettingsWindow, install_update, open_url};
+use crate::gui::kit::{self, Button, Kit, Row, eid};
 use crate::updater::{ISSUES_URL, RELEASES_URL, REPO_URL, UpdatePhase, current_version};
 
 fn update_status_label(phase: &UpdatePhase) -> String {
@@ -32,7 +32,7 @@ impl SettingsWindow {
             .items_center()
             .pt(px(8.0))
             .pb(px(24.0))
-            .child(kit::image("color/app-icon.png", 104.0).mb(px(14.0)))
+            .child(crate::gui::mark::image("color/app-icon.png", 104.0).mb(px(14.0)))
             .child(
                 div()
                     .text_size(px(28.0))
@@ -75,10 +75,14 @@ impl SettingsWindow {
         let notify = self.settings.notifications.update_available;
         let mut update_rows = Vec::new();
         let status_icon = match phase {
-            UpdatePhase::UpToDate => kit::icon("check-circle-fill", 18.0, theme.success),
-            UpdatePhase::Available(_) => kit::icon("download-simple-fill", 18.0, theme.accent_text),
-            UpdatePhase::Failed(_) => kit::icon("warning-fill", 18.0, theme.caution),
-            _ => kit::icon("arrow-clockwise-bold", 18.0, theme.glyph()),
+            UpdatePhase::UpToDate => {
+                crate::gui::mark::icon("check-circle-fill", 18.0, theme.success)
+            }
+            UpdatePhase::Available(_) => {
+                crate::gui::mark::icon("download-simple-fill", 18.0, theme.accent_text)
+            }
+            UpdatePhase::Failed(_) => crate::gui::mark::icon("warning-fill", 18.0, theme.caution),
+            _ => crate::gui::mark::icon("arrow-clockwise-bold", 18.0, theme.glyph()),
         };
         let status = Row::new("about-status", update_status_label(&phase)).icon(
             div()
@@ -192,7 +196,7 @@ impl SettingsWindow {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .child(kit::icon(glyph, 18.0, theme.accent_text)),
+                                .child(crate::gui::mark::icon(glyph, 18.0, theme.accent_text)),
                         )
                         .child(
                             div()
@@ -212,7 +216,11 @@ impl SettingsWindow {
                                         .line_height(px(16.0)),
                                 ),
                         )
-                        .child(kit::icon("arrow-square-out", 14.0, theme.text_tertiary)),
+                        .child(crate::gui::mark::icon(
+                            "arrow-square-out",
+                            14.0,
+                            theme.text_tertiary,
+                        )),
                 )
                 .cursor_pointer()
                 .on_click(move |_, _, _| open_url(url))

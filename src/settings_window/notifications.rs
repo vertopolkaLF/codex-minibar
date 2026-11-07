@@ -4,9 +4,9 @@
 
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, div, px};
 
-use super::kit::{self, Kit, Row, SliderRange};
 use super::window::SettingsWindow;
-use crate::popup_window::ui::fx;
+use crate::gui::fx;
+use crate::gui::kit::{self, Kit, Row, SliderRange};
 use crate::settings::Settings;
 
 impl SettingsWindow {

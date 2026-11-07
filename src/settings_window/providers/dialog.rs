@@ -8,10 +8,10 @@
 use gpui::prelude::FluentBuilder;
 use gpui::{AnyElement, Context, IntoElement, ParentElement, Styled, Window, div, px, relative};
 
-use super::super::kit::{self, Button, Kit};
 use super::super::window::{SettingsWindow, open_url};
 use super::*;
 use crate::claude::ProfileCredentialMethod;
+use crate::gui::kit::{self, Button, Kit};
 use crate::settings::BadgeColor;
 
 const DIALOG_WIDTH: f32 = 460.0;
@@ -183,10 +183,10 @@ fn driver_card(
         driver.display_name(),
     )
     .leading(
-        kit::icon(
+        crate::gui::mark::icon(
             crate::provider_registry::icon(driver),
             20.0,
-            theme.brand(driver),
+            crate::gui::color::brand(driver, theme.dark),
         )
         .into_any_element(),
     )

@@ -2,8 +2,8 @@
 
 use gpui::{AnyElement, Context, SharedString};
 
-use super::kit::{self, Button, Kit};
 use super::window::SettingsWindow;
+use crate::gui::kit::{self, Button, Kit};
 
 impl SettingsWindow {
     pub(super) fn troubleshoot_overlay(

@@ -415,8 +415,8 @@ fn icon_file(icon: &model::Icon) -> Option<String> {
 /// Straight-alpha RGBA PNG of a monochrome mark in `tint`.
 fn rasterize_icon(name: &str, pixels: u32, tint: model::Rgb) -> Option<Vec<u8>> {
     use resvg::{tiny_skia, usvg};
-    let source = crate::popup_window::ui::assets::svg_source(name)?;
-    let svg = crate::popup_window::ui::assets::normalize_svg(source);
+    let source = crate::gui::assets::svg_source(name)?;
+    let svg = crate::gui::assets::normalize_svg(source);
     let tree = usvg::Tree::from_str(&svg, &usvg::Options::default()).ok()?;
     let size = tree.size();
     let scale = pixels as f32 / size.width().max(size.height());

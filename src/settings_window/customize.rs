@@ -5,9 +5,9 @@ use gpui::{
     AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div, px,
 };
 
-use super::kit::{self, Button, Kit, Row};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
+use crate::gui::kit::{self, Button, Kit, Row};
 use crate::settings::{PopupTabMode, ProviderInstance, Settings, TotalSpendPresentation};
 
 fn bool_row(

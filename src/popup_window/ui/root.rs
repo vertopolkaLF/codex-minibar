@@ -17,9 +17,12 @@ use gpui::{
 
 use super::{
     components::{self, Severity},
-    fx::{self, Fx, Spring},
     theme::{self, Palette},
     tooltip::{TipContent, TipRequest},
+};
+use crate::gui::{
+    color::{rgba8, system_dark},
+    fx::{self, Fx, Spring},
 };
 use crate::popup_window::{
     model::{self, *},
@@ -64,7 +67,7 @@ fn profile_grid_height(count: usize) -> f32 {
     if rows == 0 {
         return 0.0;
     }
-    rows as f32 * super::controls::SEGMENT_HEIGHT
+    rows as f32 * crate::gui::segmented::SEGMENT_HEIGHT
         + rows.saturating_sub(1) as f32 * PROFILE_ROW_GAP
         + PROFILE_GRID_PADDING
 }
@@ -319,8 +322,8 @@ pub(crate) struct PopupRoot {
     /// OpenRouter key administration on the OpenRouter tab.
     pub(super) keys: super::keys::KeyAdmin,
     /// Settings-window controls (dropdowns) reused by popup forms.
-    pub(super) kit: crate::settings_window::kit::Kit,
-    kit_fonts: crate::settings_window::theme::Fonts,
+    pub(super) kit: crate::gui::kit::Kit,
+    kit_fonts: crate::gui::theme::Fonts,
     pub(super) tab_scroll: f32,
     pub(super) snapshots: HashMap<SnapshotSlot, SnapshotCache>,
     pub(super) usage_filtered: Option<super::usage::UsageFilterCache>,
@@ -365,31 +368,14 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) -> Self {
         let ui = UiState::initial(&state);
-        let accent = theme::accent_ramp(ui.settings.accent_color);
-        let (popup_theme, vscode) = theme::popup_design(
-            ui.settings.popup_theme,
-            ui.settings.popup_vscode_theme.as_deref(),
-        );
-        let dark = theme::palette_dark(
-            vscode.as_deref(),
-            theme::resolve_dark(ui.settings.theme, system_dark(window)),
-        );
-        let palette = Palette::new(
-            popup_theme,
-            vscode,
-            dark,
+        let accent = crate::theme::accent_ramp(ui.settings.accent_color);
+        let palette = Palette::from_settings(
+            &ui.settings,
+            system_dark(window),
             accent,
             crate::popup::background_material(),
-            theme::popup_font_family(
-                popup_theme,
-                ui.settings.font_family.as_deref(),
-                &default_font,
-            ),
-        )
-        .with_contrast(ui.settings.popup_vscode_contrast)
-        .with_tint(ui.settings.popup_vscode_tint)
-        .with_borders(ui.settings.popup_borders)
-        .with_window_border(ui.settings.popup_window_border);
+            &default_font,
+        );
         let appearance = cx.observe_window_appearance(window, |this, window, cx| {
             this.refresh_palette(window);
             cx.notify();
@@ -442,8 +428,8 @@ impl PopupRoot {
             reset_busy: HashSet::new(),
             reset_status: HashMap::new(),
             keys: Default::default(),
-            kit: crate::settings_window::kit::Kit::with_caret("fluent-chevron-down"),
-            kit_fonts: crate::settings_window::theme::Fonts::resolve(cx),
+            kit: crate::gui::kit::Kit::with_caret("fluent-chevron-down"),
+            kit_fonts: crate::gui::theme::Fonts::resolve(cx),
             tab_scroll: 0.0,
             snapshots: HashMap::new(),
             usage_filtered: None,
@@ -502,7 +488,7 @@ impl PopupRoot {
         self.provider_statuses = Rc::new(self.state.current_provider_statuses());
         self.ui = Rc::new(ui);
         if accent_changed {
-            self.accent = theme::accent_ramp(self.ui.settings.accent_color);
+            self.accent = crate::theme::accent_ramp(self.ui.settings.accent_color);
         }
         self.refresh_palette(window);
         if self.ui.refreshing && self.refresh_started.is_none() {
@@ -519,80 +505,33 @@ impl PopupRoot {
     pub(super) fn refresh_palette(&mut self, window: &Window) {
         self.preview_generation = theme::preview_generation();
         // Looked up on every refresh: reinstalling a theme replaces its entry.
-        let (popup_theme, vscode) = theme::popup_design(
-            self.ui.settings.popup_theme,
-            self.ui.settings.popup_vscode_theme.as_deref(),
-        );
-        let dark = theme::palette_dark(
-            vscode.as_deref(),
-            theme::resolve_dark(self.ui.settings.theme, system_dark(window)),
-        );
-        let material = crate::popup::background_material();
-        let font = theme::popup_font_family(
-            popup_theme,
-            self.ui.settings.font_family.as_deref(),
+        let palette = Palette::from_settings(
+            &self.ui.settings,
+            system_dark(window),
+            self.accent,
+            crate::popup::background_material(),
             &self.default_font,
         );
-        let same_vscode = match (&self.palette.vscode, &vscode) {
-            (Some(current), Some(next)) => Arc::ptr_eq(current, next),
-            (None, None) => true,
-            _ => false,
-        };
-        if self.palette.theme != popup_theme
-            || !same_vscode
-            || self.palette.dark != dark
-            || self.palette.font_family != font
-            || self.palette.material != material
-            || self.palette.borders != self.ui.settings.popup_borders
-            || self.palette.window_outline != self.ui.settings.popup_window_border
-            || self.palette.contrast != self.ui.settings.popup_vscode_contrast
-            || self.palette.tint != self.ui.settings.popup_vscode_tint
-            || (vscode.is_none()
-                && self.palette.accent != Palette::accent_for(popup_theme, dark, self.accent))
+        #[cfg(windows)]
+        if (self.palette.material != palette.material
+            || self.palette.backdrop_luminosity() != palette.backdrop_luminosity())
+            && let Some(backdrop) = &mut self.host.backdrop
         {
-            let palette = Palette::new(popup_theme, vscode, dark, self.accent, material, font)
-                .with_contrast(self.ui.settings.popup_vscode_contrast)
-                .with_tint(self.ui.settings.popup_vscode_tint)
-                .with_borders(self.ui.settings.popup_borders)
-                .with_window_border(self.ui.settings.popup_window_border);
-            #[cfg(windows)]
-            if (self.palette.material != material
-                || self.palette.backdrop_luminosity() != palette.backdrop_luminosity())
-                && let Some(backdrop) = &mut self.host.backdrop
-            {
-                backdrop.set_appearance(material, palette.backdrop_luminosity());
-            }
-            self.palette = palette;
+            backdrop.set_appearance(palette.material, palette.backdrop_luminosity());
         }
+        self.palette = palette;
     }
 
     /// The popup's design for another surface (the notification host) with
     /// its own system appearance, on an opaque background.
     pub(super) fn palette_for(&self, system_dark: bool) -> Palette {
-        let (popup_theme, vscode) = theme::popup_design(
-            self.ui.settings.popup_theme,
-            self.ui.settings.popup_vscode_theme.as_deref(),
-        );
-        let dark = theme::palette_dark(
-            vscode.as_deref(),
-            theme::resolve_dark(self.ui.settings.theme, system_dark),
-        );
-        Palette::new(
-            popup_theme,
-            vscode,
-            dark,
-            theme::accent_ramp(self.ui.settings.accent_color),
+        Palette::from_settings(
+            &self.ui.settings,
+            system_dark,
+            crate::theme::accent_ramp(self.ui.settings.accent_color),
             crate::settings::PopupBackgroundMaterial::Solid,
-            theme::popup_font_family(
-                popup_theme,
-                self.ui.settings.font_family.as_deref(),
-                &self.default_font,
-            ),
+            &self.default_font,
         )
-        .with_contrast(self.ui.settings.popup_vscode_contrast)
-        .with_tint(self.ui.settings.popup_vscode_tint)
-        .with_borders(self.ui.settings.popup_borders)
-        .with_window_border(self.ui.settings.popup_window_border)
     }
 
     /// Screen x of the visible popup capsule's left edge, in pixels.
@@ -607,11 +546,8 @@ impl PopupRoot {
 
     /// Gap between stacked cards; glides when the popup theme changes it.
     pub(super) fn card_gap(&mut self) -> f32 {
-        self.fx.value(
-            fx::key("card-gap"),
-            self.palette.card_gap,
-            crate::theme::CONTROL_NORMAL_ANIMATION,
-        )
+        self.fx
+            .value(fx::key("card-gap"), self.palette.card_gap, fx::NORMAL)
     }
 
     pub(crate) fn appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -720,7 +656,7 @@ impl PopupRoot {
         if self.pager.animation_id != before {
             self.pager_started = Instant::now();
             self.on_page_entered(self.pager.current);
-            if !super::animations_enabled(&self.ui) {
+            if !crate::theme::animations_enabled() {
                 self.finish_pager_animation();
             }
         }
@@ -746,7 +682,7 @@ impl PopupRoot {
             if self.pager.outgoing.is_some() {
                 self.pager_started = Instant::now();
                 self.on_page_entered(self.pager.current);
-                if super::animations_enabled(&self.ui) {
+                if crate::theme::animations_enabled() {
                     break;
                 }
             }
@@ -816,7 +752,7 @@ impl PopupRoot {
         let rect = self.prepare_geometry(Some(anchor), beside);
         self.remember_floating_origin(rect, cx);
         // The system accent can change while the popup is hidden.
-        self.accent = theme::accent_ramp(self.ui.settings.accent_color);
+        self.accent = crate::theme::accent_ramp(self.ui.settings.accent_color);
         self.refresh_palette(window);
         self.limits = Rc::new(self.state.current_limits());
         self.forced_resets = Rc::new(self.state.current_forced_resets());
@@ -836,7 +772,7 @@ impl PopupRoot {
             let target_width = self.target_width(self.pager.current);
             self.host.width.snap(f64::from(target_width));
             self.host.open_hold_frames = 0;
-            self.host.phase = if super::animations_enabled(&self.ui) {
+            self.host.phase = if crate::theme::animations_enabled() {
                 if closing_offset.is_none() {
                     self.host.open_hold_frames = if self.host.opened_once {
                         OPEN_HOLD_FRAMES
@@ -954,7 +890,7 @@ impl PopupRoot {
             Phase::Hidden | Phase::Prewarm | Phase::Closing(..) => {}
             _ => {
                 let from = self.host.offset;
-                if super::animations_enabled(&self.ui) {
+                if crate::theme::animations_enabled() {
                     self.host.phase = Phase::Closing(Instant::now(), from);
                     crate::popup::set_lifecycle(true, true);
                 } else {
@@ -1046,7 +982,7 @@ impl PopupRoot {
         if self.host.reopen_after_hide {
             return true;
         }
-        if super::animations_enabled(&self.ui)
+        if crate::theme::animations_enabled()
             && !crate::popup::is_reveal_pinned()
             && matches!(self.host.phase, Phase::Open | Phase::Opening(_))
         {
@@ -1343,7 +1279,7 @@ impl PopupRoot {
         }
         let target_h = self.target_height(self.pager.current);
         let target_w = self.target_width(self.pager.current);
-        let animate = super::animations_enabled(&self.ui)
+        let animate = crate::theme::animations_enabled()
             && !self.host.resizing_height
             && self.host.visible()
             && self.host.phase != Phase::Prewarm;
@@ -1859,13 +1795,6 @@ fn closing_offset(started: Instant, from: f32, width: f32, margin: f32) -> f32 {
     from + (travel - from) * eased
 }
 
-pub(super) fn system_dark(window: &Window) -> bool {
-    matches!(
-        window.appearance(),
-        gpui::WindowAppearance::Dark | gpui::WindowAppearance::VibrantDark
-    )
-}
-
 // ----- render -------------------------------------------------------------------
 
 impl Render for PopupRoot {
@@ -1887,16 +1816,16 @@ impl Render for PopupRoot {
         }
         let now = Instant::now();
         self.sync_key_pin();
-        self.fx.begin_frame(super::animations_enabled(&self.ui));
+        self.fx.begin_frame(crate::theme::animations_enabled());
         self.profile_height = self.fx.value(
             fx::key("profile-grid-height"),
             self.target_profile_strip_height(),
             fx::FAST,
         );
-        let kit_theme = crate::settings_window::theme::Theme::new(
+        let kit_theme = crate::gui::theme::Theme::new(
             self.palette.dark,
             self.accent,
-            crate::settings_window::theme::Fonts {
+            crate::gui::theme::Fonts {
                 text: self.palette.font_family.clone(),
                 ..self.kit_fonts.clone()
             },
@@ -2174,9 +2103,9 @@ impl Render for PopupRoot {
                     .rounded(px(radius))
                     .border_1()
                     .border_color(if palette.dark {
-                        theme::rgba8(255, 255, 255, 0x14)
+                        rgba8(255, 255, 255, 0x14)
                     } else {
-                        theme::rgba8(0, 0, 0, 0x12)
+                        rgba8(0, 0, 0, 0x12)
                     })
             }));
         // Paint tooltips after pages, pinned chrome and any other deferred UI.

@@ -8,11 +8,11 @@ use gpui::{
     StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px,
 };
 
-use super::kit::{self, Button, Kit, Row, eid};
 use super::tray::{IndicatorOwner, TrayDialog, dialog_section, preview_limits};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
-use crate::popup_window::ui::theme::rgb8;
+use crate::gui::color::rgb8;
+use crate::gui::kit::{self, Button, Kit, Row, eid};
 use crate::settings::{
     ProviderId, TaskbarAlignment, TaskbarClick, TaskbarResetDisplay, TaskbarWidget,
     TaskbarWidgetStyle, TrayIndicator,
@@ -280,9 +280,13 @@ impl SettingsWindow {
         } else {
             bar.child(div().flex_1()).children(strip)
         };
-        bar.child(div().px(px(6.0)).child(kit::icon("caret-up", 12.0, text)))
-            .child(clock)
-            .into_any_element()
+        bar.child(
+            div()
+                .px(px(6.0))
+                .child(crate::gui::mark::icon("caret-up", 12.0, text)),
+        )
+        .child(clock)
+        .into_any_element()
     }
 
     /// Opens the editor of the widget `id`, if it still exists.
@@ -569,7 +573,10 @@ impl SettingsWindow {
             .icon(tile)
             .description(k, widget_summary(widget))
             .trailing(menu)
-            .trailing(kit::icon("caret-right", 12.0, k.theme.text_secondary).into_any_element())
+            .trailing(
+                crate::gui::mark::icon("caret-right", 12.0, k.theme.text_secondary)
+                    .into_any_element(),
+            )
             .on_click(open)
             .render(k)
     }

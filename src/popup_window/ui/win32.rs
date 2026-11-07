@@ -678,15 +678,6 @@ pub(crate) fn set_region(hwnd: HWND, rect: Option<Rect>, radius_px: i32) {
     }
 }
 
-pub(crate) fn hwnd_from_window(window: &gpui::Window) -> Option<HWND> {
-    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    let handle = HasWindowHandle::window_handle(window).ok()?;
-    match handle.as_raw() {
-        RawWindowHandle::Win32(handle) => Some(handle.hwnd.get() as HWND),
-        _ => None,
-    }
-}
-
 /// `SWP_NOZORDER` placement used when only the host geometry changes while
 /// the popup is already visible.
 pub(crate) fn place_keep_order(hwnd: HWND, rect: Rect) {

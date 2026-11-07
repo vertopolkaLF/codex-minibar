@@ -15,13 +15,14 @@ use gpui::{
     prelude::FluentBuilder, px, radians, relative,
 };
 
-use super::input::{InputEvent, TextInput};
-use super::kit::{self, Button, ButtonSize, Kit, Row, SliderRange, eid};
 use super::vscode_themes::{ThemeBrowserUi, ThemeHost};
 use super::window::SettingsWindow;
 use crate::choice::Choice;
-use crate::popup_window::ui::fx;
-use crate::popup_window::ui::theme::{self as popup_theme, Palette, rgb8};
+use crate::gui::color::rgb8;
+use crate::gui::fx;
+use crate::gui::input::{InputEvent, TextInput};
+use crate::gui::kit::{self, Button, ButtonSize, Kit, Row, SliderRange, eid};
+use crate::popup_window::ui::theme::{self as popup_theme, Palette};
 use crate::settings::{
     AccentColor, AppTheme, BottomBarSize, POPUP_VSCODE_CONTRAST_DEFAULT, POPUP_VSCODE_CONTRAST_MAX,
     POPUP_VSCODE_CONTRAST_MIN, POPUP_VSCODE_TINT_DEFAULT, POPUP_VSCODE_TINT_MAX,
@@ -249,22 +250,15 @@ pub(super) trait ThemePicker: ThemeHost {
         vscode: Arc<VsCodeTheme>,
         accent: crate::theme::AccentRamp,
     ) -> Palette {
-        let font = popup_theme::popup_font_family(
-            PopupTheme::VsCode,
-            self.settings().font_family.as_deref(),
-            &self.fonts().text,
-        );
-        let dark = popup_theme::palette_dark(Some(&vscode), false);
-        Palette::new(
+        Palette::design(
             PopupTheme::VsCode,
             Some(vscode),
-            dark,
+            false,
             accent,
             PopupBackgroundMaterial::Solid,
-            font,
+            self.settings(),
+            &self.fonts().text,
         )
-        .with_contrast(self.settings().popup_vscode_contrast)
-        .with_borders(self.settings().popup_borders)
     }
 
     /// A miniature window preview for one theme choice.
@@ -510,21 +504,16 @@ pub(super) trait ThemePicker: ThemeHost {
                 .into(),
             None => crate::i18n::tr("popup-theme-built-in").into(),
         };
-        let font = popup_theme::popup_font_family(
-            value,
-            self.settings().font_family.as_deref(),
-            &self.fonts().text,
-        );
-        let palette = Palette::new(
+        let palette = Palette::design(
             value,
             vscode.clone(),
-            popup_theme::palette_dark(vscode.as_deref(), theme.dark),
+            theme.dark,
             accent,
             PopupBackgroundMaterial::Solid,
-            font.clone(),
-        )
-        .with_contrast(self.settings().popup_vscode_contrast)
-        .with_borders(self.settings().popup_borders);
+            self.settings(),
+            &self.fonts().text,
+        );
+        let font = palette.font_family.clone();
         let vscode_id = vscode.as_ref().map(|vscode| vscode.id.clone());
         let preview = popup_mock(k, &palette);
         let hover = theme.card_hover;
@@ -742,7 +731,7 @@ impl SettingsWindow {
             themes_expanded,
             fx::NORMAL,
         );
-        let chevron = kit::icon("caret-down-bold", 12.0, k.theme.text_secondary)
+        let chevron = crate::gui::mark::icon("caret-down-bold", 12.0, k.theme.text_secondary)
             .with_transformation(Transformation::rotate(radians(std::f32::consts::PI * turn)));
         let theme_header = Row::new("appearance-popup-theme", crate::i18n::tr("popup-theme"))
             .description(k, crate::i18n::tr("popup-theme-description"))

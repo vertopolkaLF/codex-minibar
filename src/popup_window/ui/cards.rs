@@ -9,11 +9,10 @@ use gpui::{
 };
 
 use super::{
-    components::{self, TextMetrics, caption, card, card_metadata, icon, nowrap, status_row},
-    fx,
+    components::{self, TextMetrics, caption, card, card_metadata, nowrap, status_row},
     root::{PopupRoot, eid},
-    theme::HslaExt,
 };
+use crate::gui::{color::HslaExt, fx, mark::icon};
 use crate::popup_window::{model::*, *};
 
 /// Old WinUI estimate per expanded banked-reset row; used as the reveal cap.
@@ -50,7 +49,7 @@ impl PopupRoot {
         let probe_text = display_name.clone();
         let probe = canvas(
             move |bounds, window, _| {
-                let full_width = components::measure_text(
+                let full_width = crate::gui::measure_text(
                     window.text_system(),
                     font.clone(),
                     if strong { 14.0 } else { 12.0 },
@@ -651,12 +650,12 @@ impl PopupRoot {
         let driver = heading.provider.kind();
         if matches!(surface, PopupSurface::HomeTab) || heading.show_icon {
             title = title.child(
-                components::provider_mark(
+                crate::gui::mark::provider_mark(
                     crate::provider_registry::icon(driver),
                     16.0,
                     palette.provider_icon(driver, self.ui.settings.use_colored_provider_icons),
                     heading.provider.badge().as_ref(),
-                    &palette,
+                    palette.plate(),
                 )
                 .mr(px(if heading.provider.badge().is_some() {
                     10.0
@@ -2007,7 +2006,7 @@ fn paint_ring(
 }
 
 fn theme_gray() -> gpui::Hsla {
-    super::theme::rgb8((138, 138, 138))
+    crate::gui::color::rgb8((138, 138, 138))
 }
 
 #[cfg(test)]

@@ -41,7 +41,7 @@ impl Backdrop {
             };
             use windows_sys::Win32::UI::Controls::MARGINS;
 
-            let Some(hwnd) = crate::popup_window::ui::win32::hwnd_from_window(window) else {
+            let Some(hwnd) = crate::gui::hwnd_from_window(window) else {
                 return Self::default();
             };
             let backdrop = DWMSBT_MAINWINDOW;

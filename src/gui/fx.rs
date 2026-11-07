@@ -511,9 +511,9 @@ mod tests {
         use crate::{
             instances::ProviderId,
             limits::RateLimits,
-            popup_window::{PopupSurface, model::*},
+            popup_window::model::*,
             provider_registry::ProviderKind,
-            settings::PopupVisibility,
+            settings::{PopupSurface, PopupVisibility},
         };
 
         for driver in [ProviderKind::Claude, ProviderKind::Codex] {

@@ -12,76 +12,16 @@ use std::sync::{
 
 use gpui::{Hsla, Rgba, SharedString};
 
+use crate::gui::color::{HslaExt, brand, ink, resolve_dark, rgb8, rgba8};
+use crate::gui::mark::Plate;
+use crate::gui::theme::GEIST_FAMILY;
 use crate::provider_registry::ProviderKind;
 use crate::settings::{
-    AccentColor, AppTheme, POPUP_VSCODE_CONTRAST_DEFAULT, POPUP_VSCODE_TINT_DEFAULT,
-    PopupBackgroundMaterial, PopupTheme,
+    POPUP_VSCODE_CONTRAST_DEFAULT, POPUP_VSCODE_TINT_DEFAULT, PopupBackgroundMaterial, PopupTheme,
+    Settings,
 };
+use crate::theme::AccentRamp;
 use crate::vscode_themes::VsCodeTheme;
-
-/// Family name of the bundled Geist faces used by the Vercel popup theme.
-pub(crate) const GEIST_FAMILY: &str = "Geist";
-
-/// Registers the bundled fonts with GPUI's text system. Call once at startup,
-/// before any window resolves its font family.
-pub(crate) fn register_bundled_fonts(cx: &gpui::App) {
-    let fonts = vec![
-        std::borrow::Cow::Borrowed(
-            include_bytes!("../../../assets/fonts/geist/Geist-Regular.ttf").as_slice(),
-        ),
-        std::borrow::Cow::Borrowed(
-            include_bytes!("../../../assets/fonts/geist/Geist-Medium.ttf").as_slice(),
-        ),
-        std::borrow::Cow::Borrowed(
-            include_bytes!("../../../assets/fonts/geist/Geist-SemiBold.ttf").as_slice(),
-        ),
-        std::borrow::Cow::Borrowed(
-            include_bytes!("../../../assets/fonts/geist/Geist-Bold.ttf").as_slice(),
-        ),
-    ];
-    if let Err(error) = cx.text_system().add_fonts(fonts) {
-        eprintln!("could not register the bundled Geist font: {error:#}");
-    }
-}
-
-pub(crate) fn rgba8(r: u8, g: u8, b: u8, a: u8) -> Hsla {
-    Rgba {
-        r: f32::from(r) / 255.0,
-        g: f32::from(g) / 255.0,
-        b: f32::from(b) / 255.0,
-        a: f32::from(a) / 255.0,
-    }
-    .into()
-}
-
-pub(crate) fn rgb8((r, g, b): (u8, u8, u8)) -> Hsla {
-    rgba8(r, g, b, 255)
-}
-
-/// The default UI family: Segoe UI Variable on Windows 11, Segoe UI on older
-/// systems that do not ship the variable font.
-pub(crate) fn default_font_family(cx: &gpui::App) -> SharedString {
-    let names = cx.text_system().all_font_names();
-    ["Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI"]
-        .into_iter()
-        .find(|candidate| names.iter().any(|name| name == candidate))
-        .unwrap_or("Segoe UI")
-        .into()
-}
-
-/// Font families installed on this PC, without GPUI's internal aliases and
-/// vertical (`@`) variants.
-pub(crate) fn installed_font_families(cx: &gpui::App) -> Vec<SharedString> {
-    let mut names = cx
-        .text_system()
-        .all_font_names()
-        .into_iter()
-        .filter(|name| !name.is_empty() && !name.starts_with(['.', '@']))
-        .collect::<Vec<_>>();
-    names.sort_by_key(|name| name.to_lowercase());
-    names.dedup();
-    names.into_iter().map(SharedString::from).collect()
-}
 
 /// A family the popup paints with temporarily while Settings hovers it in the
 /// font picker: `Some(None)` previews the Windows default. Never saved.
@@ -148,14 +88,8 @@ pub(crate) fn popup_design(
     (theme, id.and_then(crate::vscode_themes::get))
 }
 
-/// Light or dark for a palette: a VS Code theme has a fixed base, every
-/// built-in design follows the app theme.
-pub(crate) fn palette_dark(vscode: Option<&VsCodeTheme>, app_dark: bool) -> bool {
-    vscode.map_or(app_dark, VsCodeTheme::is_dark)
-}
-
 /// The UI family to render with: the user's pick, or the system default.
-pub(crate) fn ui_font_family(custom: Option<&str>, default: &SharedString) -> SharedString {
+fn ui_font_family(custom: Option<&str>, default: &SharedString) -> SharedString {
     custom
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -165,18 +99,8 @@ pub(crate) fn ui_font_family(custom: Option<&str>, default: &SharedString) -> Sh
         )
 }
 
-/// Black/white with a WinUI-style alpha byte.
-fn ink(dark: bool, alpha: u8) -> Hsla {
-    if dark {
-        rgba8(255, 255, 255, alpha)
-    } else {
-        rgba8(0, 0, 0, alpha)
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) struct Palette {
-    pub(crate) theme: PopupTheme,
     pub(crate) dark: bool,
     /// Corner radius of popup cards in DIPs.
     pub(crate) card_radius: f32,
@@ -219,9 +143,7 @@ pub(crate) struct Palette {
     pub(crate) borders: bool,
     /// The window hairline is drawn, independently of `borders`.
     pub(crate) window_outline: bool,
-    /// Contrast percent applied by [`Palette::with_contrast`].
-    pub(crate) contrast: u16,
-    /// Backdrop tint percent applied by [`Palette::with_tint`].
+    /// Opacity in percent of a VS Code theme's canvas over Mica or Acrylic.
     pub(crate) tint: u16,
     /// The VS Code theme this palette was mapped from.
     pub(crate) vscode: Option<Arc<VsCodeTheme>>,
@@ -273,35 +195,68 @@ impl Palette {
         (byte(rgb.r), byte(rgb.g), byte(rgb.b))
     }
 
-    /// `vscode` is the theme from [`popup_design`]; a VS Code
+    /// The popup design `settings` choose, for a window whose system
+    /// appearance is `system_dark`.
+    pub(crate) fn from_settings(
+        settings: &Settings,
+        system_dark: bool,
+        accent: AccentRamp,
+        material: PopupBackgroundMaterial,
+        default_font: &SharedString,
+    ) -> Self {
+        let (theme, vscode) =
+            popup_design(settings.popup_theme, settings.popup_vscode_theme.as_deref());
+        Self::design(
+            theme,
+            vscode,
+            resolve_dark(settings.theme, system_dark),
+            accent,
+            material,
+            settings,
+            default_font,
+        )
+    }
+
+    /// `theme` dressed in the font, contrast, tint and borders `settings`
+    /// choose. `vscode` is the theme from [`popup_design`]; a VS Code
     /// selection whose theme is gone renders as Fluent.
-    pub(crate) fn new(
+    pub(crate) fn design(
         theme: PopupTheme,
         vscode: Option<Arc<VsCodeTheme>>,
-        dark: bool,
-        accent: crate::theme::AccentRamp,
+        app_dark: bool,
+        accent: AccentRamp,
         material: PopupBackgroundMaterial,
-        font_family: SharedString,
+        settings: &Settings,
+        default_font: &SharedString,
     ) -> Self {
-        match theme {
+        // A VS Code theme has a fixed base; built-in designs follow the app.
+        let dark = vscode.as_deref().map_or(app_dark, VsCodeTheme::is_dark);
+        let font_family = popup_font_family(theme, settings.font_family.as_deref(), default_font);
+        let palette = match theme {
             PopupTheme::Fluent => Self::fluent(dark, accent, material, font_family),
             PopupTheme::Vercel => Self::vercel(dark, material, font_family),
             PopupTheme::VsCode => match vscode {
                 Some(vscode) => Self::vscode(vscode, material, font_family),
-                None => Self {
-                    theme: PopupTheme::VsCode,
-                    ..Self::fluent(dark, accent, material, font_family)
-                },
+                None => Self::fluent(dark, accent, material, font_family),
             },
+        };
+        let mut palette = palette.with_contrast(settings.popup_vscode_contrast);
+        palette.tint = settings.popup_vscode_tint;
+        palette.window_outline = settings.popup_window_border;
+        // Without borders every outline drawn with `card_stroke` disappears;
+        // dividers between rows stay.
+        if !settings.popup_borders {
+            palette.card_stroke = gpui::transparent_black();
         }
+        palette.borders = settings.popup_borders;
+        palette
     }
 
     /// Scales how far a VS Code palette's text, glyphs and outlines stand
     /// out: above 100 % they blend toward pure white (dark) or black
     /// (light), below it they fade into the surface. Built-in designs keep
-    /// their tuned tokens. Apply before [`Palette::with_borders`].
-    pub(crate) fn with_contrast(mut self, percent: u16) -> Self {
-        self.contrast = percent;
+    /// their tuned tokens.
+    fn with_contrast(mut self, percent: u16) -> Self {
         if self.vscode.is_none() || percent == POPUP_VSCODE_CONTRAST_DEFAULT {
             return self;
         }
@@ -341,42 +296,17 @@ impl Palette {
         self
     }
 
-    /// Opacity in percent of a VS Code theme's canvas over Mica or Acrylic.
-    pub(crate) fn with_tint(mut self, percent: u16) -> Self {
-        self.tint = percent;
-        self
-    }
-
-    /// Without borders every outline drawn with `card_stroke` disappears;
-    /// dividers between rows stay.
-    pub(crate) fn with_borders(mut self, borders: bool) -> Self {
-        if !borders {
-            self.card_stroke = gpui::transparent_black();
-        }
-        self.borders = borders;
-        self
-    }
-
-    /// The window hairline is set apart from the card and control borders.
-    pub(crate) fn with_window_border(mut self, outline: bool) -> Self {
-        self.window_outline = outline;
-        self
-    }
-
     /// Whether the popup and toast windows draw their edge hairline.
     pub(crate) fn window_border(&self) -> bool {
         self.window_outline
     }
 
-    /// Accent fill this theme paints with; Vercel is monochrome.
-    pub(crate) fn accent_for(
-        theme: PopupTheme,
-        dark: bool,
-        accent: crate::theme::AccentRamp,
-    ) -> Hsla {
-        match theme {
-            PopupTheme::Fluent | PopupTheme::VsCode => rgb8(accent.fill(dark)),
-            PopupTheme::Vercel => vercel_gray_1000(dark),
+    /// Badge plates on this theme's cards: a neutral plate for `Auto`.
+    pub(crate) fn plate(&self) -> Plate {
+        Plate {
+            auto_fill: self.text_secondary,
+            auto_text: self.solid_background.opacity(1.0),
+            outline: self.solid_background.opacity(0.9),
         }
     }
 
@@ -388,7 +318,6 @@ impl Palette {
     ) -> Self {
         let accent_fill = rgb8(accent.fill(dark));
         Self {
-            theme: PopupTheme::Fluent,
             dark,
             card_radius: crate::popup::CARD_CORNER_RADIUS_DIP as f32,
             // ControlCornerRadius.
@@ -516,7 +445,6 @@ impl Palette {
             material,
             borders: true,
             window_outline: true,
-            contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
             tint: POPUP_VSCODE_TINT_DEFAULT,
             vscode: None,
         }
@@ -536,7 +464,6 @@ impl Palette {
         let gray_900 = pick((0x4D, 0x4D, 0x4D), (0xA0, 0xA0, 0xA0));
         let gray_700 = rgb8((0x8F, 0x8F, 0x8F));
         Self {
-            theme: PopupTheme::Vercel,
             dark,
             // --vbg-radius / --vbg-radius-small / --vbg-space-2.
             card_radius: 8.0,
@@ -580,7 +507,6 @@ impl Palette {
             material,
             borders: true,
             window_outline: true,
-            contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
             tint: POPUP_VSCODE_TINT_DEFAULT,
             vscode: None,
         }
@@ -698,7 +624,6 @@ impl Palette {
             })
             .unwrap_or_else(|| tone(0.78));
         Self {
-            theme: PopupTheme::VsCode,
             dark,
             card_radius: crate::popup::CARD_CORNER_RADIUS_DIP as f32,
             control_radius: 4.0,
@@ -771,7 +696,6 @@ impl Palette {
             material,
             borders: true,
             window_outline: true,
-            contrast: POPUP_VSCODE_CONTRAST_DEFAULT,
             tint: POPUP_VSCODE_TINT_DEFAULT,
             vscode: Some(theme),
         }
@@ -782,17 +706,13 @@ impl Palette {
         if !colored {
             return self.mono_provider_icon;
         }
-        rgb8(
-            crate::provider_registry::descriptor(provider)
-                .icon_rgb
-                .pick(self.dark),
-        )
+        brand(provider, self.dark)
     }
 
     /// Footer tab mark: brand tint, or the neutral chrome glyph.
     pub(crate) fn tab_icon(&self, provider: Option<ProviderKind>, colored: bool) -> Hsla {
         match provider {
-            Some(provider) if colored => self.provider_icon(provider, true),
+            Some(provider) if colored => brand(provider, self.dark),
             _ => self.chrome_icon,
         }
     }
@@ -869,51 +789,6 @@ fn contrast(a: Hsla, b: Hsla) -> f32 {
     }
     let (a, b) = (luminance(a), luminance(b));
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
-}
-
-/// Resolve Auto against the window's system appearance.
-pub(crate) fn resolve_dark(theme: AppTheme, system_dark: bool) -> bool {
-    match theme {
-        AppTheme::Auto => system_dark,
-        AppTheme::Light => false,
-        AppTheme::Dark => true,
-    }
-}
-
-pub(crate) fn accent_ramp(accent: AccentColor) -> crate::theme::AccentRamp {
-    crate::theme::accent_ramp(accent)
-}
-
-pub(crate) trait HslaExt {
-    fn alpha(self, alpha: f32) -> Hsla;
-    fn mix(self, other: Hsla, amount: f32) -> Hsla;
-}
-
-impl HslaExt for Hsla {
-    fn alpha(mut self, alpha: f32) -> Hsla {
-        self.a *= alpha.clamp(0.0, 1.0);
-        self
-    }
-
-    /// Linear blend in RGB space; used for hover color crossfades.
-    fn mix(self, other: Hsla, amount: f32) -> Hsla {
-        let t = amount.clamp(0.0, 1.0);
-        if t <= 0.0 {
-            return self;
-        }
-        if t >= 1.0 {
-            return other;
-        }
-        let a = self.to_rgb();
-        let b = other.to_rgb();
-        Rgba {
-            r: a.r + (b.r - a.r) * t,
-            g: a.g + (b.g - a.g) * t,
-            b: a.b + (b.b - a.b) * t,
-            a: a.a + (b.a - a.a) * t,
-        }
-        .into()
-    }
 }
 
 #[cfg(test)]

@@ -20,20 +20,21 @@ use gpui::{
 use zeroize::Zeroizing;
 
 use super::{
-    components::{self, Severity, caption, icon, nowrap},
-    fx,
+    components::{self, Severity, caption, nowrap},
     root::{PopupRoot, eid},
-    theme::HslaExt,
+};
+use crate::gui::{
+    color::HslaExt,
+    fx,
+    input::{InputColors, InputEvent, TextInput},
+    kit,
+    mark::icon,
 };
 use crate::{
     limits::SpendingSummary,
     openrouter::admin::{self, KeyPatch, LimitReset, ManagedKey, NewKey},
     popup_window::*,
     settings::OpenRouterAccount,
-    settings_window::{
-        input::{InputColors, InputEvent, TextInput},
-        kit,
-    },
 };
 
 /// Keys listed before the "Show all" row.
@@ -1252,7 +1253,7 @@ impl PopupRoot {
             self.hovered(hover_id) && !disabled,
             fx::FASTER,
         );
-        let critical_fill = super::theme::rgb8(CRITICAL_FILL);
+        let critical_fill = crate::gui::color::rgb8(CRITICAL_FILL);
         let (background, foreground) = match tone {
             Tone::Accent => (
                 Some(palette.accent.opacity(1.0 - 0.1 * hover)),

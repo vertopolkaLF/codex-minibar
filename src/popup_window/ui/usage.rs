@@ -18,12 +18,12 @@ use gpui::{
 
 use super::{
     components::{self, caption, card, nowrap},
-    fx,
     root::{PopupRoot, SnapshotSlot, eid},
     theme::Palette,
     tooltip::{ChartTip, TipContent},
 };
 use crate::choice::Choice;
+use crate::gui::fx;
 use crate::popup_window::*;
 use crate::{
     usage::TokenUsage,
@@ -396,7 +396,7 @@ impl PopupRoot {
     /// are off.
     fn usage_bone(&mut self) -> Hsla {
         let base = self.palette.text_primary.opacity(0.08);
-        if !super::animations_enabled(&self.ui) {
+        if !crate::theme::animations_enabled() {
             return base;
         }
         // Shares the header spinner's clock: both run only while loading.
@@ -1062,7 +1062,7 @@ impl PopupRoot {
         let axis_width = ticks
             .iter()
             .map(|value| {
-                components::measure_text(
+                crate::gui::measure_text(
                     window.text_system(),
                     palette.font_family.clone(),
                     12.0,
@@ -1344,12 +1344,12 @@ fn provider_tile(
                 .flex_row()
                 .items_center()
                 .gap(px(8.0))
-                .child(components::provider_mark(
+                .child(crate::gui::mark::provider_mark(
                     crate::provider_registry::icon(entry.provider.kind()),
                     16.0,
                     palette.provider_icon(entry.provider.kind(), colored),
                     entry.provider.badge().as_ref(),
-                    palette,
+                    palette.plate(),
                 ))
                 .child(nowrap(components::body_strong(
                     descriptor.display_name,
@@ -1464,12 +1464,12 @@ fn breakdown_table(
             None => row.by_provider.keys().copied().collect(),
         };
         for provider in &providers {
-            title = title.child(components::provider_mark(
+            title = title.child(crate::gui::mark::provider_mark(
                 crate::provider_registry::icon(provider.kind()),
                 14.0,
                 palette.provider_icon(provider.kind(), colored),
                 provider.badge().as_ref(),
-                palette,
+                palette.plate(),
             ));
         }
         title = title.child(
@@ -1550,12 +1550,12 @@ fn day_breakdown_table(
     for provider in &providers {
         header = header.child(cell(
             provider_col,
-            components::provider_mark(
+            crate::gui::mark::provider_mark(
                 crate::provider_registry::icon(provider.kind()),
                 14.0,
                 palette.provider_icon(provider.kind(), colored),
                 provider.badge().as_ref(),
-                palette,
+                palette.plate(),
             ),
         ));
     }

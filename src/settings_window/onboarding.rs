@@ -12,12 +12,12 @@ use gpui::{
 
 use super::appearance::ThemePicker;
 use super::general::usage_refresh_labels;
-use super::input::{HasInputs, Inputs};
-use super::kit::{self, Button, Handler, Kit, Row};
-use super::theme::{Fonts, Theme};
 use super::vscode_themes::{ThemeBrowser, ThemeBrowserUi, ThemeHost, end_theme_preview};
 use crate::choice::Choice;
-use crate::popup_window::ui::fx;
+use crate::gui::fx;
+use crate::gui::input::{HasInputs, Inputs};
+use crate::gui::kit::{self, Button, Handler, Kit, Row};
+use crate::gui::theme::{Fonts, Theme};
 use crate::provider_registry::ProviderKind;
 use crate::settings::{ProviderInstance, Settings, TrayWidget, UsageRefreshInterval};
 
@@ -432,11 +432,11 @@ impl OnboardingWindow {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child(kit::icon(
+                .child(crate::gui::mark::icon(
                     crate::provider_registry::icon(driver),
                     16.0,
                     if on {
-                        theme.brand(driver)
+                        crate::gui::color::brand(driver, theme.dark)
                     } else {
                         theme.glyph()
                     },
@@ -872,7 +872,7 @@ impl Render for OnboardingWindow {
                             .gap(px(12.0))
                             .pl(px(16.0))
                             .flex_1()
-                            .child(kit::image("color/app-icon-32.png", 16.0))
+                            .child(crate::gui::mark::image("color/app-icon-32.png", 16.0))
                             .child(kit::text(
                                 SharedString::from(super::onboarding_window_title()),
                                 12.0,

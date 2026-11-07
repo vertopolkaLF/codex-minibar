@@ -18,16 +18,16 @@ use gpui::{
     ElementId, Entity, FontWeight, Hsla, InteractiveElement, IntoElement, MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, SharedString,
     StatefulInteractiveElement, Styled, Transformation, Window, anchored, canvas, deferred, div,
-    img, point, px, radians, relative, svg,
+    point, px, radians, relative,
 };
 
-use super::input::TextInput;
-use super::theme::Theme;
-use crate::popup_window::ui::{
-    assets,
-    controls::{SEGMENT_HEIGHT, Segment, SegmentStyle, segmented_track},
+use super::mark::icon;
+use super::{
+    color::{HslaExt, rgb8},
     fx::{self, Fx},
-    theme::{HslaExt, rgb8},
+    input::TextInput,
+    segmented::{SEGMENT_HEIGHT, Segment, SegmentStyle, segmented_track},
+    theme::Theme,
 };
 
 pub(crate) type Handler<T> = Rc<dyn Fn(T, &mut Window, &mut App)>;
@@ -349,7 +349,7 @@ fn row_hover_fill(k: &Kit, t: f32) -> AnyElement {
     .into_any_element()
 }
 
-const MENU_FADE: Duration = Duration::from_millis(167);
+const MENU_FADE: Duration = fx::FAST;
 const MENU_MAX_HEIGHT: f32 = 340.0;
 
 /// The one open popover menu of a window.
@@ -439,24 +439,6 @@ impl Menus {
 // ---------------------------------------------------------------------------
 // Primitives
 // ---------------------------------------------------------------------------
-
-/// A monochrome Iconify glyph tinted with `color`.
-pub(crate) fn icon(name: &str, size: f32, color: Hsla) -> gpui::Svg {
-    svg()
-        .path(assets::icon_path(name))
-        .size(px(size))
-        .flex_none()
-        .text_color(color)
-}
-
-/// A full-color SVG or bitmap asset (sidebar Fluent Color icons, app icon).
-pub(crate) fn image(path: &'static str, size: f32) -> gpui::Img {
-    img(gpui::ImageSource::Resource(gpui::Resource::Embedded(
-        path.into(),
-    )))
-    .size(px(size))
-    .flex_none()
-}
 
 pub(crate) fn text(value: impl Into<SharedString>, size: f32, color: Hsla) -> gpui::Div {
     div()
@@ -554,9 +536,9 @@ pub(crate) fn chip(k: &Kit, label: impl Into<SharedString>) -> AnyElement {
         .into_any_element()
 }
 
-/// An instance badge plate as drawn in the popup and sidebar.
+/// An instance badge as a chip in a row.
 pub(crate) fn badge_plate(k: &Kit, badge: &crate::instances::Badge) -> AnyElement {
-    let (bg, fg) = k.theme.badge(badge.color);
+    let (bg, fg) = k.theme.plate().colors(badge.color);
     div()
         .flex()
         .items_center()
@@ -572,50 +554,6 @@ pub(crate) fn badge_plate(k: &Kit, badge: &crate::instances::Badge) -> AnyElemen
         .flex_none()
         .child(badge.text.clone())
         .into_any_element()
-}
-
-/// A driver glyph with the instance badge on its lower-right corner, sized
-/// like the popup's provider marks.
-pub(crate) fn provider_mark(
-    k: &Kit,
-    glyph: &str,
-    size: f32,
-    color: Hsla,
-    badge: Option<&crate::instances::Badge>,
-) -> AnyElement {
-    let mark = div()
-        .relative()
-        .flex_none()
-        .size(px(size))
-        .child(icon(glyph, size, color));
-    let Some(badge) = badge else {
-        return mark.into_any_element();
-    };
-    let (bg, fg) = k.theme.badge(badge.color);
-    let height = (size * 0.62).clamp(9.0, 14.0);
-    mark.child(
-        div()
-            .absolute()
-            .right(px(-height * 0.45))
-            .bottom(px(-height * 0.3))
-            .flex()
-            .items_center()
-            .justify_center()
-            .h(px(height))
-            .min_w(px(height))
-            .px(px((height * 0.22).max(2.0)))
-            .rounded(px(height * 0.3))
-            .border_1()
-            .border_color(k.theme.window_bg)
-            .bg(bg)
-            .text_color(fg)
-            .text_size(px((height * 0.68).max(7.0)))
-            .line_height(px(height))
-            .font_weight(FontWeight::BOLD)
-            .whitespace_nowrap()
-            .child(badge.text.clone()),
-    )
-    .into_any_element()
 }
 
 pub(crate) fn divider(k: &Kit) -> AnyElement {
@@ -1538,7 +1476,7 @@ pub(crate) fn segmented(
         .map(|label| {
             Segment::text(
                 label.to_string(),
-                crate::popup_window::ui::components::measure_text(
+                super::measure_text(
                     k.text_system
                         .as_ref()
                         .expect("begin_frame initializes text measurement"),
@@ -1803,7 +1741,7 @@ fn menu_panel_with(
         panel
             .with_animation(
                 eid(format!("menu-anim-{id}")),
-                Animation::new(Duration::from_millis(167)).with_easing(fx::ease_out_cubic),
+                Animation::new(fx::FAST).with_easing(fx::ease_out_cubic),
                 |el, delta| el.opacity(delta).mt(px(4.0 - (1.0 - delta) * 8.0)),
             )
             .into_any_element()
@@ -2424,7 +2362,7 @@ pub(crate) fn text_field(
 // Overlays
 // ---------------------------------------------------------------------------
 
-const DIALOG_EXIT: Duration = Duration::from_millis(167);
+const DIALOG_EXIT: Duration = fx::FAST;
 
 /// Where an overlay is in its lifetime: which opening it belongs to, and how
 /// far its exit has played once dismissed.
@@ -2604,7 +2542,7 @@ pub(crate) fn dialog_sized(
         overlay
             .with_animation(
                 eid(format!("dialog-scrim-{id}-{generation}")),
-                Animation::new(Duration::from_millis(167)),
+                Animation::new(fx::FAST),
                 move |el, delta| el.opacity(delta * fade),
             )
             .into_any_element()
@@ -2738,7 +2676,7 @@ pub(crate) fn caption_button(
 ) -> AnyElement {
     let theme = &k.theme;
     let hover = if close {
-        crate::popup_window::ui::theme::rgb8((0xC4, 0x2B, 0x1C))
+        rgb8((0xC4, 0x2B, 0x1C))
     } else {
         theme.subtle_hover
     };
@@ -3172,7 +3110,7 @@ pub(crate) fn time_picker(
         panel
             .with_animation(
                 eid(format!("time-anim-{id}")),
-                Animation::new(Duration::from_millis(167)).with_easing(fx::ease_out_cubic),
+                Animation::new(fx::FAST).with_easing(fx::ease_out_cubic),
                 |el, delta| el.opacity(delta).mt(px(4.0 - (1.0 - delta) * 8.0)),
             )
             .into_any_element()
@@ -3212,7 +3150,7 @@ pub(crate) fn flyout(
         panel
             .with_animation(
                 eid(format!("flyout-anim-{id}")),
-                Animation::new(Duration::from_millis(167)).with_easing(fx::ease_out_cubic),
+                Animation::new(fx::FAST).with_easing(fx::ease_out_cubic),
                 |el, delta| el.opacity(delta).mt(px(4.0 - (1.0 - delta) * 8.0)),
             )
             .into_any_element()
