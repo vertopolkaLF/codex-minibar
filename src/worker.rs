@@ -651,10 +651,12 @@ fn run_limit_task(
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::RateLimitPauseChanged) => {}
             Err(RecvTimeoutError::Timeout) => {}
-            Ok(WorkerCommand::ClearUsageData(_)) | Ok(WorkerCommand::ResumeUsageRefresh(_)) => {}
-            Ok(WorkerCommand::SetHistoryRetentionDays(_))
-            | Ok(WorkerCommand::SetUsageRefreshInterval(_))
-            | Ok(WorkerCommand::SetUsageCollectionEnabled(_)) => {}
+            Ok(WorkerCommand::ClearUsageData(_) | WorkerCommand::ResumeUsageRefresh(_)) => {}
+            Ok(
+                WorkerCommand::SetHistoryRetentionDays(_)
+                | WorkerCommand::SetUsageRefreshInterval(_)
+                | WorkerCommand::SetUsageCollectionEnabled(_),
+            ) => {}
         }
     }
 }
@@ -719,13 +721,15 @@ fn run_usage_task_with_rate_limit(
             Ok(WorkerCommand::SetUsageRefreshInterval(interval)) => {
                 usage_refresh_interval = interval.max(Duration::from_secs(60));
             }
-            Ok(WorkerCommand::Refresh)
-            | Ok(WorkerCommand::RefreshAutomatic)
-            | Ok(WorkerCommand::RateLimitPauseChanged)
-            | Ok(WorkerCommand::SetLimitRefreshInterval(_))
-            | Ok(WorkerCommand::SetAutomaticActivation(_))
-            | Ok(WorkerCommand::SetScheduledActivations(_))
-            | Ok(WorkerCommand::SetAutoActivationPauses(_)) => {}
+            Ok(
+                WorkerCommand::Refresh
+                | WorkerCommand::RefreshAutomatic
+                | WorkerCommand::RateLimitPauseChanged
+                | WorkerCommand::SetLimitRefreshInterval(_)
+                | WorkerCommand::SetAutomaticActivation(_)
+                | WorkerCommand::SetScheduledActivations(_)
+                | WorkerCommand::SetAutoActivationPauses(_),
+            ) => {}
             Ok(WorkerCommand::ClearUsageData(generation)) => {
                 // Barrier only: the bridge wipes the store exactly once after
                 // every worker has acknowledged, so this worker must not scan
@@ -911,11 +915,13 @@ fn run_usage_task_with_rate_limit(
                 }
             }
             Ok(WorkerCommand::SetUsageCollectionEnabled(true)) => {}
-            Ok(WorkerCommand::SetLimitRefreshInterval(_))
-            | Ok(WorkerCommand::SetAutomaticActivation(_))
-            | Ok(WorkerCommand::SetScheduledActivations(_))
-            | Ok(WorkerCommand::SetAutoActivationPauses(_))
-            | Ok(WorkerCommand::RateLimitPauseChanged) => {}
+            Ok(
+                WorkerCommand::SetLimitRefreshInterval(_)
+                | WorkerCommand::SetAutomaticActivation(_)
+                | WorkerCommand::SetScheduledActivations(_)
+                | WorkerCommand::SetAutoActivationPauses(_)
+                | WorkerCommand::RateLimitPauseChanged,
+            ) => {}
         }
     }
 }

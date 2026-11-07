@@ -73,7 +73,7 @@ fn install_catalog(catalog: PricingCatalog) {
 
 #[derive(Clone, Debug)]
 struct PricingCatalog {
-    #[allow(dead_code)]
+    #[cfg_attr(test, allow(dead_code))]
     fetched_at: DateTime<Utc>,
     rates: HashMap<String, ModelRate>,
 }
@@ -116,7 +116,7 @@ pub fn initialize() -> Result<()> {
 /// off (15 min doubling up to 4 h) so an offline machine does not retry a slow
 /// request on every usage refresh, and a worker that finds another provider's
 /// download in flight skips instead of queueing behind it.
-#[allow(dead_code)]
+#[cfg_attr(test, allow(dead_code))]
 pub(crate) fn refresh_if_stale() -> Result<bool> {
     #[cfg(test)]
     {

@@ -503,7 +503,7 @@ mod tests {
             unquote(&variant_string(original)).as_deref(),
             Some(original)
         );
-        assert_eq!(unquote(r#"'\U0001f600'"#).as_deref(), Some("😀"));
+        assert_eq!(unquote(r"'\U0001f600'").as_deref(), Some("😀"));
     }
 
     #[test]
@@ -513,13 +513,13 @@ mod tests {
             "['/keep/', 42]",
             "['/keep/' '/lost/']",
             "['/keep/', '/unterminated]",
-            r#"['/keep/', '\uZZZZ']"#,
+            r"['/keep/', '\uZZZZ']",
             "not a list",
         ] {
             assert!(quoted_strings(malformed).is_none(), "{malformed}");
         }
         assert!(unquote("'binding' extra").is_none());
-        assert!(unquote(r#"'\u0000'"#).is_none());
+        assert!(unquote(r"'\u0000'").is_none());
     }
 
     #[test]

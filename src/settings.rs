@@ -2140,7 +2140,7 @@ impl Default for NotificationSettings {
     fn default() -> Self {
         Self {
             activation_success: true,
-            activation_failure: true,
+            activation_failure: false,
             codex_unavailable: false,
             approaching_reset: false,
             limits_changed: true,
@@ -4325,11 +4325,11 @@ mod tests {
         let path = directory.path().join("settings.toml");
         fs::write(
             &path,
-            r#"
+            r"
 version = 28
 show_banked_resets = false
 show_usage_stats = false
-"#,
+",
         )
         .unwrap();
 
@@ -4472,13 +4472,13 @@ show_usage_stats = false
         let path = directory.path().join("settings.toml");
         fs::write(
             &path,
-            r#"
+            r"
 automatic_activation = false
 start_at_login = true
 history_retention_days = 30
 check_for_updates = false
 tray_widgets = []
-"#,
+",
         )
         .unwrap();
 

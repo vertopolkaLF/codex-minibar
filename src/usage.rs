@@ -75,7 +75,6 @@ impl TokenUsage {
 
     /// Aggregates externally sourced usage that follows the same token shape
     /// as local logs (Cursor's dashboard CSV, for example).
-    #[allow(dead_code)]
     pub(crate) fn add_public(&mut self, other: &Self) {
         self.add(other);
     }

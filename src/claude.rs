@@ -13,6 +13,7 @@ use chrono::{DateTime, Utc};
 use directories::BaseDirs;
 use serde::Deserialize;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 use crate::{
     claude_desktop,
@@ -405,6 +406,7 @@ struct RefreshAttempt {
 
 #[derive(Default)]
 struct ClaudeAccountCache {
+    credential_digest: Option<[u8; 32]>,
     account_name: Option<String>,
     plan_type: Option<String>,
     checked_at: Option<Instant>,
@@ -412,6 +414,17 @@ struct ClaudeAccountCache {
 }
 
 impl ClaudeAccountCache {
+    /// Keep only a digest in memory; never persist or log the credential.
+    fn select_credential(&mut self, access_token: &str) {
+        let digest: [u8; 32] = Sha256::digest(access_token.as_bytes()).into();
+        if self.credential_digest != Some(digest) {
+            *self = Self {
+                credential_digest: Some(digest),
+                ..Self::default()
+            };
+        }
+    }
+
     fn needs_refresh(&self, reset_schedule: &[(String, Option<DateTime<Utc>>)]) -> bool {
         self.checked_at
             .is_none_or(|checked_at| checked_at.elapsed() >= PROFILE_REFRESH_INTERVAL)
@@ -664,6 +677,8 @@ impl ClaudeClient {
         sign_in_hint: &str,
         local_plan_type: Option<String>,
     ) -> Result<RateLimits> {
+        // Drop the old identity even when the new account's request fails.
+        self.account_cache.select_credential(access_token);
         let body = send(
             agent
                 .get(OAUTH_USAGE_URL)
@@ -768,6 +783,33 @@ fn renewal_expiry(now: i64, seconds: i64) -> Result<i64> {
     Ok(expires_at)
 }
 
+/// `None` denotes a definitively rejected refresh token.
+fn read_renewal_response(
+    response: std::result::Result<ureq::Response, ureq::Error>,
+) -> Result<Option<String>> {
+    match response {
+        Ok(response) => response
+            .into_string()
+            .context("read Claude login renewal response")
+            .map(Some),
+        Err(ureq::Error::Status(status @ (400 | 401), response)) => {
+            let body = response.into_string().unwrap_or_default();
+            if oauth_error_code(&body).as_deref() == Some("invalid_grant") {
+                crate::logger::info("Claude rejected a login renewal (invalid_grant)");
+                return Ok(None);
+            }
+            bail!("Claude login renewal failed with HTTP {status}")
+        }
+        Err(ureq::Error::Status(429, _)) => Err(crate::worker::rate_limit_error(
+            "Claude login renewal is rate limited; it will be retried",
+        )),
+        Err(ureq::Error::Status(status, _)) => {
+            bail!("Claude login renewal failed with HTTP {status}")
+        }
+        Err(error) => Err(error).context("renew Claude login"),
+    }
+}
+
 /// Renews a CLI login with its refresh token, exactly as Claude Code does,
 /// and writes the new tokens back into the same file. Only an expired login
 /// is renewed, and a running Claude Code renews ahead of expiry, so this
@@ -802,30 +844,15 @@ fn refresh_cli_login(agent: &ureq::Agent, refresh: &FileRefresh) -> Result<Renew
     if !scopes.is_empty() {
         body["scope"] = Value::String(scopes);
     }
-    let response = match agent
-        .post(OAUTH_TOKEN_URL)
-        .set("Content-Type", "application/json")
-        .set("Accept", "application/json")
-        .send_string(&body.to_string())
-    {
-        Ok(response) => response
-            .into_string()
-            .context("read Claude login renewal response")?,
-        Err(ureq::Error::Status(status @ (400 | 401), response)) => {
-            let body = response.into_string().unwrap_or_default();
-            if oauth_error_code(&body).as_deref() == Some("invalid_grant") {
-                crate::logger::info("Claude rejected a login renewal (invalid_grant)");
-                return Ok(Renewal::Rejected);
-            }
-            bail!("Claude login renewal failed with HTTP {status}")
-        }
-        Err(ureq::Error::Status(429, _)) => {
-            bail!("Claude login renewal is rate limited; it will be retried")
-        }
-        Err(ureq::Error::Status(status, _)) => {
-            bail!("Claude login renewal failed with HTTP {status}")
-        }
-        Err(error) => return Err(error).context("renew Claude login"),
+    let Some(response) = read_renewal_response(
+        agent
+            .post(OAUTH_TOKEN_URL)
+            .set("Content-Type", "application/json")
+            .set("Accept", "application/json")
+            .send_string(&body.to_string()),
+    )?
+    else {
+        return Ok(Renewal::Rejected);
     };
     let renewed: TokenResponse =
         serde_json::from_str(&response).context("parse Claude login renewal response")?;
@@ -2111,6 +2138,42 @@ mod tests {
             executable_for(None, Some(folder.path())),
             cli_available(None)
         );
+    }
+
+    #[test]
+    fn account_cache_discards_identity_when_credentials_change() {
+        let schedule = vec![("primary".into(), None)];
+        let mut cache = ClaudeAccountCache::default();
+        cache.select_credential("account-a-token");
+        cache.record(
+            Some("Account A".into()),
+            Some("pro".into()),
+            schedule.clone(),
+        );
+        cache.select_credential("account-a-token");
+        assert!(!cache.needs_refresh(&schedule));
+        assert_eq!(cache.account_name.as_deref(), Some("Account A"));
+
+        cache.select_credential("account-b-token");
+        assert!(cache.needs_refresh(&schedule));
+        assert!(cache.account_name.is_none());
+        assert!(cache.plan_type.is_none());
+        cache.record(
+            Some("Account B".into()),
+            Some("max".into()),
+            schedule.clone(),
+        );
+        assert!(!cache.needs_refresh(&schedule));
+        assert_eq!(cache.account_name.as_deref(), Some("Account B"));
+    }
+
+    #[test]
+    fn renewal_throttling_keeps_the_shared_worker_pause_signal() {
+        let response = ureq::Response::new(429, "Too Many Requests", "").unwrap();
+        let error = read_renewal_response(Err(ureq::Error::Status(429, response)))
+            .unwrap_err()
+            .context("Claude login has expired");
+        assert!(crate::worker::is_rate_limited_error(&error));
     }
 
     #[test]

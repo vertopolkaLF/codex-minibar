@@ -1860,7 +1860,7 @@ mod tests {
             parsed.expires_at,
             Some("2026-11-01T05:30:00Z".parse().unwrap())
         );
-        for raw in [r#"{}"#, r#"{"data":null}"#, r#"{"data":{"usage":-1}}"#] {
+        for raw in [r"{}", r#"{"data":null}"#, r#"{"data":{"usage":-1}}"#] {
             assert!(parse_key_response(raw, Utc::now()).is_err(), "{raw}");
         }
     }

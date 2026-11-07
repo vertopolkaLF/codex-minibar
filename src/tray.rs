@@ -505,7 +505,7 @@ fn render_rings(values: &[ResolvedIndicator]) -> Vec<u8> {
         _ => &[13.0, 9.0, 5.0],
     };
     for (value, radius) in values.iter().zip(radii) {
-        let filled = value.displayed_percent.unwrap_or(0) as f32 / 100.0;
+        let filled = f32::from(value.displayed_percent.unwrap_or(0)) / 100.0;
         let color = value.color;
         for y in 0..ICON_SIZE {
             for x in 0..ICON_SIZE {

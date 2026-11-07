@@ -2339,7 +2339,7 @@ mod tests {
             assert_eq!(decode_auth(raw, stamp), Observation::Uncertain);
         }
         for raw in [
-            r#"{}"#,
+            r"{}",
             r#"{"tokens":null}"#,
             r#"{"tokens":{"account_id":null}}"#,
             r#"{"tokens":{"account_id":"  "}}"#,

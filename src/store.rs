@@ -436,7 +436,7 @@ impl ProviderStore {
             .context("load cached pricing catalog")
     }
 
-    #[allow(dead_code)]
+    #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn save_pricing_catalog(
         &self,
         source: &str,
@@ -877,7 +877,7 @@ impl ProviderStore {
         self.upsert_provider_meta(
             provider,
             Some(fetched_at),
-            CURSOR_USAGE_VERSION as i64,
+            i64::from(CURSOR_USAGE_VERSION),
             None,
         )
     }
@@ -1364,8 +1364,8 @@ impl ProviderStore {
                             entry.timestamp.to_rfc3339(),
                             entry.message_id,
                             entry.request_id,
-                            entry.is_sidechain as i64,
-                            entry.has_speed as i64,
+                            i64::from(entry.is_sidechain),
+                            i64::from(entry.has_speed),
                             entry.usage.input_tokens as i64,
                             entry.usage.cached_input_tokens as i64,
                             entry.usage.output_tokens as i64,

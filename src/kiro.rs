@@ -850,7 +850,7 @@ fn limits_from_live_usage(response: KiroLiveUsageResponse) -> Result<RateLimits>
     let resets_at = resets_at.or_else(|| {
         local_fallback
             .as_ref()
-            .and_then(|local| local.secondary.resets_at.as_ref().cloned())
+            .and_then(|local| local.secondary.resets_at)
     });
     let used_percent = ((used / limit) * 100.0).round().clamp(0.0, 100.0) as u8;
     let duration_minutes = resets_at.and_then(month_duration_minutes);
@@ -1332,7 +1332,7 @@ mod tests {
     #[test]
     fn live_credits_reject_absent_or_invalid_amounts() {
         for raw in [
-            r#"{}"#,
+            r"{}",
             r#"{"usageBreakdownList":[]}"#,
             r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":null,"usageLimit":100}]}"#,
             r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":-1,"usageLimit":100}]}"#,

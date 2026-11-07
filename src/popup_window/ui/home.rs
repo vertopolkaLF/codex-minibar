@@ -15,7 +15,6 @@ use super::{
     theme::{HslaExt, Palette},
 };
 use crate::popup_window::{model::*, *};
-use crate::usage_overview::OverviewSnapshot;
 
 pub(super) const COLUMN_GAP: f32 = 20.0;
 const HEADING_TOP: f32 = 8.0;
@@ -1245,9 +1244,6 @@ pub(super) fn format_thousands(value: u64) -> String {
     }
     grouped.chars().rev().collect()
 }
-
-#[allow(dead_code)]
-fn _unused(_: &OverviewSnapshot) {}
 
 #[cfg(test)]
 mod money_tests {

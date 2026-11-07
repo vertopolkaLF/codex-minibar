@@ -266,7 +266,7 @@ pub(crate) fn model_color(model: &str, dark: bool) -> Hsla {
     hash = (hash ^ (hash >> 30)).wrapping_mul(0xbf58476d1ce4e5b9);
     hash = (hash ^ (hash >> 27)).wrapping_mul(0x94d049bb133111eb);
     hash ^= hash >> 31;
-    let hue = (hash >> 32) as f64 / u32::MAX as f64 * 6.0;
+    let hue = (hash >> 32) as f64 / f64::from(u32::MAX) * 6.0;
     let lightness = if dark { 0.69 } else { 0.40 };
     let chroma = (1.0_f64 - (2.0_f64 * lightness - 1.0).abs()) * 0.70;
     let x = chroma * (1.0 - (hue % 2.0 - 1.0).abs());
