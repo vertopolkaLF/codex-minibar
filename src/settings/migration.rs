@@ -1,7 +1,9 @@
-//! Version 39: accounts inside providers become provider instances.
+//! Settings file migrations, from the pre-versioned format to
+//! [`SETTINGS_VERSION`]. They rewrite the TOML document before it is decoded
+//! and are pure.
 //!
-//! The document-level part runs inside [`super::migrate`] and is pure. Moving
-//! credentials out of protected storage into instance folders needs the
+//! Version 39 turns accounts inside providers into provider instances. Moving
+//! their credentials out of protected storage into instance folders needs the
 //! secret store and the file system, so startup supplies those to
 //! [`finish_instance_migration`], which runs once after the load.
 
@@ -11,11 +13,15 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use super::{
-    HomeWidgetId, InstanceSource, OpenRouterAccount, PopupTabMode, ProviderInstance, ProviderKind,
-    Settings,
+    HomeWidgetId, InstanceSource, OpenRouterAccount, PopupTabMode, PopupVisibility,
+    ProviderInstance, ProviderKind, Settings, TimeFormat,
 };
 
-/// First settings version that stores provider instances.
+/// The settings format this build writes.
+pub const SETTINGS_VERSION: u32 = 41;
+/// First version where the taskbar widget is shown by default.
+pub(super) const TASKBAR_DEFAULT_VERSION: u32 = 41;
+/// First version with provider instances.
 pub(super) const INSTANCES_VERSION: u32 = 39;
 
 /// Drivers the historical migrations enumerate. Frozen so adding a provider
@@ -545,6 +551,757 @@ fn export_codex_session(folder: &std::path::Path, raw: &str) -> Result<()> {
         "auth.json",
         serde_json::to_string_pretty(&file)?.as_bytes(),
     )
+}
+
+/// Converts leftover pre-indicator tray widget tables into the current shape.
+/// Safe to run on every load: modern widgets (with `indicators`) are left alone.
+pub(super) fn heal_legacy_tray_widgets(document: &mut toml::Value) -> bool {
+    let Some(root) = document.as_table_mut() else {
+        return false;
+    };
+    let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") else {
+        return false;
+    };
+    let mut changed = false;
+    let mut healed = Vec::with_capacity(widgets.len());
+    for (index, value) in widgets.iter_mut().enumerate() {
+        let Some(widget) = value.as_table_mut() else {
+            changed = true;
+            continue;
+        };
+        let looks_legacy = (widget.contains_key("provider")
+            || widget.contains_key("source")
+            || widget.contains_key("metric")
+            || widget.contains_key("limit_value"))
+            && !widget.contains_key("indicators");
+        if looks_legacy {
+            convert_legacy_tray_widget(widget, index);
+            changed = true;
+        } else if widget.contains_key("source") {
+            // Current schema has no widget-level `source`; drop leftovers so a
+            // downgrade/upgrade ping-pong cannot keep confusing decoders.
+            widget.remove("source");
+            widget.remove("provider");
+            widget.remove("limit_value");
+            widget.remove("metric");
+            changed = true;
+        }
+        healed.push(value.clone());
+    }
+    if changed {
+        *widgets = healed;
+    }
+    changed
+}
+
+fn convert_legacy_tray_widget(widget: &mut toml::map::Map<String, toml::Value>, index: usize) {
+    let provider = widget
+        .remove("provider")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "codex".into());
+    let source = widget
+        .remove("source")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "combined".into());
+    let limit_value = widget
+        .remove("limit_value")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_else(|| "remaining".into());
+    let color_mode = widget
+        .remove("color_mode")
+        .unwrap_or_else(|| toml::Value::String("status".into()));
+    let fixed_color = widget.remove("fixed_color");
+    widget.remove("metric");
+    let primary = match provider.as_str() {
+        "claude" => "claude.session",
+        "cursor" => "cursor.auto",
+        "openrouter" => "openrouter.limit",
+        _ => "codex.session",
+    };
+    let secondary = match provider.as_str() {
+        "claude" => "claude.weekly",
+        "cursor" => "cursor.auto",
+        "openrouter" => "openrouter.limit",
+        _ => "codex.weekly",
+    };
+    let metric_ids: Vec<&str> = match source.as_str() {
+        "primary" | "primary_reset" => vec![primary],
+        "secondary" => vec![secondary],
+        _ if primary == secondary => vec![primary],
+        _ => vec![primary, secondary],
+    };
+    let indicators = metric_ids
+        .into_iter()
+        .map(|metric_id| {
+            let mut indicator = toml::map::Map::new();
+            indicator.insert("provider".into(), toml::Value::String(provider.clone()));
+            indicator.insert("metric_id".into(), toml::Value::String(metric_id.into()));
+            indicator.insert(
+                "limit_value".into(),
+                toml::Value::String(limit_value.clone()),
+            );
+            indicator.insert("color_mode".into(), color_mode.clone());
+            if let Some(fixed_color) = fixed_color.clone() {
+                indicator.insert("fixed_color".into(), fixed_color);
+            }
+            toml::Value::Table(indicator)
+        })
+        .collect();
+    widget
+        .entry("id")
+        .or_insert_with(|| toml::Value::String(format!("legacy-tray-{index}")));
+    widget
+        .entry("kind")
+        .or_insert_with(|| toml::Value::String("limits".into()));
+    widget.insert("indicators".into(), toml::Value::Array(indicators));
+    if !widget.contains_key("presentation") {
+        let presentation = match source.as_str() {
+            "primary_reset" => "reset_time",
+            "primary" | "secondary" => "number",
+            _ => "stacked_numbers",
+        };
+        widget.insert(
+            "presentation".into(),
+            toml::Value::String(presentation.into()),
+        );
+    }
+}
+
+pub(super) fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
+    while version < SETTINGS_VERSION {
+        match version {
+            // Version 0 was the pre-versioned format. All its property names remain
+            // compatible; serde defaults fill newly introduced notification/update fields.
+            0 => {
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(1));
+                version = 1;
+            }
+            1 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
+                    for widget in widgets {
+                        let Some(widget) = widget.as_table_mut() else {
+                            continue;
+                        };
+                        let metric = widget
+                            .remove("metric")
+                            .and_then(|value| value.as_str().map(str::to_owned));
+                        let (source, presentation) = match metric.as_deref() {
+                            Some("primary_remaining") => ("primary", "number"),
+                            Some("secondary_remaining") => ("secondary", "number"),
+                            Some("primary_reset") => ("primary_reset", "reset_time"),
+                            Some("secondary_reset") => ("primary_reset", "reset_time"),
+                            _ => ("combined", "stacked_numbers"),
+                        };
+                        widget.insert("source".into(), toml::Value::String(source.into()));
+                        widget.insert(
+                            "presentation".into(),
+                            toml::Value::String(presentation.into()),
+                        );
+                        widget.insert(
+                            "limit_value".into(),
+                            toml::Value::String("remaining".into()),
+                        );
+                    }
+                }
+                root.insert("version".into(), toml::Value::Integer(2));
+                version = 2;
+            }
+            2 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let notifications = root
+                    .entry("notifications")
+                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                if let Some(table) = notifications.as_table_mut() {
+                    table
+                        .entry("update_available")
+                        .or_insert(toml::Value::Boolean(true));
+                }
+                root.insert("version".into(), toml::Value::Integer(3));
+                version = 3;
+            }
+            3 => {
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .entry("show_usage_stats")
+                    .or_insert(toml::Value::Boolean(true));
+                document
+                    .as_table_mut()
+                    .expect("settings root was checked above")
+                    .insert("version".into(), toml::Value::Integer(4));
+                version = 4;
+            }
+            4 => {
+                // Usage activity is intentionally a compact recent view. This
+                // setting was previously informational-only, so migrate the
+                // former default rather than preserving an inaccessible 90-day
+                // value.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.insert("history_retention_days".into(), toml::Value::Integer(30));
+                root.insert("version".into(), toml::Value::Integer(5));
+                version = 5;
+            }
+            5 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("show_banked_resets")
+                    .or_insert(toml::Value::Boolean(true));
+                root.insert("version".into(), toml::Value::Integer(6));
+                version = 6;
+            }
+            6 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("provider")
+                    .or_insert(toml::Value::String("codex".into()));
+                root.insert("version".into(), toml::Value::Integer(7));
+                version = 7;
+            }
+            7 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let selected = root
+                    .remove("provider")
+                    .and_then(|value| value.as_str().map(str::to_owned));
+                let claude_enabled = selected.as_deref() == Some("claude");
+                let mut providers = toml::map::Map::new();
+                providers.insert(
+                    "codex_enabled".into(),
+                    toml::Value::Boolean(!claude_enabled),
+                );
+                providers.insert(
+                    "claude_enabled".into(),
+                    toml::Value::Boolean(claude_enabled),
+                );
+                root.insert("providers".into(), toml::Value::Table(providers));
+                root.insert("version".into(), toml::Value::Integer(8));
+                version = 8;
+            }
+            8 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("limit_refresh_interval")
+                    .or_insert(toml::Value::String("minute1".into()));
+                root.insert("version".into(), toml::Value::Integer(9));
+                version = 9;
+            }
+            9 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("show_account_name")
+                    .or_insert(toml::Value::Boolean(false));
+                root.insert("version".into(), toml::Value::Integer(10));
+                version = 10;
+            }
+            10 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let providers = root
+                    .entry("providers")
+                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                if let Some(providers) = providers.as_table_mut() {
+                    providers
+                        .entry("cursor_enabled")
+                        .or_insert(toml::Value::Boolean(false));
+                }
+                root.insert("version".into(), toml::Value::Integer(11));
+                version = 11;
+            }
+            11 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.remove("hide_plan_credits");
+                root.insert("version".into(), toml::Value::Integer(12));
+                version = 12;
+            }
+            12 => {
+                // Do not surprise existing users with onboarding after an
+                // update. Only settings files created by this version start
+                // with onboarding incomplete.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("onboarding_completed".into(), toml::Value::Boolean(true));
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(13));
+                version = 13;
+            }
+            13 => {
+                // The Home tab previously had no usage summary at all, so
+                // preserve the new feature's default when existing settings
+                // files are upgraded.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .entry("show_combined_usage_on_all_tab")
+                    .or_insert(toml::Value::Boolean(true));
+                document
+                    .as_table_mut()
+                    .expect("settings root was checked above")
+                    .insert("version".into(), toml::Value::Integer(14));
+                version = 14;
+            }
+            14 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let previous = root
+                    .remove("show_combined_usage_on_all_tab")
+                    .unwrap_or(toml::Value::Boolean(true));
+                root.entry("show_total_spend_on_all_tab")
+                    .or_insert(previous);
+                root.insert("version".into(), toml::Value::Integer(15));
+                version = 15;
+            }
+            15 => {
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .entry("total_spend_presentation")
+                    .or_insert(toml::Value::String("donut".into()));
+                document
+                    .as_table_mut()
+                    .expect("settings root was checked above")
+                    .insert("version".into(), toml::Value::Integer(16));
+                version = 16;
+            }
+            16 => {
+                // Preserve the historical Codex → Claude → Cursor presentation
+                // order for existing installs when provider reordering lands.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("provider_order").or_insert_with(|| {
+                    toml::Value::Array(
+                        MIGRATED_DRIVERS
+                            .iter()
+                            .map(|provider| toml::Value::String(provider.id().into()))
+                            .collect(),
+                    )
+                });
+                root.insert("version".into(), toml::Value::Integer(17));
+                version = 17;
+            }
+            17 => {
+                // Promote provider_order into popup_order and pin Usage Stats
+                // above the historical provider stack.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let providers = root
+                    .remove("provider_order")
+                    .and_then(|value| value.as_array().cloned())
+                    .unwrap_or_else(|| {
+                        MIGRATED_DRIVERS
+                            .iter()
+                            .map(|provider| toml::Value::String(provider.id().into()))
+                            .collect()
+                    });
+                let mut popup_order = vec![toml::Value::String("total_spend".into())];
+                for provider in providers {
+                    if let Some(id) = provider.as_str()
+                        && matches!(id, "codex" | "claude" | "cursor" | "openrouter")
+                    {
+                        popup_order.push(toml::Value::String(id.into()));
+                    }
+                }
+                for provider in MIGRATED_DRIVERS {
+                    // Home widget ids of that era.
+                    let id = match provider {
+                        ProviderKind::OpenCodeZen => "open_code_zen",
+                        ProviderKind::OpenCodeGo => "open_code_go",
+                        other => other.id(),
+                    };
+                    if !popup_order.iter().any(|value| value.as_str() == Some(id)) {
+                        popup_order.push(toml::Value::String(id.into()));
+                    }
+                }
+                root.insert("popup_order".into(), toml::Value::Array(popup_order));
+                root.insert("version".into(), toml::Value::Integer(18));
+                version = 18;
+            }
+            18 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("theme")
+                    .or_insert(toml::Value::String("auto".into()));
+                root.entry("accent_color")
+                    .or_insert(toml::Value::String("windows".into()));
+                root.entry("animations_enabled")
+                    .or_insert(toml::Value::Boolean(true));
+                root.insert("version".into(), toml::Value::Integer(19));
+                version = 19;
+            }
+            19 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let provider_flags = root
+                    .get("providers")
+                    .and_then(toml::Value::as_table)
+                    .cloned()
+                    .unwrap_or_default();
+                let popup_order = root
+                    .get("popup_order")
+                    .and_then(toml::Value::as_array)
+                    .cloned()
+                    .unwrap_or_default();
+                let mut enabled = Vec::new();
+                for value in popup_order {
+                    let Some(id) = value.as_str() else {
+                        continue;
+                    };
+                    let flag = format!("{id}_enabled");
+                    if provider_flags
+                        .get(&flag)
+                        .and_then(toml::Value::as_bool)
+                        .unwrap_or(false)
+                    {
+                        enabled.push(toml::Value::String(id.into()));
+                    }
+                }
+                for provider in MIGRATED_DRIVERS {
+                    let id = provider.id();
+                    let flag = format!("{id}_enabled");
+                    if provider_flags
+                        .get(&flag)
+                        .and_then(toml::Value::as_bool)
+                        .unwrap_or(false)
+                        && !enabled.iter().any(|value| value.as_str() == Some(id))
+                    {
+                        enabled.push(toml::Value::String(id.into()));
+                    }
+                }
+                let mut providers = toml::map::Map::new();
+                providers.insert("enabled".into(), toml::Value::Array(enabled));
+                root.insert("providers".into(), toml::Value::Table(providers));
+                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
+                    for (index, value) in widgets.iter_mut().enumerate() {
+                        let Some(widget) = value.as_table_mut() else {
+                            continue;
+                        };
+                        if widget.contains_key("indicators") {
+                            continue;
+                        }
+                        convert_legacy_tray_widget(widget, index);
+                    }
+                }
+                root.insert("version".into(), toml::Value::Integer(20));
+                version = 20;
+            }
+            20 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
+                    for value in widgets.iter_mut() {
+                        let Some(widget) = value.as_table_mut() else {
+                            continue;
+                        };
+                        let color_mode = widget
+                            .remove("color_mode")
+                            .unwrap_or_else(|| toml::Value::String("status".into()));
+                        let fixed_color = widget.remove("fixed_color");
+                        let Some(toml::Value::Array(indicators)) = widget.get_mut("indicators")
+                        else {
+                            continue;
+                        };
+                        for indicator_value in indicators.iter_mut() {
+                            let Some(indicator) = indicator_value.as_table_mut() else {
+                                continue;
+                            };
+                            indicator.entry("color_mode").or_insert(color_mode.clone());
+                            if let Some(fixed_color) = fixed_color.clone() {
+                                indicator.entry("fixed_color").or_insert(fixed_color);
+                            }
+                        }
+                    }
+                }
+                root.insert("version".into(), toml::Value::Integer(21));
+                version = 21;
+            }
+            21 => {
+                // Preserve the historical Thirty Days default for existing installs.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .entry("total_spend_period")
+                    .or_insert(toml::Value::String("thirty_days".into()));
+                document
+                    .as_table_mut()
+                    .expect("settings root was checked above")
+                    .insert("version".into(), toml::Value::Integer(22));
+                version = 22;
+            }
+            22 => {
+                // `codex_path` remains optional: absent means automatic
+                // discovery, which preserves existing installations exactly.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(23));
+                version = 23;
+            }
+            23 => {
+                // The new provider paths are optional. Missing values retain
+                // automatic discovery for Claude and Cursor.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(24));
+                version = 24;
+            }
+            24 | 25 => {
+                // No released build wrote these versions. Step through them
+                // so the instance migration still runs for older files.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(26));
+                version = 26;
+            }
+            26 => {
+                // Manual OpenCode keys are stored outside settings. These
+                // non-secret revisions only wake already-running workers.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("opencode_zen_credentials_revision")
+                    .or_insert(toml::Value::Integer(0));
+                root.entry("opencode_go_credentials_revision")
+                    .or_insert(toml::Value::Integer(0));
+                root.entry("openrouter_credentials_revision")
+                    .or_insert(toml::Value::Integer(0));
+                root.insert("version".into(), toml::Value::Integer(27));
+                version = 27;
+            }
+            27 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("openrouter_accounts")
+                    .or_insert_with(|| toml::Value::Array(Vec::new()));
+                root.insert("version".into(), toml::Value::Integer(28));
+                version = 28;
+            }
+            28 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let show_banked_resets = root
+                    .get("show_banked_resets")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(true);
+                let show_usage_stats = root
+                    .get("show_usage_stats")
+                    .and_then(toml::Value::as_bool)
+                    .unwrap_or(true);
+                let mut bricks = toml::map::Map::new();
+                for provider in MIGRATED_DRIVERS {
+                    for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+                        let (all_tab, provider_tab) = if brick_id.ends_with(".usage") {
+                            (false, show_usage_stats)
+                        } else if brick_id.ends_with(".resets") {
+                            (show_banked_resets, show_banked_resets)
+                        } else {
+                            let default = PopupVisibility::default_brick_visibility(&brick_id);
+                            (default.all_tab, default.provider_tab)
+                        };
+                        let mut entry = toml::map::Map::new();
+                        entry.insert("all_tab".into(), toml::Value::Boolean(all_tab));
+                        entry.insert("provider_tab".into(), toml::Value::Boolean(provider_tab));
+                        bricks.insert(brick_id, toml::Value::Table(entry));
+                    }
+                }
+                let mut popup_visibility = toml::map::Map::new();
+                popup_visibility.insert("bricks".into(), toml::Value::Table(bricks));
+                root.insert(
+                    "popup_visibility".into(),
+                    toml::Value::Table(popup_visibility),
+                );
+                root.remove("show_banked_resets");
+                root.remove("show_usage_stats");
+                root.insert("version".into(), toml::Value::Integer(29));
+                version = 29;
+            }
+            29 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                if !root.contains_key("time_format") {
+                    root.insert(
+                        "time_format".into(),
+                        toml::Value::String(TimeFormat::from_windows().as_str().into()),
+                    );
+                }
+                root.insert("version".into(), toml::Value::Integer(30));
+                version = 30;
+            }
+            30 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("auto_activation_pauses")
+                    .or_insert_with(|| toml::Value::Array(Vec::new()));
+                root.insert("version".into(), toml::Value::Integer(31));
+                version = 31;
+            }
+            31 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("bottom_bar_size")
+                    .or_insert_with(|| toml::Value::String("comfortable".into()));
+                root.entry("popup_corner_radius")
+                    .or_insert_with(|| toml::Value::String("small".into()));
+                root.insert("version".into(), toml::Value::Integer(32));
+                version = 32;
+            }
+            32 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("popup_background_material")
+                    .or_insert_with(|| toml::Value::String("acrylic".into()));
+                root.insert("version".into(), toml::Value::Integer(33));
+                version = 33;
+            }
+            33 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("usage_refresh_interval")
+                    .or_insert_with(|| toml::Value::String("minutes15".into()));
+                root.insert("version".into(), toml::Value::Integer(34));
+                version = 34;
+            }
+            34 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("usage_stats_enabled")
+                    .or_insert(toml::Value::Boolean(true));
+                root.insert("version".into(), toml::Value::Integer(35));
+                version = 35;
+            }
+            35 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("reset_announcement_refresh_interval")
+                    .or_insert_with(|| toml::Value::String("hour1".into()));
+                let notifications = root
+                    .entry("notifications")
+                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                if let Some(table) = notifications.as_table_mut() {
+                    table
+                        .entry("forced_reset_feed_enabled")
+                        .or_insert(toml::Value::Boolean(true));
+                    table
+                        .entry("forced_reset_notifications")
+                        .or_insert(toml::Value::Boolean(true));
+                }
+                root.insert("version".into(), toml::Value::Integer(36));
+                version = 36;
+            }
+            36 => {
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                root.entry("usage_stats_excluded_providers")
+                    .or_insert_with(|| toml::Value::Array(Vec::new()));
+                root.insert("version".into(), toml::Value::Integer(37));
+                version = 37;
+            }
+            37 => {
+                // Antigravity and Grok CLI folders are optional. Missing values
+                // retain automatic discovery for existing installations.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(38));
+                version = 38;
+            }
+            38 => {
+                migrate_to_instances(document)?;
+                version = INSTANCES_VERSION;
+            }
+            39 => {
+                // The global legacy-cards switch became the Classic layout of
+                // each Home provider widget that still used ordinary cards.
+                let root = document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?;
+                let legacy_cards = root
+                    .remove("compact_usage_cards")
+                    .and_then(|value| value.as_bool())
+                    == Some(false);
+                if legacy_cards {
+                    let ids = root
+                        .get("instances")
+                        .and_then(toml::Value::as_array)
+                        .into_iter()
+                        .flatten()
+                        .filter_map(|instance| instance.get("id")?.as_str().map(str::to_owned))
+                        .collect::<Vec<_>>();
+                    let layouts = root
+                        .entry("popup_home_card_layouts")
+                        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
+                    if let Some(layouts) = layouts.as_table_mut() {
+                        for id in ids {
+                            layouts
+                                .entry(id)
+                                .or_insert_with(|| toml::Value::String("classic".into()));
+                        }
+                    }
+                }
+                root.insert("version".into(), toml::Value::Integer(40));
+                version = 40;
+            }
+            40 => {
+                // The taskbar widget is switched on after decoding, where its
+                // default widget can be built from the enabled providers.
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert("version".into(), toml::Value::Integer(41));
+                version = 41;
+            }
+            // Unknown future/gap versions: stamp current and keep decoding with
+            // serde defaults rather than refusing to start.
+            _ => {
+                document
+                    .as_table_mut()
+                    .context("settings root must be a TOML table")?
+                    .insert(
+                        "version".into(),
+                        toml::Value::Integer(i64::from(SETTINGS_VERSION)),
+                    );
+                version = SETTINGS_VERSION;
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
