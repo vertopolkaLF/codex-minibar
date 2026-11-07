@@ -236,7 +236,13 @@ pub fn finish_startup() {
     // The helper that relaunched us is still running and removes its own
     // staging (`finally` in apply-update.ps1); leave it to the helper then.
     let sweep_staging = updated.is_none();
-    thread::spawn(move || cleanup_install_dir(sweep_staging));
+    thread::spawn(move || {
+        // A helper may still be copying from its staging even without the
+        // success marker (it writes the marker last), e.g. when the user
+        // starts the app by hand mid-update; give it time to finish first.
+        thread::sleep(Duration::from_secs(30));
+        cleanup_install_dir(sweep_staging);
+    });
 }
 
 /// The finished-update card; [`crate::whats_new`] fills in the summary.

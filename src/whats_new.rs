@@ -254,8 +254,7 @@ fn decide(
     }
 }
 
-/// The summary as a notification. While the "Update complete" card of an
-/// in-place update is up it fills that card; otherwise it is its own card.
+/// The summary as its own card.
 fn notification(content: Content) -> Notification {
     let version = content.version.clone();
     Notification::new(
@@ -263,7 +262,6 @@ fn notification(content: Content) -> Notification {
         crate::i18n::tr("what-s-new"),
         &crate::i18n::format("version", &[("v0", version.clone())]),
     )
-    .filling(crate::notifications::UPDATE_COMPLETE_KEY)
     .with_summary(content)
     .with_action(
         crate::i18n::tr("full-release-notes"),
@@ -358,7 +356,9 @@ fn run(onboarding_completed: bool) {
         match fetch(&version, crate::i18n::current_language()) {
             Ok(Fetched::Ready(content)) => {
                 mark_seen(&version);
-                notify(notification(content));
+                // While the "Update complete" card of an in-place update is
+                // up the summary fills that card instead.
+                notify(notification(content).filling(crate::notifications::UPDATE_COMPLETE_KEY));
                 return;
             }
             Ok(Fetched::Missing) if Utc::now() - pending_since > MISSING_GRACE => {

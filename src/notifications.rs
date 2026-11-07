@@ -330,8 +330,14 @@ pub fn notify(notification: Notification) {
     }
     // Progress ticks arrive many times a second; only results are logged.
     if notification.progress.is_none() {
+        // A filling card may still be held back by the host.
+        let outcome = if notification.fills.is_some() {
+            "queued"
+        } else {
+            "shown"
+        };
         crate::logger::info(format!(
-            "Notification shown: {} — {}",
+            "Notification {outcome}: {} — {}",
             notification.title, notification.body
         ));
     }
