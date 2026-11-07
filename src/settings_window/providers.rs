@@ -1,5 +1,5 @@
-//! Provider pages: credential persistence and the
-//! shared model behind the page (`page`) and its dialogs (`dialog`).
+//! Provider pages: credential persistence and the shared model behind the
+//! page (`page`) and its dialogs (`dialog`).
 
 use crate::drivers::{InstallSource, InstallStatus};
 use crate::limits::{OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, SpendingSummary};

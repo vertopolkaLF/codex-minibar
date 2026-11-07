@@ -400,6 +400,8 @@ mod os {
         if handle.is_null() {
             return None;
         }
+        // SAFETY: `handle` is a non-null process handle that OpenProcess just
+        // returned and nothing else owns, so `OwnedHandle` closes it exactly once.
         let process = Process(unsafe { OwnedHandle::from_raw_handle(handle) });
         let mut path = [0_u16; 1024];
         let mut len = path.len() as u32;

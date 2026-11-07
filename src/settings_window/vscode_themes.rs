@@ -1064,10 +1064,11 @@ fn decode_bounded_raster(bytes: &[u8]) -> Option<image::DynamicImage> {
     reader.decode().ok()
 }
 
-/// Marketplace icons should be PNG, but older packages ship JPEG or SVG;
-/// sniff the bytes rather than trust the file name.
 /// A logo as BGRA pixels at most `ICON_PIXELS` on a side. Only the first
 /// frame of an animated logo is kept.
+///
+/// Marketplace icons should be PNG, but older packages ship JPEG or SVG;
+/// sniff the bytes rather than trust the file name.
 fn decode_icon(bytes: &[u8]) -> Option<gpui::RenderImage> {
     let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512)]);
     let image = if head.contains("<svg") {

@@ -456,7 +456,7 @@ impl SettingsWindow {
         if self.detection_inputs.as_ref() == Some(&inputs) && self.detection_revision == revision {
             return;
         }
-        // Only a path edit resets rows to "Checkingâ€¦". A credential change
+        // Only a path edit resets rows to "Checking…". A credential change
         // re-detects quietly so saved keys do not flash the page.
         let previous = self.detection_inputs.replace(inputs.clone());
         self.detection_revision = revision;

@@ -81,8 +81,8 @@ impl AccentColor {
     }
 }
 
-/// Density presets for the popup footer. `Comfortable` preserves the original
-/// footer proportions; `Compact` is the newer, tighter presentation.
+/// Density presets for the popup footer: the roomier `Comfortable` default
+/// or the tighter `Compact`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BottomBarSize {
@@ -175,8 +175,7 @@ impl BottomBarSize {
     }
 }
 
-/// Discrete popup corner-radius choices. The historical 8 DIP radius is the
-/// default; larger values remain available for the softer modern shell.
+/// Discrete popup corner-radius choices; 8 DIP (`Small`) is the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupCornerRadius {
@@ -786,7 +785,6 @@ impl ScheduledActivation {
         }
     }
 
-    /// Rules bind to one provider instance by id.
     /// The instance this rule binds to, resolved against published settings.
     pub fn provider(&self) -> Option<ProviderId> {
         ProviderId::lookup(&self.provider_id)
@@ -863,8 +861,7 @@ impl AutoActivationPause {
         }
     }
 
-    /// Pauses bind to one provider instance by id.
-    /// The instance this rule binds to, resolved against published settings.
+    /// The instance this pause binds to, resolved against published settings.
     pub fn provider(&self) -> Option<ProviderId> {
         ProviderId::lookup(&self.provider_id)
     }
@@ -1287,7 +1284,7 @@ pub enum HomeCardLayout {
     Rings,
     /// Compact tiles, two per row, with the progress filling the background.
     Tiles,
-    /// The older cards with a header, a thin bar and a footer.
+    /// Cards with a header, a thin bar and a footer.
     Classic,
 }
 
@@ -1908,9 +1905,9 @@ pub struct Settings {
     /// App-level accessibility override. The Windows animation preference is
     /// still honored when this remains enabled.
     pub animations_enabled: bool,
-    /// Popup footer density; the historical, roomier footer is the default.
+    /// Popup footer density.
     pub bottom_bar_size: BottomBarSize,
-    /// Popup outer corner radius in DIPs; 8 DIP preserves the historical look.
+    /// Popup outer corner radius.
     pub popup_corner_radius: PopupCornerRadius,
     /// Material used by the popup's full-window background.
     pub popup_background_material: PopupBackgroundMaterial,
@@ -2928,7 +2925,7 @@ mod tests {
         assert_eq!(loaded.version, SETTINGS_VERSION);
         assert!(loaded.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
         let raw = fs::read_to_string(path).unwrap();
-        // The selection now lives on each instance.
+        // The exclusion list became a per-instance switch.
         assert!(!raw.contains("usage_stats_excluded_providers"));
         assert!(raw.contains("usage_stats = true"));
         assert_eq!(

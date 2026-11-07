@@ -51,7 +51,7 @@ Before finishing appearance work, review both cold-start paths (popup first and 
 
 ## Settings window
 
-The Settings and onboarding windows are GPUI windows in the same application as the popup (`src/settings_window`). Build UI from `kit.rs` components; every edit goes through `SettingsWindow::edit`, which updates the local snapshot immediately and queues the write on the serial settings writer. Committed changes from any surface flow back through `sync_open_window`.
+The Settings and onboarding windows are GPUI windows in the same application as the popup (`src/settings_window`). Build UI from `src/gui/kit.rs` components; every edit goes through `Host::edit` (the trait in `src/settings_window.rs` that `SettingsWindow` and `OnboardingWindow` implement), which updates the window's snapshot immediately and queues the changed settings on the serial settings writer. Committed changes from any surface flow back through `sync_open_window`.
 
 ## Provider UI guardrails
 

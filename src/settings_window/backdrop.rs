@@ -80,9 +80,9 @@ impl Backdrop {
         self.mica
     }
 
-    /// Tint the backdrop, frame and caption strip for the resolved theme. Cheap to call
-    /// every frame: DWM is only touched when the theme or the system
-    /// appearance (which GPUI mirrors into the frame) changes.
+    /// Tint the backdrop, frame and caption strip for the resolved theme.
+    /// Cheap to call every frame: DWM is only touched when the theme or the
+    /// system appearance (which GPUI mirrors into the frame) changes.
     pub(crate) fn sync(&mut self, dark: bool, appearance: WindowAppearance) {
         if self.applied == Some((dark, appearance)) {
             return;

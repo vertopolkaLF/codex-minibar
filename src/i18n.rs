@@ -1,7 +1,7 @@
 //! Embedded Fluent catalogs. English is the source and per-message fallback.
 //!
-//! Static messages are resolved once for each supported language; returning a
-//! stable reference keeps the existing UI builders and borrowed labels simple.
+//! Static messages are resolved once for each supported language, so lookups
+//! return `&'static str` and labels can be borrowed freely.
 //! Parameterized messages are resolved on the calling thread, never translated
 //! by matching rendered text (account names, paths and API data stay untouched).
 use fluent_bundle::{FluentArgs, FluentBundle, FluentResource};
