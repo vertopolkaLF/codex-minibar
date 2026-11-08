@@ -59,6 +59,17 @@ fn apply_presentation(before: Option<&Settings>, settings: &Settings) {
     if changed(|a, b| a.animations_enabled == b.animations_enabled) {
         crate::ui::theme::set_animations_enabled(settings.animations_enabled);
     }
+    if changed(|a, b| {
+        a.usage_currency == b.usage_currency
+            && a.usage_currency_symbol == b.usage_currency_symbol
+            && a.usage_currency_symbol_after == b.usage_currency_symbol_after
+    }) {
+        crate::format::currency::select(
+            &settings.usage_currency,
+            &settings.usage_currency_symbol,
+            settings.usage_currency_symbol_after,
+        );
+    }
     if changed(|a, b| a.time_format == b.time_format) {
         settings.time_format.apply();
     }

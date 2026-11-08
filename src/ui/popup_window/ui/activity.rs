@@ -19,6 +19,7 @@ use super::{
     theme::Palette,
     tooltip::{ActivityTip, TipContent},
 };
+use crate::format::currency;
 use crate::providers::registry::UsageValue;
 use crate::ui::gui::{color::HslaExt, fx};
 use crate::ui::popup_window::*;
@@ -194,14 +195,14 @@ pub(crate) fn visible_tokens(usage: &TokenUsage, mask: u8) -> u64 {
 
 pub(crate) fn cost_label(usage: &TokenUsage) -> String {
     if usage.priced_requests > 0 {
-        let value = format_micro_usd(usage.estimated_cost_microusd);
+        let value = currency::format(usage.estimated_cost_microusd);
         if usage.priced_requests < usage.requests {
             crate::i18n::format("value-partially-priced", &[("value", value.to_string())])
         } else {
             value
         }
     } else if usage.requests == 0 {
-        "$0.00".into()
+        currency::format(0)
     } else {
         crate::i18n::tr("unavailable").into()
     }
@@ -1045,13 +1046,13 @@ impl PopupRoot {
                 } else if !available {
                     crate::i18n::tr("no-token-data-for-this-period")
                 } else if cost {
-                    crate::i18n::tr("daily-cost-in-usd")
+                    crate::i18n::tr("currency-daily-cost")
                 } else {
                     crate::i18n::tr("daily-token-volume")
                 };
                 QuietSegment {
                     label: if cost {
-                        "$".into()
+                        currency::symbol().into()
                     } else {
                         crate::i18n::tr("tokens").into()
                     },
@@ -1432,7 +1433,7 @@ impl PopupRoot {
             return ActivityTip::Models {
                 title,
                 metric: if cost {
-                    crate::i18n::tr("cost-usd-by-model").into()
+                    crate::i18n::tr("currency-cost-by-model").into()
                 } else {
                     crate::i18n::tr("tokens-by-model").into()
                 },
@@ -1442,9 +1443,9 @@ impl PopupRoot {
         }
         let usage = &bucket.usage;
         let cost = if usage.priced_requests > 0 {
-            format_micro_usd(usage.estimated_cost_microusd)
+            currency::format(usage.estimated_cost_microusd)
         } else if usage.requests == 0 {
-            "$0.00".into()
+            currency::format(0)
         } else {
             crate::i18n::tr("unavailable").into()
         };
@@ -1513,7 +1514,7 @@ fn usage_card_metrics(
     let row = div().flex().flex_row().w_full().gap(px(8.0));
     let usage_value = crate::providers::registry::descriptor(provider).usage_value;
     if usage_value == UsageValue::Spend {
-        let spend = |usage: &TokenUsage| format_micro_usd(usage.estimated_cost_microusd);
+        let spend = |usage: &TokenUsage| currency::format(usage.estimated_cost_microusd);
         return row
             .child(metric_cell(
                 crate::i18n::tr("today").into(),
@@ -1538,7 +1539,7 @@ fn usage_card_metrics(
             if exact { "=" } else { "≈" },
             usage
                 .estimated_api_value_usd()
-                .map(format_usd)
+                .map(currency::format_dollars)
                 .unwrap_or_else(|| crate::i18n::tr("no-data").into())
         )
     };

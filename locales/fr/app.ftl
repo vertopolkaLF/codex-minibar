@@ -3074,3 +3074,19 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Dossie
 
 linux-folder-with-grok-cli = Dossier contenant l’exécutable grok. Laissez vide pour le trouver automatiquement.
 linux-folder-with-command-code-cli = Dossier contenant command-code ou cmd. Laissez vide pour le trouver automatiquement.
+
+usage-currency = Devise des coûts
+usage-currency-description = Afficher les coûts, y compris l’historique, au dernier taux disponible.
+currency-unavailable = Taux indisponible ; affichage en USD
+currency-cached = Taux enregistré
+currency-latest = Dernier taux
+currency-usd = Devise des coûts : USD
+currency-daily-cost = Coût quotidien dans la devise choisie
+currency-cost-by-model = Coût par modèle
+no-matching-currencies = Aucune devise correspondante
+currency-symbol = Symbole monétaire
+currency-symbol-description = Affiché tel que saisi, espaces compris. Laissez vide pour la valeur par défaut.
+currency-symbol-position = Position du symbole
+currency-symbol-before = Avant le montant
+currency-symbol-after = Après le montant
+currency-source = Taux fournis par Exchange Rate API

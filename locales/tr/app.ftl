@@ -3045,3 +3045,19 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy ç
 
 linux-folder-with-grok-cli = grok yürütülebilir dosyasının bulunduğu klasör. Otomatik bulmak için boş bırakın.
 linux-folder-with-command-code-cli = command-code veya cmd içeren klasör. Otomatik bulmak için boş bırakın.
+
+usage-currency = Kullanım para birimi
+usage-currency-description = Geçmiş dahil kullanım maliyetlerini son kullanılabilir kurla gösterir.
+currency-unavailable = Kur yok; USD gösteriliyor
+currency-cached = Kayıtlı kur
+currency-latest = Son kur
+currency-usd = Maliyet para birimi: USD
+currency-daily-cost = Seçilen para biriminde günlük maliyet
+currency-cost-by-model = Modele göre maliyet
+no-matching-currencies = Eşleşen para birimi yok
+currency-symbol = Para birimi simgesi
+currency-symbol-description = Boşluklar dahil, yazıldığı gibi gösterilir. Varsayılan için boş bırakın.
+currency-symbol-position = Simge konumu
+currency-symbol-before = Tutardan önce
+currency-symbol-after = Tutardan sonra
+currency-source = Kurlar: Exchange Rate API

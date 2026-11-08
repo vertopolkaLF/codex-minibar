@@ -2168,3 +2168,19 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Carpet
 
 linux-folder-with-grok-cli = Carpeta con el ejecutable grok. Déjala vacía para buscarlo automáticamente.
 linux-folder-with-command-code-cli = Carpeta con command-code o cmd. Déjala vacía para buscarlo automáticamente.
+
+usage-currency = Moneda de los costes
+usage-currency-description = Mostrar los costes, incluido el historial, al último tipo de cambio disponible.
+currency-unavailable = Tipo no disponible; se muestra USD
+currency-cached = Tipo guardado
+currency-latest = Último tipo
+currency-usd = Moneda de costes: USD
+currency-daily-cost = Coste diario en la moneda elegida
+currency-cost-by-model = Coste por modelo
+no-matching-currencies = No hay monedas coincidentes
+currency-symbol = Símbolo de moneda
+currency-symbol-description = Se muestra tal como se escribe, con espacios incluidos. Déjalo vacío para usar el predeterminado.
+currency-symbol-position = Posición del símbolo
+currency-symbol-before = Antes del importe
+currency-symbol-after = Después del importe
+currency-source = Tipos de cambio de Exchange Rate API

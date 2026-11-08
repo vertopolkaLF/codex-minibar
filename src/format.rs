@@ -1,6 +1,7 @@
 //! Display strings shared by the popup, tray, taskbar, Command Palette and
 //! notifications.
 
+pub mod currency;
 pub mod money;
 
 use chrono::{DateTime, Utc};

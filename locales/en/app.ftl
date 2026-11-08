@@ -3066,3 +3066,19 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Folder
 
 linux-folder-with-grok-cli = Folder with the grok executable. Leave empty to find it automatically.
 linux-folder-with-command-code-cli = Folder with command-code or cmd. Leave empty to find it automatically.
+
+usage-currency = Usage currency
+usage-currency-description = Display usage costs at the latest available rate, including historical usage.
+currency-unavailable = Rate unavailable; showing USD
+currency-cached = Cached rate
+currency-latest = Latest rate
+currency-usd = Usage currency: USD
+currency-daily-cost = Daily cost in the selected currency
+currency-cost-by-model = Cost by model
+no-matching-currencies = No matching currencies
+currency-symbol = Currency symbol
+currency-symbol-description = Shown exactly as typed, spaces included. Leave empty for the default.
+currency-symbol-position = Symbol position
+currency-symbol-before = Before amount
+currency-symbol-after = After amount
+currency-source = Rates by Exchange Rate API
