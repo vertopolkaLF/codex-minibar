@@ -73,6 +73,8 @@ pub use keyboard::*;
 pub use keystroke::*;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+pub use linux::set_x11_opaque_without_shm_present;
+#[cfg(any(target_os = "linux", target_os = "freebsd"))]
 pub(crate) use linux::*;
 #[cfg(target_os = "macos")]
 pub(crate) use mac::*;

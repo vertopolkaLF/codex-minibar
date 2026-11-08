@@ -60,6 +60,11 @@ pub unsafe fn select_driver() {
         unsafe { std::env::set_var(name, &manifest) };
     }
     let outcome = if host_renders() {
+        // The bundled lavapipe comes from the build host's Mesa. Before 24.1,
+        // Mesa presents to X servers without DRI3 (Xvfb, most VNC and remote
+        // servers) with 24-bit PutImage requests, which GPUI's 32-bit windows
+        // reject: they would stay black. Those servers get opaque windows.
+        gpui::set_x11_opaque_without_shm_present(true);
         "no usable Vulkan device; rendering with the bundled software driver (lavapipe)"
     } else {
         "no usable Vulkan device, and the bundled software driver (lavapipe) failed too"
