@@ -260,7 +260,7 @@ Codex Minibar also runs on Linux desktops under Wayland and X11. Download from t
 [latest release](https://github.com/vertopolkaLF/codex-minibar/releases/latest):
 
 - **Debian/Ubuntu:** `sudo apt install ./codex-minibar_<version>_amd64.deb`
-- **Any distribution, no install:** make `codex-minibar-<version>-linux-x64.AppImage` executable
+- **Any distribution, no install:** make `codex-minibar-<version>-x86_64.AppImage` executable
   and run it. If FUSE mounting is unavailable, add `--appimage-extract-and-run`;
   generated launchers and autostart entries preserve that mode, as does updating.
   Managed launches use separate temporary extraction directories, so opening the
@@ -269,7 +269,7 @@ Codex Minibar also runs on Linux desktops under Wayland and X11. Download from t
   (or `sudo zypper install ...`).
 - **Arch Linux:** build the `PKGBUILD` attached to each release with `makepkg -si`
   (it packages the release tarball as `codex-minibar-bin`).
-- **Other distributions:** extract `codex-minibar-<version>-linux-x64.tar.gz` and run
+- **Other distributions:** extract `codex-minibar-<version>-x86_64.tar.gz` and run
   `./install.sh` to install into `~/.local`, or run `bin/codex-minibar` in place.
 
 Portable AppImage and tarball installs also need `xdg-utils` for opening links

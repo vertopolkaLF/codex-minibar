@@ -117,6 +117,9 @@ static HOLDER: Mutex<Option<File>> = Mutex::new(None);
 
 impl SingleInstance {
     /// Returns `None` after asking the primary process to show itself.
+    ///
+    /// `main` calls this before any thread exists; the primary instance
+    /// adjusts its environment here before starting the first one.
     pub fn acquire_or_activate_existing() -> Result<Option<Self>> {
         let (lock_path, socket_path) = paths()?;
         if let Some(parent) = lock_path.parent() {
@@ -134,6 +137,10 @@ impl SingleInstance {
             activate_existing(&socket_path);
             return Ok(None);
         }
+        // This is the primary instance, and no thread has started yet: the
+        // listener below is the first. Choose the Vulkan driver GPUI will use.
+        // SAFETY: the process is still single-threaded (see above).
+        unsafe { super::vulkan::select_driver() };
         // The lock proves no other instance is listening: a socket file left
         // behind by a crash is stale.
         let _ = std::fs::remove_file(&socket_path);

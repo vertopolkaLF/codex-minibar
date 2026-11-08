@@ -20,6 +20,7 @@ pub mod notify;
 pub(crate) mod provider_env;
 pub(crate) mod resume;
 pub mod update;
+pub mod vulkan;
 
 pub mod wake;
 

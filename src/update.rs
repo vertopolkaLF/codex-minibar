@@ -1013,16 +1013,18 @@ mod tests {
         let digest = format!("sha256:{}", "a".repeat(64));
         let assets = [
             asset("codex-minibar-2.0.0-x64-portable.zip", Some(&digest)),
-            asset("codex-minibar-2.0.0-linux-x64.tar.gz", None),
+            asset("codex-minibar-2.0.0-x86_64.tar.gz", None),
+            asset("codex-minibar-2.0.0-x86_64.AppImage", Some(&digest)),
+            // Copies under the old names, for updaters up to 1.5.x.
             asset("codex-minibar-2.0.0-linux-x64.AppImage", Some(&digest)),
         ];
         let select = |suffix| select_linux_asset(&assets, suffix).map(|a| a.name.as_str());
         assert_eq!(
-            select(Some("-linux-x64.AppImage")),
-            Some("codex-minibar-2.0.0-linux-x64.AppImage")
+            select(Some("-x86_64.AppImage")),
+            Some("codex-minibar-2.0.0-x86_64.AppImage")
         );
-        assert_eq!(select(Some("-linux-x64.tar.gz")), None);
-        assert_eq!(select(Some("-linux-arm64.AppImage")), None);
+        assert_eq!(select(Some("-x86_64.tar.gz")), None);
+        assert_eq!(select(Some("-aarch64.AppImage")), None);
         assert_eq!(select(None), None);
     }
 

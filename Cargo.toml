@@ -79,6 +79,9 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Graphic
 # (already used by GPUI), the Secret Service.
 [target.'cfg(not(windows))'.dependencies]
 ashpd = { version = "0.12", default-features = false, features = ["async-std"] }
+# GPUI's renderer, probed at startup to pick the AppImage's software Vulkan
+# fallback (src/platform/linux/vulkan.rs). Keep it on GPUI's version.
+blade-graphics = "0.7"
 flate2 = "1"
 font-kit = { package = "zed-font-kit", version = "0.14.1-zed", features = ["source-fontconfig-dlopen"] }
 # The workspace-wide entry disables GPUI's defaults (Windows needs none of

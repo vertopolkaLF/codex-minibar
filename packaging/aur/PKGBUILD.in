@@ -17,7 +17,7 @@ optdepends=('xdg-desktop-portal: desktop settings, accent color and autostart'
 provides=('codex-minibar')
 conflicts=('codex-minibar')
 options=('!strip' '!debug')
-source=("$url/releases/download/v$pkgver/codex-minibar-$pkgver-linux-x64.tar.gz")
+source=("$url/releases/download/v$pkgver/codex-minibar-$pkgver-x86_64.tar.gz")
 sha256sums=('@SHA256@')
 
 package() {

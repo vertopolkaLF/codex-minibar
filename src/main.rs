@@ -34,6 +34,8 @@ fn run() -> Result<()> {
     // them (language first), then workers, then windows.
     logger::initialize(&paths::log()?)?;
     #[cfg(not(windows))]
+    codex_minibar::platform::linux::vulkan::log_outcome();
+    #[cfg(not(windows))]
     if let Err(error) =
         futures::executor::block_on(codex_minibar::platform::linux::identity::register_portal())
     {

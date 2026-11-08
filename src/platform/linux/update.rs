@@ -116,9 +116,15 @@ pub fn asset_suffix(arch: &str) -> Option<String> {
 }
 
 fn suffix_for(kind: &InstallKind, arch: &str) -> Option<String> {
+    // Linux packages name the architecture as `uname -m` does.
+    let arch = match arch {
+        "x64" => "x86_64",
+        "arm64" => "aarch64",
+        other => other,
+    };
     match kind {
-        InstallKind::AppImage(_) => Some(format!("-linux-{arch}.AppImage")),
-        InstallKind::Tarball { .. } => Some(format!("-linux-{arch}.tar.gz")),
+        InstallKind::AppImage(_) => Some(format!("-{arch}.AppImage")),
+        InstallKind::Tarball { .. } => Some(format!("-{arch}.tar.gz")),
         InstallKind::Unmanaged => None,
     }
 }
@@ -508,11 +514,11 @@ mod tests {
         };
         assert_eq!(
             suffix_for(&InstallKind::AppImage(PathBuf::new()), "x64").as_deref(),
-            Some("-linux-x64.AppImage")
+            Some("-x86_64.AppImage")
         );
         assert_eq!(
             suffix_for(&tarball, "arm64").as_deref(),
-            Some("-linux-arm64.tar.gz")
+            Some("-aarch64.tar.gz")
         );
         assert_eq!(suffix_for(&InstallKind::Unmanaged, "x64"), None);
     }
