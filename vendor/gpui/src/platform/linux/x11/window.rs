@@ -229,11 +229,14 @@ fn find_visuals(xcb: &XCBConnection, screen_index: usize) -> VisualSet {
 }
 
 /// codex-minibar patch: whether a software Vulkan driver can present to this X
-/// server through shared-memory pixmaps, which Mesa uses only with DRI3,
-/// Present and MIT-SHM that supports shared pixmaps. Without them it falls
-/// back to PutImage requests.
+/// server through shared-memory pixmaps. This mirrors Mesa's check (in
+/// `wsi_x11_connection_create`): DRI3, Present and MIT-SHM with shared
+/// pixmaps, and a `ShmDetach` of segment 0 that fails with anything but
+/// `BadRequest` (remote clients get `BadRequest`). Otherwise Mesa falls back
+/// to PutImage requests.
 fn has_shm_present(xcb: &XCBConnection) -> bool {
-    use x11rb::protocol::shm::ConnectionExt as _;
+    use x11rb::errors::ReplyError;
+    use x11rb::protocol::{ErrorKind, shm::ConnectionExt as _};
 
     let extensions = [&b"DRI3"[..], b"Present", b"MIT-SHM"]
         .into_iter()
@@ -249,6 +252,12 @@ fn has_shm_present(xcb: &XCBConnection) -> bool {
             .ok()
             .and_then(|cookie| cookie.reply().ok())
             .is_some_and(|reply| reply.shared_pixmaps)
+        && xcb.shm_detach(0).ok().is_some_and(|cookie| {
+            matches!(
+                cookie.check(),
+                Err(ReplyError::X11Error(error)) if error.error_kind != ErrorKind::Request
+            )
+        })
 }
 
 struct RawWindow {
