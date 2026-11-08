@@ -3046,3 +3046,18 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy �
 
 linux-folder-with-grok-cli = grok 実行ファイルがあるフォルダー。空欄にすると自動検索します。
 linux-folder-with-command-code-cli = command-code または cmd があるフォルダー。空欄にすると自動検索します。
+
+usage-currency = 使用料金の通貨
+usage-currency-description = 過去の使用量を含む料金を最新の利用可能な為替レートで表示します。
+currency-unavailable = レート未取得：USDで表示
+currency-cached = 保存済みレート
+currency-latest = 最新レート
+currency-usd = 料金の通貨：USD
+currency-daily-cost = 選択した通貨での1日の料金
+currency-cost-by-model = モデル別料金
+no-matching-currencies = 一致する通貨がありません
+currency-symbol = 通貨記号
+currency-symbol-description = 入力したとおりにスペースも含めて表示されます。空欄にすると既定の記号を使います。
+currency-symbol-position = 記号の位置
+currency-symbol-before = 金額の前
+currency-symbol-after = 金額の後

@@ -320,6 +320,8 @@ struct Bridge {
     incident_notified_ids: HashSet<String>,
     usage_clear_generation: u64,
     pending_usage_clear: Option<(u64, Vec<ProviderId>)>,
+    /// Display currency or rates last painted; see [`crate::format::currency`].
+    currency_generation: u64,
 }
 
 impl Bridge {
@@ -345,6 +347,7 @@ impl Bridge {
             incident_notified_ids: HashSet::new(),
             usage_clear_generation: 0,
             pending_usage_clear: None,
+            currency_generation: crate::format::currency::generation(),
             ui,
             ui_changed: true,
             state,
@@ -396,6 +399,7 @@ impl Bridge {
         }
         self.drain_settings();
         self.drain_updates();
+        self.sync_currency();
         self.auto_reset.poll(&self.ui.settings, &self.state);
         if crate::app::game_mode::take_transition() {
             for (provider, commands) in self.state.worker_commands() {
@@ -489,6 +493,17 @@ impl Bridge {
             self.ui.set_popup_error(error.to_string());
         }
         self.ui_changed = true;
+    }
+
+    /// Rates arrive on their own thread; every surface that shows a usage
+    /// cost repaints once they or the chosen currency change.
+    fn sync_currency(&mut self) {
+        let generation = crate::format::currency::generation();
+        if generation != self.currency_generation {
+            self.currency_generation = generation;
+            self.state.mark(Changes::LIMITS);
+            self.state.mark(Changes::USAGE);
+        }
     }
 
     fn drain_settings(&mut self) {

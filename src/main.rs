@@ -53,6 +53,8 @@ fn run() -> Result<()> {
         logger::info(format!("failed to hydrate pricing catalog: {error:#}"));
     }
     let settings = runtime::load_at_startup(&path)?;
+    // Cached rates load before the first paint; refreshes run on their own thread.
+    codex_minibar::format::currency::initialize(path.with_file_name("exchange-rates.json"));
     let hydrated_limits = store::shared()
         .and_then(|shared| {
             let store = shared

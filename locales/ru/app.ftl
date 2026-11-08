@@ -3073,3 +3073,18 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Пап
 
 linux-folder-with-grok-cli = Папка с исполняемым файлом grok. Оставьте пустым для автоматического поиска.
 linux-folder-with-command-code-cli = Папка с command-code или cmd. Оставьте пустым для автоматического поиска.
+
+usage-currency = Валюта расходов
+usage-currency-description = Все расходы, включая историю, отображаются по последнему доступному курсу.
+currency-unavailable = Курс недоступен; показаны USD
+currency-cached = Сохранённый курс
+currency-latest = Последний курс
+currency-usd = Валюта расходов: USD
+currency-daily-cost = Расходы за день в выбранной валюте
+currency-cost-by-model = Расходы по моделям
+no-matching-currencies = Нет подходящих валют
+currency-symbol = Символ валюты
+currency-symbol-description = Показывается как введён, вместе с пробелами. Оставьте пустым для стандартного.
+currency-symbol-position = Положение символа
+currency-symbol-before = Перед суммой
+currency-symbol-after = После суммы

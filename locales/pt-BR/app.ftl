@@ -2168,3 +2168,18 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Pasta 
 
 linux-folder-with-grok-cli = Pasta com o executável grok. Deixe em branco para encontrá-lo automaticamente.
 linux-folder-with-command-code-cli = Pasta com command-code ou cmd. Deixe em branco para encontrá-lo automaticamente.
+
+usage-currency = Moeda dos custos
+usage-currency-description = Exibir os custos, incluindo o histórico, pela última taxa disponível.
+currency-unavailable = Taxa indisponível; exibindo USD
+currency-cached = Taxa salva
+currency-latest = Última taxa
+currency-usd = Moeda dos custos: USD
+currency-daily-cost = Custo diário na moeda selecionada
+currency-cost-by-model = Custo por modelo
+no-matching-currencies = Nenhuma moeda correspondente
+currency-symbol = Símbolo da moeda
+currency-symbol-description = Exibido exatamente como digitado, incluindo espaços. Deixe vazio para usar o padrão.
+currency-symbol-position = Posição do símbolo
+currency-symbol-before = Antes do valor
+currency-symbol-after = Depois do valor

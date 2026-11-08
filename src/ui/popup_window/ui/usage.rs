@@ -22,6 +22,7 @@ use super::{
     theme::Palette,
     tooltip::{ChartTip, TipContent},
 };
+use crate::format::currency;
 use crate::settings::choice::Choice;
 use crate::ui::gui::fx;
 use crate::ui::popup_window::*;
@@ -899,7 +900,7 @@ impl PopupRoot {
         ]
         .map(|(id, value, money)| {
             let text = if money {
-                format_micro_usd(value)
+                currency::format(value)
             } else {
                 format_token_count(value)
             };
@@ -1150,18 +1151,15 @@ impl PopupRoot {
         } else {
             crate::i18n::month_day(point.date)
         };
-        let mut total_cents = 0_u64;
+        let mut total_minor = 0_u128;
         let mut total_tokens = 0_u64;
         let mut rows = Vec::new();
         for provider in providers {
             let value = point.by_provider.get(provider).copied().unwrap_or(0);
             let (amount, hidden) = match metric {
                 OverviewMetric::Cost => {
-                    total_cents = total_cents.saturating_add(crate::format::money::to_cents(value));
-                    (
-                        format_micro_usd(value),
-                        crate::format::money::to_cents(value) == 0,
-                    )
+                    total_minor = total_minor.saturating_add(currency::display_minor(value));
+                    (currency::format(value), currency::display_minor(value) == 0)
                 }
                 OverviewMetric::Tokens => {
                     total_tokens = total_tokens.saturating_add(value);
@@ -1179,7 +1177,7 @@ impl PopupRoot {
             ));
         }
         let total = match metric {
-            OverviewMetric::Cost => crate::format::format_cents(total_cents),
+            OverviewMetric::Cost => currency::format_minor(total_minor),
             OverviewMetric::Tokens => format_token_count(total_tokens),
         };
         ChartTip { title, rows, total }
@@ -1500,7 +1498,7 @@ fn breakdown_table(
                 .child(div().flex_1().min_w_0().child(title))
                 .child(cell(
                     56.0,
-                    caption(format_micro_usd(row.cost_microusd), palette.text_primary),
+                    caption(currency::format(row.cost_microusd), palette.text_primary),
                 ))
                 .child(cell(
                     44.0,
@@ -1604,7 +1602,7 @@ fn day_breakdown_table(
             let text = match metric {
                 OverviewMetric::Cost => value
                     .map(format_usage_day_cost)
-                    .unwrap_or_else(|| "$0".into()),
+                    .unwrap_or_else(|| currency::format(0)),
                 OverviewMetric::Tokens => {
                     format_token_count(value.map(TokenUsage::total_tokens).unwrap_or(0))
                 }
@@ -1944,7 +1942,7 @@ fn chart_scale_max(raw_max: u64) -> u64 {
 
 fn format_axis_value(value: u64, metric: OverviewMetric) -> String {
     match metric {
-        OverviewMetric::Cost => format_micro_usd(value),
+        OverviewMetric::Cost => currency::format(value),
         OverviewMetric::Tokens => format_token_count(value),
     }
 }
@@ -1953,7 +1951,7 @@ fn format_total_cost(usage: &TokenUsage) -> String {
     if usage.requests > 0 && usage.priced_requests == 0 {
         "—".into()
     } else {
-        format_micro_usd(usage.estimated_cost_microusd)
+        currency::format(usage.estimated_cost_microusd)
     }
 }
 
@@ -1961,7 +1959,7 @@ fn format_usage_cost(usage: &TokenUsage) -> String {
     if usage.requests > 0 && usage.priced_requests == 0 {
         "—".into()
     } else {
-        format_micro_usd(usage.estimated_cost_microusd)
+        currency::format(usage.estimated_cost_microusd)
     }
 }
 
@@ -1969,7 +1967,7 @@ fn format_usage_day_cost(usage: &TokenUsage) -> String {
     if usage.requests > 0 && usage.priced_requests == 0 {
         "—".into()
     } else {
-        format_micro_usd(usage.estimated_cost_microusd)
+        currency::format(usage.estimated_cost_microusd)
     }
 }
 
@@ -1977,7 +1975,7 @@ fn format_breakdown_cost(row: &BreakdownRow) -> String {
     if row.requests > 0 && row.priced_requests == 0 {
         "—".into()
     } else {
-        format_micro_usd(row.cost_microusd)
+        currency::format(row.cost_microusd)
     }
 }
 

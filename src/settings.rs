@@ -2054,6 +2054,13 @@ pub struct Settings {
     pub auto_reset_lead: AutoResetLead,
     /// Enables the Usage tab, Usage Stats home card, and background usage collection.
     pub usage_stats_enabled: bool,
+    /// ISO currency used only when displaying usage costs.
+    pub usage_currency: String,
+    /// Marks usage costs instead of `$` or the code; empty uses the default.
+    /// Cleared whenever `usage_currency` changes.
+    pub usage_currency_symbol: String,
+    /// The symbol follows the amount (`3,223.03₽`) instead of leading it.
+    pub usage_currency_symbol_after: bool,
     pub usage_refresh_interval: UsageRefreshInterval,
     pub reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval,
     pub start_at_login: bool,
@@ -2151,6 +2158,9 @@ impl Default for Settings {
             auto_activation_pauses: Vec::new(),
             auto_reset_lead: AutoResetLead::default(),
             usage_stats_enabled: true,
+            usage_currency: "USD".into(),
+            usage_currency_symbol: String::new(),
+            usage_currency_symbol_after: false,
             usage_refresh_interval: UsageRefreshInterval::default(),
             reset_announcement_refresh_interval: ResetAnnouncementRefreshInterval::default(),
             start_at_login: true,

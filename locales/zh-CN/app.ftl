@@ -2147,3 +2147,18 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = 包含
 
 linux-folder-with-grok-cli = 包含 grok 可执行文件的文件夹。留空以自动查找。
 linux-folder-with-command-code-cli = 包含 command-code 或 cmd 的文件夹。留空以自动查找。
+
+usage-currency = 用量货币
+usage-currency-description = 所有费用（包括历史用量）均按最新可用汇率显示。
+currency-unavailable = 汇率不可用；显示 USD
+currency-cached = 已缓存汇率
+currency-latest = 最新汇率
+currency-usd = 费用货币：USD
+currency-daily-cost = 以所选货币显示每日费用
+currency-cost-by-model = 按模型统计费用
+no-matching-currencies = 没有匹配的货币
+currency-symbol = 货币符号
+currency-symbol-description = 按输入内容原样显示（包括空格）。留空则使用默认符号。
+currency-symbol-position = 符号位置
+currency-symbol-before = 金额之前
+currency-symbol-after = 金额之后

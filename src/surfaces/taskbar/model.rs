@@ -371,7 +371,7 @@ fn today_usage(provider: ProviderId, usage: &crate::usage::UsageStatistics) -> O
     {
         return Some(format!(
             "{} \u{00b7} {}",
-            crate::format::format_micro_usd(today.estimated_cost_microusd),
+            crate::format::currency::format(today.estimated_cost_microusd),
             crate::i18n::format("requests", &[("v0", today.requests.to_string())]),
         ));
     }
@@ -385,7 +385,7 @@ fn today_usage(provider: ProviderId, usage: &crate::usage::UsageStatistics) -> O
     Some(match today.estimated_api_value_usd() {
         Some(value) => format!(
             "{tokens} \u{00b7} \u{2248} {}",
-            crate::format::format_usd(value)
+            crate::format::currency::format_dollars(value)
         ),
         None => tokens,
     })

@@ -793,7 +793,7 @@ impl PopupRoot {
             palette.font_family.clone(),
             18.0,
             gpui::FontWeight::SEMIBOLD,
-            &crate::format::format_micro_usd(total),
+            &crate::format::currency::format(total),
         );
         let label_size = if label_width > DONUT_LABEL_WIDTH {
             ((18.0 * DONUT_LABEL_WIDTH / label_width) * 2.0).floor() / 2.0
@@ -952,7 +952,7 @@ impl PopupRoot {
             .collect()
     }
 
-    /// A dollar amount whose changed digits roll to the new value.
+    /// A usage cost whose changed digits roll to the new value.
     fn spend_amount(
         &mut self,
         scope: &'static str,
@@ -965,7 +965,7 @@ impl PopupRoot {
         let color = self.palette.text_primary;
         self.rolling_label(
             fx::key((scope, "amount", provider)),
-            crate::format::format_micro_usd(spend),
+            crate::format::currency::format(spend),
             spend,
             (size, line, gpui::FontWeight::SEMIBOLD, color),
             window,

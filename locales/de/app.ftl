@@ -3067,3 +3067,18 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Ordner
 
 linux-folder-with-grok-cli = Ordner mit der ausführbaren Datei grok. Leer lassen, um sie automatisch zu finden.
 linux-folder-with-command-code-cli = Ordner mit command-code oder cmd. Leer lassen, um sie automatisch zu finden.
+
+usage-currency = Währung der Kosten
+usage-currency-description = Nutzungskosten einschließlich Verlauf zum letzten verfügbaren Kurs anzeigen.
+currency-unavailable = Kurs nicht verfügbar; Anzeige in USD
+currency-cached = Gespeicherter Kurs
+currency-latest = Aktueller Kurs
+currency-usd = Kostenwährung: USD
+currency-daily-cost = Tägliche Kosten in der gewählten Währung
+currency-cost-by-model = Kosten nach Modell
+no-matching-currencies = Keine passenden Währungen
+currency-symbol = Währungssymbol
+currency-symbol-description = Wird genau wie eingegeben angezeigt, einschließlich Leerzeichen. Leer lassen für den Standard.
+currency-symbol-position = Position des Symbols
+currency-symbol-before = Vor dem Betrag
+currency-symbol-after = Nach dem Betrag

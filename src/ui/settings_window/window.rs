@@ -56,6 +56,7 @@ pub(crate) struct SettingsWindow {
     /// Installed families offered by the Appearance font picker.
     pub(super) font_families: Vec<SharedString>,
     pub(super) font_picker: super::appearance::FontPicker,
+    pub(super) currency_picker: super::general::CurrencyPicker,
     backdrop: super::backdrop::Backdrop,
     pub(super) focus: FocusHandle,
     // Navigation.
@@ -212,6 +213,7 @@ impl SettingsWindow {
             fonts,
             font_families: crate::ui::gui::theme::installed_font_families(cx),
             font_picker: Default::default(),
+            currency_picker: Default::default(),
             focus,
             mode: NavMode::Root,
             pending_slide: None,

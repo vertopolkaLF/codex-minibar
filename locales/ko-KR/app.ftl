@@ -3045,3 +3045,18 @@ linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy �
 
 linux-folder-with-grok-cli = grok 실행 파일이 있는 폴더입니다. 비워 두면 자동으로 찾습니다.
 linux-folder-with-command-code-cli = command-code 또는 cmd가 있는 폴더입니다. 비워 두면 자동으로 찾습니다.
+
+usage-currency = 사용 요금 통화
+usage-currency-description = 과거 사용량을 포함한 요금을 최근 환율로 표시합니다.
+currency-unavailable = 환율 없음: USD로 표시
+currency-cached = 저장된 환율
+currency-latest = 최근 환율
+currency-usd = 요금 통화: USD
+currency-daily-cost = 선택한 통화의 일일 요금
+currency-cost-by-model = 모델별 요금
+no-matching-currencies = 일치하는 통화가 없습니다
+currency-symbol = 통화 기호
+currency-symbol-description = 공백을 포함해 입력한 그대로 표시됩니다. 비워 두면 기본값을 사용합니다.
+currency-symbol-position = 기호 위치
+currency-symbol-before = 금액 앞
+currency-symbol-after = 금액 뒤
