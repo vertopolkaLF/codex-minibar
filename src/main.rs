@@ -33,6 +33,12 @@ fn run() -> Result<()> {
     // Bootstrap order: logger, settings and every process-wide effect of
     // them (language first), then workers, then windows.
     logger::initialize(&paths::log()?)?;
+    #[cfg(not(windows))]
+    if let Err(error) =
+        futures::executor::block_on(codex_minibar::platform::linux::identity::register_portal())
+    {
+        logger::info(format!("Linux desktop portal identity: {error:#}"));
+    }
     if let Err(error) = codex_minibar::providers::claude::cleanup_abandoned_logins() {
         logger::info(format!(
             "could not clean abandoned Claude sign-in directories: {error:#}"
@@ -72,6 +78,12 @@ fn run() -> Result<()> {
             logger::info(format!(
                 "Codex CLI startup cache cleanup deferred: {error:#}"
             ));
+        }
+        #[cfg(not(windows))]
+        if let Err(error) =
+            codex_minibar::platform::linux::keybinding::refresh_extracted_appimage_command()
+        {
+            logger::info(format!("popup shortcut command refresh: {error:#}"));
         }
     });
     let activation_path = paths::activation_state()?;
@@ -137,9 +149,12 @@ fn run() -> Result<()> {
 
     codex_minibar::app::start(Arc::clone(&state));
     codex_minibar::update::whats_new::start(&state.settings);
+    #[cfg(windows)]
     if onboarding_needed {
         codex_minibar::ui::settings_window::open_onboarding();
     }
+    #[cfg(not(windows))]
+    codex_minibar::platform::linux::instance::show_initial_window(onboarding_needed);
     // The GPUI thread owns every window and the bridge thread owns the tray;
     // both exit the process directly, so the main thread only stays alive.
     loop {
@@ -171,6 +186,14 @@ fn show_error(message: &str) {
 }
 
 fn main() {
+    #[cfg(not(windows))]
+    // SAFETY: this is the first statement of main, before any thread exists.
+    unsafe {
+        codex_minibar::platform::linux::appimage_launch::restore_user_tmpdir();
+    }
+    if codex_minibar::surfaces::status::is_cli_request() {
+        std::process::exit(codex_minibar::surfaces::status::run_cli());
+    }
     if troubleshoot::is_cli_request() {
         if let Err(error) = troubleshoot::launch_cli_picker() {
             show_error(&format!(
@@ -180,6 +203,13 @@ fn main() {
         return;
     }
 
+    #[cfg(not(windows))]
+    // SAFETY: only argument checks have run on this path. Capture before
+    // single-instance activation or any other app code can start threads.
+    // The terminal-only CLI path above forwards its launch context directly.
+    unsafe {
+        codex_minibar::platform::linux::instance::capture_startup_activation_token();
+    }
     let instance = match SingleInstance::acquire_or_activate_existing() {
         Ok(Some(instance)) => instance,
         Ok(None) => return,

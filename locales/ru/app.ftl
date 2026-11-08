@@ -1096,10 +1096,10 @@ on = Вкл.
 # src/ui/settings_window/providers/page.rs
 off = Выкл.
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 more-options = Другие действия
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 custom-color = Свой цвет
 
 # src/ui/settings_window/troubleshoot.rs
@@ -2936,12 +2936,26 @@ time-late = опоздание { $time }
 
 # Floating usage panel
 popup-floating = Плавающая панель
+linux-popup-keep-open = Оставлять открытой
+linux-popup-keep-open-description = Не закрывать панель при переключении приложений. В Wayland нажмите правой кнопкой на заголовок панели и выберите «Поверх остальных» в системном меню окна, если этот пункт доступен.
+linux-popup-unpin = Открепить панель
 popup-floating-description = Панель остаётся открытой; перетаскивайте её за заголовок в любое место или на другой монитор.
 popup-always-on-top = Поверх всех окон
 popup-always-on-top-description = Показывать панель поверх других приложений и не закрывать при переключении между ними.
 popup-position = Положение панели
 popup-position-description = Положение сохраняется между запусками.
 popup-reset-position = Сбросить положение
+popup-placement = Положение окна
+popup-placement-description = Где окно открывается на экране. Автоматически: рядом с областью уведомлений или панелью задач.
+popup-placement-auto = Автоматически
+popup-placement-top-left = Сверху слева
+popup-placement-top-center = Сверху по центру
+popup-placement-top-right = Сверху справа
+popup-placement-bottom-left = Снизу слева
+popup-placement-bottom-center = Снизу по центру
+popup-placement-bottom-right = Снизу справа
+linux-popup-placement-description = Где окно открывается на экране.
+linux-popup-placement-wayland = На Wayland место для окон выбирает рабочий стол, поэтому настройка действует только в сеансах X11.
 popup-drag-header = Перетащите, чтобы переместить
 popup-close = Закрыть панель
 
@@ -2963,13 +2977,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = За сколько до 
 # src/ui/settings_window/providers/page.rs
 automatic-resets = Автоматические сбросы
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = Запасной сброс применён автоматически
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = У этого провайдера нет запасных сбросов.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = Запасной сброс будет применён через { $minutes } мин
 
 # src/ui/settings_window/notifications.rs
@@ -2978,14 +2992,84 @@ before-an-automatic-reset = Перед автоматическим сбросо
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = Предупреждает за 10 минут до автоматического применения запасного сброса.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = Применить сейчас
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = Отменить
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = Запасной сброс применён
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = Дополнительным аккаунтам Claude нужен Claude Code CLI. Встроенная копия в приложении Claude обслуживает только аккаунт самого приложения.
+# src/surfaces/tray.rs
+linux-no-tray-title = Системный трей не найден
+
+# src/surfaces/tray.rs
+linux-no-tray-body = Включите расширение AppIndicator, чтобы видеть Codex Minibar на панели. Запустите Codex Minibar ещё раз, чтобы открыть его.
+
+# src/ui/settings_window/general.rs
+start-at-login = Запускать при входе в систему
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = Добавьте в настройках клавиатуры рабочего стола своё сочетание клавиш, запускающее эту команду, чтобы показывать и скрывать окно.
+linux-popup-shortcut-native-description = Сохраняется в настройках клавиатуры рабочего стола. Изменения применяются сразу.
+linux-popup-shortcut-choose = Задать сочетание
+linux-popup-shortcut-dialog-hint = Нажмите нужное сочетание клавиш. Оно сохранится как пользовательское сочетание в настройках клавиатуры рабочего стола.
+linux-popup-shortcut-needs-modifier = Добавьте Ctrl, Alt или Super либо используйте F13–F24.
+linux-popup-shortcut-save-failed = Рабочий стол не принял сочетание. Повторите попытку или добавьте команду в его настройках клавиатуры.
+
+# src/ui/settings_window/general.rs
+copy-command = Скопировать команду
+
+# src/ui/settings_window/general.rs
+command-copied = Команда скопирована
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = Бесплатный компаньон с открытым кодом для лимитов, сбросов и расходов AI-подписок прямо в системном трее.
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Сохраняет все настройки в файл .toml. Сохранённые ключи остаются зашифрованными на этом компьютере.
+
+# src/ui/settings_window/appearance.rs
+linux-windows = Системный
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = «Системный» следует акцентному цвету рабочего стола.
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = Системный по умолчанию
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = Меняет только всплывающее окно. Настройки сохраняют свой вид.
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Плавные переходы во всплывающем окне и настройках. Настройка анимации рабочего стола тоже учитывается.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Шифруется ключом из системной связки ключей и никогда не попадает в файл настроек.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Учётные данные сохранены и зашифрованы системной связкой ключей.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API-ключ сохранён и зашифрован системной связкой ключей.
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Зашифровано системной связкой ключей
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Сразу применяется ко всем окнам и уведомлениям. Авто следует языку системы.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Запускает собственный вход Claude Code для { $name }, передавая папку конфигурации как CLAUDE_CONFIG_DIR. Авторизация остаётся в этой папке, и Claude Code обновляет её.
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = Игры, запущенные через Steam, и игры из библиотек Steam или Heroic определяются сами. Любую другую программу добавьте здесь.
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Читает лимиты подписки из существующей официальной авторизации agy.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Папка с исполняемым файлом agy. Оставьте пустым для автоматического поиска.
+
+linux-folder-with-grok-cli = Папка с исполняемым файлом grok. Оставьте пустым для автоматического поиска.
+linux-folder-with-command-code-cli = Папка с command-code или cmd. Оставьте пустым для автоматического поиска.

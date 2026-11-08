@@ -287,6 +287,7 @@ fn cached_account_models(
     start: NaiveDate,
     end: NaiveDate,
 ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
+    ensure!(start <= end, "OpenRouter: invalid cached model date range");
     let cache: Cache = serde_json::from_str(raw)?;
     Ok(cache
         .account_data
@@ -776,6 +777,18 @@ mod tests {
                 .sum::<u64>(),
             1440 * 7 * 123456
         );
+    }
+
+    #[test]
+    fn cached_models_reject_reversed_date_range() {
+        let end = Local::now().date_naive();
+        let start = end.succ_opt().unwrap();
+        let raw = serde_json::json!({
+            "revision": 0, "accounts": [], "days": {},
+            "account_data": {"key": {"identity": "key", "days": {}, "hourly": null, "error": null}}
+        })
+        .to_string();
+        assert!(cached_account_models(&raw, "key", start, end).is_err());
     }
 
     #[test]

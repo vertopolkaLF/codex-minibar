@@ -572,8 +572,7 @@ impl SettingsWindow {
                         crate::i18n::tr("finish-signing-in-in-your-browser-cancel-stops-this-login")
                             .to_owned()
                     } else if provider.kind() == ProviderKind::Claude {
-                        crate::i18n::format(
-                            "runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c",
+                        crate::i18n::format(if cfg!(windows) { "runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c" } else { "linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c" },
                             &[("name", name.to_string())],
                         )
                     } else {
@@ -808,9 +807,11 @@ impl SettingsWindow {
                     "sk-…",
                     "",
                     true,
-                    Some(crate::i18n::tr(
-                        "saved-in-windows-user-storage-never-in-the-settings-file",
-                    )),
+                    Some(crate::i18n::tr(if cfg!(windows) {
+                        "saved-in-windows-user-storage-never-in-the-settings-file"
+                    } else {
+                        "linux-saved-in-windows-user-storage-never-in-the-settings-file"
+                    })),
                     window,
                     cx,
                 ));
@@ -1140,7 +1141,12 @@ impl SettingsWindow {
                     crate::providers::claude::verify_credential(&credential)?;
                     persist_claude_manual_credential(provider, &credential)?;
                     Ok(DialogOutcome {
-                        notice: crate::i18n::tr("credential-saved-in-windows-user-storage").into(),
+                        notice: (if cfg!(windows) {
+                            crate::i18n::tr("credential-saved-in-windows-user-storage")
+                        } else {
+                            crate::i18n::tr("linux-credential-saved-in-windows-user-storage")
+                        })
+                        .into(),
                     })
                 });
             }
@@ -1158,7 +1164,12 @@ impl SettingsWindow {
                     crate::providers::openrouter::verify_api_key(&key)?;
                     crate::app::actions::track_openrouter_api_key(account_id, key_id, key, name)?;
                     Ok(DialogOutcome {
-                        notice: crate::i18n::tr("api-key-saved-in-windows-user-storage").into(),
+                        notice: (if cfg!(windows) {
+                            crate::i18n::tr("api-key-saved-in-windows-user-storage")
+                        } else {
+                            crate::i18n::tr("linux-api-key-saved-in-windows-user-storage")
+                        })
+                        .into(),
                     })
                 });
             }

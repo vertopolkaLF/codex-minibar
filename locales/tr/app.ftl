@@ -1092,10 +1092,10 @@ on = Açık
 # src/ui/settings_window/providers/page.rs
 off = Kapalı
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 more-options = Diğer seçenekler
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 custom-color = Özel renk
 
 # src/ui/settings_window/troubleshoot.rs
@@ -2908,12 +2908,26 @@ time-late = { $time } gecikti
 
 # Floating usage panel
 popup-floating = Yüzen panel
+linux-popup-keep-open = Açık tut
+linux-popup-keep-open-description = Uygulamalar arasında geçiş yaparken paneli açık tut. Wayland'de panel başlığına sağ tıklayıp varsa masaüstünün pencere menüsünden «Her zaman üstte» seçeneğini seçin.
+linux-popup-unpin = Panelin sabitlemesini kaldır
 popup-floating-description = Paneli açık tutun ve başlığını başka bir konuma veya monitöre sürükleyin.
 popup-always-on-top = Her zaman üstte
 popup-always-on-top-description = Paneli diğer uygulamaların üzerinde ve uygulama değiştirirken açık tut.
 popup-position = Panel konumu
 popup-position-description = Konum oturumlar arasında hatırlanır.
 popup-reset-position = Konumu sıfırla
+popup-placement = Pencere konumu
+popup-placement-description = Pencerenin ekranda açılacağı yer. Otomatik, sistem tepsisinin veya görev çubuğunun yanında açar.
+popup-placement-auto = Otomatik
+popup-placement-top-left = Sol üst
+popup-placement-top-center = Üst orta
+popup-placement-top-right = Sağ üst
+popup-placement-bottom-left = Sol alt
+popup-placement-bottom-center = Alt orta
+popup-placement-bottom-right = Sağ alt
+linux-popup-placement-description = Pencerenin ekranda açılacağı yer.
+linux-popup-placement-wayland = Wayland'de pencerelerin nerede açılacağına masaüstü karar verir, bu nedenle bu ayar yalnızca X11 oturumlarında geçerlidir.
 popup-drag-header = Taşımak için sürükleyin
 popup-close = Paneli kapat
 
@@ -2935,13 +2949,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = Birikmiş sıfırlamanın
 # src/ui/settings_window/providers/page.rs
 automatic-resets = Otomatik sıfırlamalar
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = Birikmiş sıfırlama otomatik uygulandı
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = Bu sağlayıcının birikmiş sıfırlaması yok.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = Birikmiş sıfırlama { $minutes } dk içinde uygulanacak
 
 # src/ui/settings_window/notifications.rs
@@ -2950,14 +2964,84 @@ before-an-automatic-reset = Otomatik sıfırlamadan önce
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = Birikmiş bir sıfırlama otomatik uygulanmadan 10 dakika önce uyarır.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = Şimdi uygula
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = İptal
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = Birikmiş sıfırlama uygulandı
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = Ek Claude hesapları Claude Code CLI gerektirir. Claude uygulamasındaki yerleşik kopya yalnızca uygulamanın kendi hesabına hizmet eder.
+# src/surfaces/tray.rs
+linux-no-tray-title = Sistem tepsisi bulunamadı
+
+# src/surfaces/tray.rs
+linux-no-tray-body = Codex Minibar’ı panelde görmek için AppIndicator uzantısını etkinleştirin. Açmak için Codex Minibar’ı yeniden başlatın.
+
+# src/ui/settings_window/general.rs
+start-at-login = Oturum açılışında başlat
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = Açılır pencereyi göstermek veya gizlemek için masaüstünüzün klavye ayarlarında bu komutu çalıştıran özel bir kısayol ekleyin.
+
+# src/ui/settings_window/general.rs
+copy-command = Komutu kopyala
+
+# src/ui/settings_window/general.rs
+command-copied = Komut kopyalandı
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = Yapay zekâ aboneliklerinin kullanım sınırları, sıfırlamaları ve harcamaları için sistem tepsisinde ücretsiz, açık kaynaklı yardımcı.
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Tüm ayarları bir .toml dosyasına kaydeder. Kayıtlı anahtarlar bu bilgisayarda şifreli kalır.
+
+# src/ui/settings_window/appearance.rs
+linux-windows = Sistem
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = Sistem, masaüstünüzün vurgu rengini izler.
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = Sistem varsayılanı
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = Yalnızca açılır pencereyi değiştirir. Ayarlar kendi görünümünü korur.
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Açılır pencerede ve Ayarlar’da akıcı geçişler. Masaüstünüzün animasyon ayarına da uyulur.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Sistem anahtarlığınızdaki bir anahtarla şifrelenir, asla ayar dosyasında tutulmaz.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Kimlik bilgisi kaydedildi, sistem anahtarlığınızla şifrelendi.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API anahtarı kaydedildi, sistem anahtarlığınızla şifrelendi.
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Sistem anahtarlığınızla şifrelenmiş
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Tüm uygulama pencerelerine ve bildirimlere hemen uygulanır. Otomatik seçeneği sistem dilini izler.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = { $name } için Claude Code'un kendi oturum açma işlemini yapılandırma klasörünü CLAUDE_CONFIG_DIR olarak kullanarak çalıştırır. Oturum bu klasörde kalır ve Claude Code tarafından güncel tutulur.
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = Steam’in başlattığı oyunlar ile Steam veya Heroic kitaplıklarındaki oyunlar kendiliğinden algılanır. Diğer programları buraya ekleyin.
+linux-popup-shortcut-native-description = Masaüstünüzün klavye ayarlarına kaydedilir. Değişiklikler hemen uygulanır.
+linux-popup-shortcut-choose = Kısayol ayarla
+linux-popup-shortcut-dialog-hint = Kullanmak istediğiniz tuş birleşimine basın. Masaüstünüzün klavye ayarlarında özel kısayol olarak kaydedilir.
+linux-popup-shortcut-needs-modifier = Ctrl, Alt veya Super ekleyin ya da F13–F24 kullanın.
+linux-popup-shortcut-save-failed = Masaüstü kısayolu kabul etmedi. Yeniden deneyin veya komutu klavye ayarlarına ekleyin.
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Mevcut resmî agy oturumunuzdan abonelik kotasını okur.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy çalıştırılabilir dosyasını içeren klasör. Otomatik bulmak için boş bırakın.
+
+linux-folder-with-grok-cli = grok yürütülebilir dosyasının bulunduğu klasör. Otomatik bulmak için boş bırakın.
+linux-folder-with-command-code-cli = command-code veya cmd içeren klasör. Otomatik bulmak için boş bırakın.

@@ -33,9 +33,10 @@ fn system_animations_enabled() -> bool {
     ok == 0 || enabled != 0
 }
 
+/// The desktop's animation switch (GNOME "Animations", read via the portal).
 #[cfg(not(windows))]
 fn system_animations_enabled() -> bool {
-    true
+    crate::platform::linux::desktop::animations_enabled().unwrap_or(true)
 }
 
 pub fn current_accent_rgb() -> [u8; 3] {
@@ -141,7 +142,8 @@ fn system_accent_ramp() -> Option<AccentRamp> {
     })
 }
 
+/// The desktop accent from the XDG portal (GNOME 47+, KDE Plasma).
 #[cfg(not(windows))]
 fn system_accent_ramp() -> Option<AccentRamp> {
-    None
+    crate::platform::linux::desktop::accent_color().map(AccentRamp::from_base)
 }

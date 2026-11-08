@@ -1095,10 +1095,10 @@ on = On
 # src/ui/settings_window/providers/page.rs
 off = Off
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 more-options = More options
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 custom-color = Custom color
 
 # src/ui/settings_window/troubleshoot.rs
@@ -2929,12 +2929,26 @@ time-late = { $time } late
 
 # Floating usage panel
 popup-floating = Floating panel
+linux-popup-keep-open = Keep open
+linux-popup-keep-open-description = Keep the popup open when switching apps. On Wayland, right-click the panel header and choose Always on Top in your desktop's window menu, if available.
+linux-popup-unpin = Unpin panel
 popup-floating-description = Keep the panel open and drag its header to another position or monitor.
 popup-always-on-top = Always on top
 popup-always-on-top-description = Keep the panel above other applications and open when switching apps.
 popup-position = Panel position
 popup-position-description = The position is remembered between sessions.
 popup-reset-position = Reset position
+popup-placement = Popup position
+popup-placement-description = Where the popup opens on the screen. Automatic opens it by the tray or taskbar.
+popup-placement-auto = Automatic
+popup-placement-top-left = Top left
+popup-placement-top-center = Top center
+popup-placement-top-right = Top right
+popup-placement-bottom-left = Bottom left
+popup-placement-bottom-center = Bottom center
+popup-placement-bottom-right = Bottom right
+linux-popup-placement-description = Where the popup opens on the screen.
+linux-popup-placement-wayland = Wayland desktops choose where windows open, so this only applies in X11 sessions.
 popup-drag-header = Drag to move
 popup-close = Close panel
 
@@ -2956,13 +2970,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = How long before a banked 
 # src/ui/settings_window/providers/page.rs
 automatic-resets = Automatic resets
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = Banked reset applied automatically
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = This provider has no banked resets.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = Banked reset will be applied in { $minutes } min
 
 # src/ui/settings_window/notifications.rs
@@ -2971,14 +2985,84 @@ before-an-automatic-reset = Before an automatic reset
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = Warns 10 minutes before a banked reset is applied automatically.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = Apply now
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = Cancel
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = Banked reset applied
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = Extra Claude accounts need the Claude Code CLI. The Claude app's built-in copy only serves the app's own account.
+# src/surfaces/tray.rs
+linux-no-tray-title = No system tray found
+
+# src/surfaces/tray.rs
+linux-no-tray-body = Enable the AppIndicator extension to see Codex Minibar in the panel. Launch Codex Minibar again to open it.
+
+# src/ui/settings_window/general.rs
+start-at-login = Start at login
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = Add a custom shortcut in your desktop's keyboard settings that runs this command to show or hide the popup.
+linux-popup-shortcut-native-description = Saved in your desktop's keyboard settings. Changes apply immediately.
+linux-popup-shortcut-choose = Set shortcut
+linux-popup-shortcut-dialog-hint = Press the key combination you want to use. It is saved as a custom shortcut in your desktop's keyboard settings.
+linux-popup-shortcut-needs-modifier = Include Ctrl, Alt or Super, or use F13–F24.
+linux-popup-shortcut-save-failed = Your desktop did not accept the shortcut. Try again, or add the command in its keyboard settings.
+
+# src/ui/settings_window/general.rs
+copy-command = Copy command
+
+# src/ui/settings_window/general.rs
+command-copied = Command copied
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = Free, open-source companion for AI subscription usage limits, resets and spend, right in the system tray.
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Save every setting to a .toml file. Saved keys stay encrypted on this computer.
+
+# src/ui/settings_window/appearance.rs
+linux-windows = System
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = System follows your desktop accent.
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = System default
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = Changes only the popup. Settings keep their own look.
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Glide transitions in the popup and Settings. Your desktop's own animation setting is also respected.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Encrypted with a key from your system keyring, never in the settings file.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Credential saved, encrypted with your system keyring.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API key saved, encrypted with your system keyring.
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Encrypted with your system keyring
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Applies immediately to every app window and notification. Auto follows the system language.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Runs Claude Code's own login for { $name } with its config folder as CLAUDE_CONFIG_DIR. The login stays in that folder, where Claude Code keeps it fresh.
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = Games launched by Steam and games in Steam or Heroic libraries are detected on their own. Add any other program here.
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Reads subscription quota from your existing official agy sign-in.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Folder with the agy executable. Leave empty to find it automatically.
+
+linux-folder-with-grok-cli = Folder with the grok executable. Leave empty to find it automatically.
+linux-folder-with-command-code-cli = Folder with command-code or cmd. Leave empty to find it automatically.

@@ -274,6 +274,13 @@ pub fn set_follow_do_not_disturb(enabled: bool) {
 
 /// Why an unsolicited notification is held back right now, if it is. The
 /// card announcing game mode itself is exempt from the game-mode rule.
+/// Whether cards should arrive silently right now: sounds are off or quiet
+/// hours are on. Desktop notification servers play their own sound.
+#[cfg_attr(windows, allow(dead_code))]
+pub(crate) fn sounds_muted() -> bool {
+    !SOUND_ENABLED.load(Ordering::Relaxed) || quiet_reason(false).is_some()
+}
+
 fn quiet_reason(game_mode_card: bool) -> Option<&'static str> {
     if HOST.get().is_some_and(|host| (host.game_mode_active)()) && !game_mode_card {
         return Some("game mode");
@@ -361,8 +368,8 @@ pub fn show_error(title: &str, body: &str) {
 }
 
 /// A discovered app update with install and release-notes buttons.
-pub fn show_update_available(version: &str, release_url: &str) {
-    notify(update_available(version, release_url));
+pub fn show_update_available(version: &str, release_url: &str, installable: bool) {
+    notify(update_available(version, release_url, installable));
 }
 
 /// Moves the update card to the next step, creating it on the first one.
@@ -442,7 +449,7 @@ pub fn show_provider_incident(
     notify(notification);
 }
 
-fn update_available(version: &str, release_url: &str) -> Notification {
+fn update_available(version: &str, release_url: &str, installable: bool) -> Notification {
     let mut notification = Notification::new(
         NotificationKind::Update,
         crate::i18n::tr("update-available-67fd3a"),
@@ -451,16 +458,17 @@ fn update_available(version: &str, release_url: &str) -> Notification {
             crate::i18n::tr("a-new-release-is-ready-to-install")
         ),
     );
-    notification.actions = vec![
-        (
+    // Otherwise the update comes from the release page linked below.
+    if installable {
+        notification.actions.push((
             crate::i18n::tr("update-now").to_owned(),
             NotificationAction::InstallUpdate,
-        ),
-        (
-            crate::i18n::tr("what-s-new").to_owned(),
-            NotificationAction::OpenUrl(release_url.to_owned()),
-        ),
-    ];
+        ));
+    }
+    notification.actions.push((
+        crate::i18n::tr("what-s-new").to_owned(),
+        NotificationAction::OpenUrl(release_url.to_owned()),
+    ));
     notification
 }
 
@@ -503,6 +511,7 @@ fn show_activation(
 /// Plays the sound of `notification` unless sounds are off, quiet hours are
 /// on, or Windows says the user is presenting, gaming full screen or
 /// otherwise busy.
+#[cfg(windows)]
 pub(crate) fn play_sound(notification: &Notification) {
     // Cards that still show during quiet hours do so silently.
     if !SOUND_ENABLED.load(Ordering::Relaxed) || quiet_reason(false).is_some() {

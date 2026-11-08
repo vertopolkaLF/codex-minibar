@@ -113,6 +113,10 @@ pub fn apply(settings: &Settings) {
 /// Moves saved sign-in sessions out of protected storage into the instances'
 /// config folders, and keeps a lone pre-accounts OpenRouter key.
 fn finish_instance_migration(settings: &mut Settings) -> bool {
+    // This runs once, on the UI thread, before any window exists. Waiting here
+    // cannot freeze a window; skipping a slow keyring would lose the move.
+    #[cfg(not(windows))]
+    crate::platform::linux::keyring::settle_before_migration();
     crate::settings::finish_instance_migration(
         settings,
         |name| crate::platform::secrets::load(name).ok().flatten(),
@@ -142,7 +146,10 @@ fn startup_registration_present() -> bool {
 
 #[cfg(not(windows))]
 fn startup_registration_present() -> bool {
-    false
+    crate::platform::linux::autostart::is_registered().unwrap_or_else(|error| {
+        crate::platform::logger::info(format!("failed to read the autostart entry: {error:#}"));
+        false
+    })
 }
 
 #[cfg(windows)]
@@ -168,6 +175,6 @@ fn apply_startup_registration(enabled: bool) -> Result<()> {
 }
 
 #[cfg(not(windows))]
-fn apply_startup_registration(_enabled: bool) -> Result<()> {
-    Ok(())
+fn apply_startup_registration(enabled: bool) -> Result<()> {
+    crate::platform::linux::autostart::apply(enabled)
 }

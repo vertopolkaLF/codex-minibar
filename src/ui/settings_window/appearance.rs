@@ -172,7 +172,11 @@ pub(super) enum ThemeChoice {
 
 fn accent_label(accent: AccentColor) -> &'static str {
     match accent {
-        AccentColor::Windows => crate::i18n::tr("windows"),
+        AccentColor::Windows => crate::i18n::tr(if cfg!(windows) {
+            "windows"
+        } else {
+            "linux-windows"
+        }),
         AccentColor::Custom(_) => crate::i18n::tr("custom"),
         AccentColor::Blue => crate::i18n::tr("blue"),
         AccentColor::Purple => crate::i18n::tr("purple"),
@@ -645,7 +649,14 @@ pub(super) trait ThemePicker: ThemeHost {
             .w_full()
             .children(
                 [
-                    (AppTheme::Auto, crate::i18n::tr("windows")),
+                    (
+                        AppTheme::Auto,
+                        (if cfg!(windows) {
+                            crate::i18n::tr("windows")
+                        } else {
+                            crate::i18n::tr("linux-windows")
+                        }),
+                    ),
                     (AppTheme::Light, crate::i18n::tr("light")),
                     (AppTheme::Dark, crate::i18n::tr("dark")),
                 ]
@@ -689,7 +700,14 @@ impl SettingsWindow {
                     .detail(div().pt(px(12.0)).child(theme_cards).into_any_element())
                     .render(k),
                 Row::new("appearance-accent", crate::i18n::tr("accent-color"))
-                    .description(k, crate::i18n::tr("windows-follows-your-system-accent"))
+                    .description(
+                        k,
+                        if cfg!(windows) {
+                            crate::i18n::tr("windows-follows-your-system-accent")
+                        } else {
+                            crate::i18n::tr("linux-windows-follows-your-system-accent")
+                        },
+                    )
                     .detail(div().pt(px(12.0)).child(colors).into_any_element())
                     .render(k),
                 Row::new("appearance-time", crate::i18n::tr("time-format"))
@@ -724,7 +742,14 @@ impl SettingsWindow {
         let chevron = crate::ui::gui::mark::icon("caret-down-bold", 12.0, k.theme.text_secondary)
             .with_transformation(Transformation::rotate(radians(std::f32::consts::PI * turn)));
         let theme_header = Row::new("appearance-popup-theme", crate::i18n::tr("popup-theme"))
-            .description(k, crate::i18n::tr("popup-theme-description"))
+            .description(
+                k,
+                if cfg!(windows) {
+                    crate::i18n::tr("popup-theme-description")
+                } else {
+                    crate::i18n::tr("linux-popup-theme-description")
+                },
+            )
             .trailing(
                 div()
                     .size(px(28.0))
@@ -827,7 +852,7 @@ impl SettingsWindow {
 
         let radius_value = radius.dip();
         let popup = kit::card_of(k, |k| {
-            vec![
+            let mut rows = vec![
                 // Only the popup uses the custom font; Settings keep the
                 // system UI font.
                 Row::new("appearance-font", crate::i18n::tr("font"))
@@ -928,7 +953,13 @@ impl SettingsWindow {
                         )
                         .render(k)
                 },
-            ]
+            ];
+            // Linux has no backdrop blur: the popup is always solid there, so
+            // drop the material row (second, after the font).
+            if !cfg!(windows) {
+                rows.remove(1);
+            }
+            rows
         });
 
         let motion = kit::card_of(k, |k| {
@@ -937,9 +968,11 @@ impl SettingsWindow {
                 "appearance-animations",
                 crate::i18n::tr("animation-effects"),
                 Some(
-                    crate::i18n::tr(
-                        "glide-transitions-in-the-popup-and-settings-windows-own-animation",
-                    )
+                    crate::i18n::tr(if cfg!(windows) {
+                        "glide-transitions-in-the-popup-and-settings-windows-own-animation"
+                    } else {
+                        "linux-glide-transitions-in-the-popup-and-settings-windows-own-animation"
+                    })
                     .into(),
                 ),
                 animations,
@@ -1034,7 +1067,11 @@ impl SettingsWindow {
         }
         let query = input.read(cx).text().trim().to_lowercase();
         let current = self.settings.font_family.clone();
-        let default_label = SharedString::from(crate::i18n::tr("windows-default"));
+        let default_label = SharedString::from(if cfg!(windows) {
+            crate::i18n::tr("windows-default")
+        } else {
+            crate::i18n::tr("linux-windows-default")
+        });
         let mut families = self.font_families.clone();
         // A font removed since it was chosen stays visible as the selection.
         if let Some(name) = &current

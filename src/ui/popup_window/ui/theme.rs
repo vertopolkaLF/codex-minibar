@@ -88,7 +88,7 @@ pub(crate) fn popup_design(
 }
 
 /// The UI family to render with: the user's pick, or the system default.
-fn ui_font_family(custom: Option<&str>, default: &SharedString) -> SharedString {
+pub(crate) fn ui_font_family(custom: Option<&str>, default: &SharedString) -> SharedString {
     custom
         .map(str::trim)
         .filter(|name| !name.is_empty())
@@ -184,6 +184,7 @@ impl Palette {
 
     /// Lightness source of the Mica/Acrylic backdrop: a VS Code theme's
     /// canvas, else the Fluent base (#202020 dark, near-white light).
+    #[cfg(windows)]
     pub(crate) fn backdrop_luminosity(&self) -> (u8, u8, u8) {
         if self.vscode.is_none() {
             let level = if self.dark { 32 } else { 245 };
@@ -816,7 +817,7 @@ mod tests {
         Palette::vscode(
             Arc::new(theme),
             PopupBackgroundMaterial::Solid,
-            "Segoe UI".into(),
+            if cfg!(windows) { "Segoe UI" } else { "Sans" }.into(),
         )
     }
 

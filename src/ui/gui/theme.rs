@@ -40,6 +40,11 @@ pub(crate) fn register_bundled_fonts(cx: &gpui::App) {
 /// The default UI family: Segoe UI Variable on Windows 11, Segoe UI on older
 /// systems that do not ship the variable font.
 pub(crate) fn default_font_family(cx: &gpui::App) -> SharedString {
+    // Linux: the desktop's own interface font.
+    #[cfg(not(windows))]
+    if let Some(family) = crate::platform::linux::desktop::ui_font_family() {
+        return family.into();
+    }
     let names = cx.text_system().all_font_names();
     ["Segoe UI Variable Text", "Segoe UI Variable", "Segoe UI"]
         .into_iter()
@@ -67,6 +72,8 @@ pub(crate) struct Theme {
     pub(crate) dark: bool,
     pub(crate) font: SharedString,
     pub(crate) mono_font: SharedString,
+    /// Segoe glyph font for caption buttons; Linux draws Phosphor icons.
+    #[cfg_attr(not(windows), allow(dead_code))]
     pub(crate) icon_font: SharedString,
     pub(crate) window_bg: Hsla,
     pub(crate) layer: Hsla,
@@ -156,13 +163,22 @@ impl Fonts {
         };
         Self {
             text: default_font_family(cx),
-            mono: pick(&["Cascadia Mono", "Consolas"], "Consolas"),
+            mono: monospace_family(pick(&["Cascadia Mono", "Consolas"], "Consolas")),
             icons: pick(
                 &["Segoe Fluent Icons", "Segoe MDL2 Assets"],
                 "Segoe MDL2 Assets",
             ),
         }
     }
+}
+
+/// Linux: the desktop's monospace font instead of the Windows faces.
+pub(crate) fn monospace_family(windows: SharedString) -> SharedString {
+    #[cfg(not(windows))]
+    if let Some(family) = crate::platform::linux::desktop::monospace_font_family() {
+        return family.into();
+    }
+    windows
 }
 
 impl Theme {

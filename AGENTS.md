@@ -4,7 +4,7 @@ Always run `cargo check` after changes related to the app to ensure the code is 
 
 Always run `cargo fmt` after changing Rust code, including tests, and before every commit. CI rejects unformatted code (`cargo fmt --package codex-minibar --check`).
 
-Never launch the app itself.
+Never launch the app on LF-PC (check `hostname`). Linux has no restrictions: it's a dev box, so launching and driving the app there is fine.
 
 ## Worktree builds
 
@@ -38,7 +38,7 @@ as routine cleanup, and never delete it when removing a worktree.
 The shared EXE belongs to the last build, not necessarily the main checkout's
 branch. Do not infer its source worktree from its path. If a branch-specific
 artifact or truly parallel build is required, explicitly use a separate
-`CARGO_TARGET_DIR`. Never launch the app for verification. The wrapper does not
+`CARGO_TARGET_DIR`. Never launch the app for verification on LF-PC. The wrapper does not
 support `run` or `clean`. Release packaging continues to use `build.ps1`.
 
 All settings must take effect immediately in the running application. The user must never need to relaunch the app for a setting change to be applied. Keep every open UI surface and affected background component synchronized with the updated settings.
@@ -47,7 +47,7 @@ All settings must take effect immediately in the running application. The user m
 
 Theme and accent settings must be applied during application startup, before any window is shown. Every GPUI window (popup, Settings, onboarding) resolves its palette from the current settings and `window.appearance()` on every frame; never cache a palette across appearance changes, and observe `observe_window_appearance` so Auto follows the system theme. `crate::theme::apply_appearance` only records the accent for the tray glyphs.
 
-Before finishing appearance work, review both cold-start paths (popup first and Settings first) for Auto, Light, and Dark themes. Opening or closing another window must never be required to correct colors. Always run `cargo check`; never launch the app for this verification.
+Before finishing appearance work, review both cold-start paths (popup first and Settings first) for Auto, Light, and Dark themes. Opening or closing another window must never be required to correct colors. Always run `cargo check`; never launch the app for this verification on LF-PC.
 
 ## Settings window
 
@@ -57,7 +57,7 @@ The Settings and onboarding windows are GPUI windows in the same application as 
 
 When adding or changing a provider, update every provider enumeration, settings migration, worker lifecycle, popup state, tray source and provider-tab path as one atomic change. Popup provider tabs carry their instance (or driver) identity in their GPUI element id, so a slot can never keep another provider's icon, badge or label; keep it that way when adding tab kinds.
 
-Before finishing provider UI work, verify all enabled-provider combinations (each provider alone, every pair, all providers, and none) in code review. Confirm that every visible tab has the right label/icon and points to the matching provider snapshot. Always run `cargo check` after the change; never launch the app to perform that verification.
+Before finishing provider UI work, verify all enabled-provider combinations (each provider alone, every pair, all providers, and none) in code review. Confirm that every visible tab has the right label/icon and points to the matching provider snapshot. Always run `cargo check` after the change; never launch the app to perform that verification on LF-PC.
 
 https://github.com/steipete/CodexBar - similar app for macos. You can use it as a reference for the features and implementations.
 
@@ -68,3 +68,24 @@ https://github.com/janekbaraniewski/openusage - OpenUsage. Local-first usage/quo
 When you need icons, download them from iocnify. Icon pack - Phosphor Icons for settings window, Fluent UI Icons for the popup icons
 
 All layout shifts have to be animated, respect the user's preference for animations.
+
+## Linux
+
+The app also targets Linux (X11 and Wayland). `cfg(not(windows))` code is the Linux
+build; desktop integration lives in `src/platform/linux/` (StatusNotifierItem tray via `ksni`,
+freedesktop notifications, XDG portal settings, Secret Service key for secrets,
+XDG autostart, single-instance socket with `--toggle`). On Linux run plain Cargo
+(`cargo check --locked`, `cargo test --all-targets --all-features --locked`,
+`cargo clippy --all-targets --all-features --locked -- -D warnings`); package with
+`./build-linux.sh`.
+
+Every change must keep both platforms compiling and Clippy-clean. From Linux, check
+Windows with `CARGO_TARGET_DIR=target/win-check cargo clippy --target
+x86_64-pc-windows-gnu --all-targets --all-features -- -D warnings` (needs the
+`x86_64-pc-windows-gnu` Rust target and mingw-w64).
+
+The Linux popup is a window opened per show and sized to the capsule
+(`popup_window/ui/linux_host.rs`); GPUI cannot hide windows or make transparent
+areas click-through there, and Wayland apps cannot place windows. It closes on focus
+loss and Escape. Hide Windows-only settings on Linux instead of leaving inert
+controls, and give user-visible text that names Windows a `linux-` variant.

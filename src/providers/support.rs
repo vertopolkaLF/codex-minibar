@@ -7,7 +7,7 @@ use std::{
     ffi::OsStr,
     io::{self, ErrorKind},
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Command, ExitStatus, Stdio},
     sync::{
         Arc,
         atomic::{AtomicU8, Ordering},
@@ -20,6 +20,25 @@ use anyhow::{Result, bail, ensure};
 
 #[cfg(windows)]
 pub(crate) mod login_child;
+
+#[cfg(not(windows))]
+pub(crate) use crate::platform::linux::login_child::LoginChild as ManagedChild;
+#[cfg(windows)]
+pub(crate) use std::process::Child as ManagedChild;
+
+/// Unix CLI shims can spawn a native binary rather than exec it. Keep both
+/// processes in one owned group so cancellation also closes inherited pipes.
+pub(crate) fn spawn_command(command: Command) -> io::Result<ManagedChild> {
+    #[cfg(windows)]
+    {
+        let mut command = command;
+        command.spawn()
+    }
+    #[cfg(not(windows))]
+    {
+        ManagedChild::spawn(command)
+    }
+}
 
 /// Self-updaters in provider CLIs relaunch a detached copy of themselves.
 /// `CREATE_NO_WINDOW` does not reach that copy, so Windows gives it a visible
@@ -74,7 +93,7 @@ pub(crate) fn cli_command(
 /// Waits up to `timeout` for `child`. A child that is still running then, or
 /// that cannot be checked, is killed; `Ok(None)` reports the timeout.
 pub(crate) fn wait_with_timeout(
-    child: &mut Child,
+    child: &mut ManagedChild,
     timeout: Duration,
 ) -> io::Result<Option<ExitStatus>> {
     let deadline = Instant::now() + timeout;
@@ -94,7 +113,7 @@ pub(crate) fn wait_with_timeout(
     }
 }
 
-pub(crate) fn terminate(child: &mut Child) {
+pub(crate) fn terminate(child: &mut ManagedChild) {
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -110,12 +129,12 @@ pub(crate) fn refresh_session(
         if !program.is_absolute() {
             continue;
         }
-        let mut child = match cli_command(program, args)
+        let mut command = cli_command(program, args);
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
-        {
+            .stderr(Stdio::null());
+        let mut child = match spawn_command(command) {
             Ok(child) => child,
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(_) => bail!("{provider} session refresh could not start"),
@@ -145,9 +164,13 @@ pub(crate) struct CliSearch {
 /// Every existing launcher in search order: the explicit file or folder,
 /// the provider's known locations, PATH, then per-user bin folders.
 pub(crate) fn find_cli(explicit: Option<&Path>, search: &CliSearch) -> Vec<PathBuf> {
-    let path_dirs = env::var_os("PATH")
+    #[cfg_attr(windows, allow(unused_mut))]
+    let mut path_dirs = env::var_os("PATH")
         .map(|path| env::split_paths(&path).collect::<Vec<_>>())
         .unwrap_or_default();
+    // A login session's PATH often lacks Node version managers' bin folders.
+    #[cfg(not(windows))]
+    path_dirs.extend(crate::platform::linux::node_discovery::bin_dirs());
     let user_dirs = if search.user_bins {
         user_bin_dirs()
     } else {
@@ -158,7 +181,7 @@ pub(crate) fn find_cli(explicit: Option<&Path>, search: &CliSearch) -> Vec<PathB
 
 /// Relative locations are never returned, so a PATH entry like `.` cannot
 /// pick up a binary from the working directory.
-fn search_launchers(
+pub(crate) fn search_launchers(
     explicit: Option<&Path>,
     search: &CliSearch,
     path_dirs: &[PathBuf],
@@ -186,16 +209,32 @@ fn search_launchers(
     let mut seen = HashSet::new();
     ordered
         .into_iter()
-        .filter(|path| path.is_absolute() && path.is_file())
-        .filter(|path| {
-            seen.insert(
-                path.canonicalize()
-                    .unwrap_or_else(|_| path.clone())
-                    .to_string_lossy()
-                    .to_lowercase(),
-            )
-        })
+        .filter(|path| path.is_absolute() && path.is_file() && is_executable(path))
+        .filter(|path| seen.insert(path_identity(path)))
         .collect()
+}
+
+/// Unfinished downloads and other non-executable files never mask a
+/// runnable CLI. Windows has no executable bit.
+fn is_executable(path: &Path) -> bool {
+    #[cfg(not(windows))]
+    {
+        crate::platform::linux::apps::is_executable(path)
+    }
+    #[cfg(windows)]
+    {
+        let _ = path;
+        true
+    }
+}
+
+/// Deduplication key for a launcher. Unix paths are case-sensitive byte
+/// strings, so only Windows path identity folds case.
+fn path_identity(path: &Path) -> PathBuf {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(windows)]
+    let canonical = PathBuf::from(canonical.to_string_lossy().to_lowercase());
+    canonical
 }
 
 /// Per-user launcher folders that the PATH a tray app inherited at login may
@@ -295,11 +334,14 @@ impl LoginControl {
     pub(crate) fn cancelled(&self) -> bool {
         self.0.load(Ordering::SeqCst) == 1
     }
+    /// Safe to call again: `login` commits and its caller then saves the result.
     pub(crate) fn begin_save(&self) -> Result<()> {
         ensure!(
-            self.0
-                .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst)
-                .is_ok(),
+            !matches!(
+                self.0
+                    .compare_exchange(0, 2, Ordering::SeqCst, Ordering::SeqCst),
+                Err(1)
+            ),
             "Sign-in cancelled."
         );
         Ok(())
@@ -309,6 +351,109 @@ impl LoginControl {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    fn make_executable(path: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[cfg(windows)]
+    fn make_executable(_path: &Path) {}
+
+    #[cfg(not(windows))]
+    #[test]
+    fn refresh_timeout_terminates_the_cli_helper_process() {
+        let root = tempfile::tempdir().unwrap();
+        let cli = root.path().join("refresh-cli");
+        let pid_file = root.path().join("helper.pid");
+        std::fs::write(&cli, "#!/bin/sh\nsleep 3 &\necho $! > \"$1\"\nwait\n").unwrap();
+        make_executable(&cli);
+        let error = refresh_session(
+            "Fixture",
+            &[cli],
+            &[pid_file.to_str().unwrap()],
+            Duration::from_secs(1),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("timed out"));
+        let pid: u32 = std::fs::read_to_string(pid_file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            // A killed orphan can briefly remain a zombie until init reaps it.
+            let running = std::fs::read_to_string(format!("/proc/{pid}/stat")).is_ok_and(|stat| {
+                !stat
+                    .rsplit_once(')')
+                    .unwrap()
+                    .1
+                    .trim_start()
+                    .starts_with('Z')
+            });
+            if !running {
+                break;
+            }
+            assert!(Instant::now() < deadline, "refresh helper survived timeout");
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unusable_files_do_not_mask_a_runnable_cli_and_symlinks_are_deduplicated() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let incomplete = root.path().join("incomplete");
+        let cli = root.path().join("cli");
+        let alias = root.path().join("alias");
+        std::fs::write(&incomplete, b"unfinished download").unwrap();
+        std::fs::write(&cli, b"fixture").unwrap();
+        make_executable(&cli);
+        symlink(&cli, &alias).unwrap();
+        let search = CliSearch {
+            names: &[],
+            known: vec![incomplete, alias.clone(), cli],
+            user_bins: false,
+        };
+        assert_eq!(search_launchers(None, &search, &[], &[]), vec![alias]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_candidates_preserve_case_and_non_utf8_path_identity() {
+        use std::{
+            ffi::OsString,
+            os::unix::{ffi::OsStringExt, fs::symlink},
+        };
+        let root = tempfile::tempdir().unwrap();
+        let mut binaries = Vec::new();
+        for name in [
+            OsString::from("Tools"),
+            OsString::from("tools"),
+            OsString::from_vec(vec![b'a', 0x80]),
+            OsString::from_vec(vec![b'a', 0x81]),
+        ] {
+            let directory = root.path().join(name);
+            std::fs::create_dir(&directory).unwrap();
+            let binary = directory.join("codex");
+            std::fs::write(&binary, b"fixture").unwrap();
+            make_executable(&binary);
+            binaries.push(binary);
+        }
+        let alias = root.path().join("alias");
+        symlink(&binaries[0], &alias).unwrap();
+        let mut known = binaries.clone();
+        known.push(alias);
+        let search = CliSearch {
+            names: &[],
+            known,
+            user_bins: false,
+        };
+        assert_eq!(search_launchers(None, &search, &[], &[]), binaries);
+    }
 
     #[test]
     fn relative_refresh_candidates_are_never_launched() {
@@ -346,6 +491,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("provider.exe");
         std::fs::write(&executable, b"fixture").unwrap();
+        make_executable(&executable);
         let search = CliSearch {
             names: &[],
             known: vec![executable, directory.path().join("missing.exe")],
@@ -364,9 +510,11 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let executable = directory.path().join("agy.exe");
         std::fs::write(&executable, b"fixture").unwrap();
+        make_executable(&executable);
         let known = tempfile::tempdir().unwrap();
         let other = known.path().join("agy.exe");
         std::fs::write(&other, b"fixture").unwrap();
+        make_executable(&other);
         let search = CliSearch {
             names: &["agy.exe"],
             known: vec![other],
@@ -388,6 +536,7 @@ mod tests {
         for directory in [&native, &on_path, &explicit] {
             std::fs::create_dir_all(directory).unwrap();
             std::fs::write(directory.join(name), b"fixture, never executed").unwrap();
+            make_executable(&directory.join(name));
         }
         let search = CliSearch {
             names: &["claude.exe"],
@@ -461,5 +610,7 @@ mod tests {
         control.begin_save().unwrap();
         control.cancel();
         assert!(!control.cancelled());
+        // `login` commits, then the Settings dialog commits before saving.
+        control.begin_save().unwrap();
     }
 }

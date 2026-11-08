@@ -33,11 +33,13 @@ const CATALOG_REFRESH: Duration = Duration::from_secs(60);
 
 /// Install folders of game stores, lowercase. Their launchers live outside
 /// them (or in [`LIBRARY_EXCLUSIONS`]), so browsing a store is not a game.
-const LIBRARY_FOLDERS: [&str; 4] = [
+const LIBRARY_FOLDERS: [&str; 5] = [
     "\\steamapps\\common\\",
     "\\epic games\\",
     "\\gog galaxy\\games\\",
     "\\xboxgames\\",
+    // Heroic (Epic and GOG on Linux) installs under ~/Games/Heroic.
+    "\\games\\heroic\\",
 ];
 const LIBRARY_EXCLUSIONS: [&str; 1] = ["\\epic games\\launcher\\"];
 
@@ -96,6 +98,7 @@ struct Game {
 }
 
 /// The foreground window's process.
+#[cfg(windows)]
 struct Foreground {
     process: os::Process,
     path: String,
@@ -217,7 +220,23 @@ fn evaluate() {
     }
 }
 
+/// Linux has no foreground window to ask about on Wayland: any running
+/// process of this user that counts as a game starts game mode. Steam's
+/// launch environment stands in for Windows' exclusive full screen.
+#[cfg(not(windows))]
+fn foreground_game(lists: &Lists) -> Option<Game> {
+    os::running_processes().into_iter().find_map(|running| {
+        let key = path_key(&running.path);
+        is_game(&key, lists, running.launched_by_steam, catalog_contains).then(|| Game {
+            title: String::new(),
+            process: running.process,
+            path: running.path,
+        })
+    })
+}
+
 /// The foreground process, when it is a game.
+#[cfg(windows)]
 fn foreground_game(lists: &Lists) -> Option<Game> {
     let foreground = os::foreground()?;
     let key = path_key(&foreground.path);
@@ -241,6 +260,10 @@ fn is_game(key: &str, lists: &Lists, exclusive: bool, known: impl Fn(&str) -> bo
 }
 
 fn in_library(key: &str) -> bool {
+    // Library recognition is a name heuristic; explicit executable identities
+    // below must still preserve the Unix filesystem's case and separators.
+    #[cfg(not(windows))]
+    let key = key.replace('/', "\\").to_lowercase();
     LIBRARY_FOLDERS.iter().any(|folder| key.contains(folder))
         && !LIBRARY_EXCLUSIONS
             .iter()
@@ -266,9 +289,14 @@ fn catalog_contains(key: &str) -> bool {
         .is_some_and(|(_, games)| games.contains(key))
 }
 
-/// Paths compare case-insensitively, the way Windows resolves them.
+/// Windows path comparisons ignore case and slash direction. Unix paths keep
+/// their case, backslashes and whitespace, which can identify different files.
 pub fn path_key(path: &str) -> String {
-    path.trim().replace('/', "\\").to_lowercase()
+    if cfg!(windows) {
+        path.trim().replace('/', "\\").to_lowercase()
+    } else {
+        path.to_owned()
+    }
 }
 
 /// The window title when it reads like a name, otherwise the file name.
@@ -281,11 +309,14 @@ fn display_name(title: &str, path: &str) -> String {
 }
 
 /// `C:\Games\Hollow Knight\hollow_knight.exe` → `hollow_knight`.
+/// Splits on both `\` and `/` so Windows-style paths work on every platform.
 pub fn file_stem(path: &str) -> String {
-    std::path::Path::new(path)
-        .file_stem()
-        .map(|stem| stem.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.to_owned())
+    let name = path.rsplit(['\\', '/']).next().unwrap_or(path);
+    match name.rfind('.') {
+        Some(dot) if dot > 0 => name[..dot].to_owned(),
+        _ if name.is_empty() => path.to_owned(),
+        _ => name.to_owned(),
+    }
 }
 
 /// Records the activation state and applies a change.
@@ -460,26 +491,147 @@ mod os {
 
 #[cfg(not(windows))]
 mod os {
-    use super::Foreground;
+    use std::path::Path;
 
-    pub(super) struct Process;
+    /// A process identified by pid and start time, so a recycled pid is not
+    /// mistaken for the game that exited.
+    pub(super) struct Process {
+        pid: u32,
+        start_time: u64,
+    }
 
     impl Process {
         pub(super) fn is_running(&self) -> bool {
-            false
+            start_time(self.pid) == Some(self.start_time)
         }
     }
 
-    pub(super) fn foreground() -> Option<Foreground> {
-        None
+    pub(super) struct Running {
+        pub(super) process: Process,
+        pub(super) path: String,
+        pub(super) launched_by_steam: bool,
     }
 
-    pub(super) fn exclusive_full_screen() -> bool {
-        false
+    /// Processes of this user with a readable executable.
+    pub(super) fn running_processes() -> Vec<Running> {
+        let Ok(entries) = std::fs::read_dir("/proc") else {
+            return Vec::new();
+        };
+        // SAFETY: getpid has no preconditions and cannot fail.
+        let own = unsafe { libc::getpid() } as u32;
+        entries
+            .filter_map(Result::ok)
+            .filter_map(|entry| entry.file_name().to_str()?.parse::<u32>().ok())
+            .filter(|pid| *pid != own)
+            .filter_map(|pid| {
+                let proc = Path::new("/proc").join(pid.to_string());
+                // Other users' executables are unreadable; skip them.
+                let path = std::fs::read_link(proc.join("exe")).ok()?;
+                let start_time = start_time(pid)?;
+                Some(Running {
+                    process: Process { pid, start_time },
+                    path: path.to_string_lossy().into_owned(),
+                    launched_by_steam: launched_by_steam(&proc),
+                })
+            })
+            .collect()
+    }
+
+    /// Steam starts games with their app id in the environment.
+    fn launched_by_steam(proc: &Path) -> bool {
+        std::fs::read(proc.join("environ")).is_ok_and(|environ| {
+            environ.split(|byte| *byte == 0).any(|variable| {
+                variable
+                    .strip_prefix(b"SteamGameId=")
+                    .is_some_and(|id| !id.is_empty() && id != b"0")
+            })
+        })
+    }
+
+    /// Field 22 of `/proc/<pid>/stat`, only while the process is alive.
+    fn start_time(pid: u32) -> Option<u64> {
+        let stat = std::fs::read(format!("/proc/{pid}/stat")).ok()?;
+        live_start_time(&stat)
+    }
+
+    fn live_start_time(stat: &[u8]) -> Option<u64> {
+        // comm can contain spaces, parentheses and arbitrary Unix bytes.
+        // Only the fields after its closing parenthesis are ASCII numbers.
+        let after_name = &stat[stat.iter().rposition(|byte| *byte == b')')? + 1..];
+        let mut fields = after_name
+            .split(u8::is_ascii_whitespace)
+            .filter(|field| !field.is_empty());
+        match fields.next()? {
+            [b'Z' | b'X' | b'x'] => return None,
+            [_] => {}
+            _ => return None,
+        }
+        std::str::from_utf8(fields.nth(18)?).ok()?.parse().ok()
     }
 
     pub(super) fn game_bar_catalog() -> Vec<String> {
         Vec::new()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn proc_stat_handles_arbitrary_names_and_excludes_exited_processes() {
+            for state in [b'R', b'S', b'T', b'Z', b'X', b'x'] {
+                let mut stat = b"123 (name-\xff with ) parentheses) ".to_vec();
+                stat.push(state);
+                stat.extend_from_slice(format!(" {} 12345 0", ["0"; 18].join(" ")).as_bytes());
+                assert_eq!(
+                    live_start_time(&stat),
+                    match state {
+                        b'Z' | b'X' | b'x' => None,
+                        _ => Some(12345),
+                    }
+                );
+            }
+            assert_eq!(live_start_time(b"123 (truncated) S 0"), None);
+        }
+
+        #[test]
+        fn an_unreaped_child_no_longer_counts_as_a_running_game() {
+            use std::{
+                process::{Command, Stdio},
+                time::{Duration, Instant},
+            };
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", "read ignored"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+                .unwrap();
+            let process = Process {
+                pid: child.id(),
+                start_time: start_time(child.id()).unwrap(),
+            };
+            assert!(process.is_running());
+            drop(child.stdin.take());
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while process.is_running() && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            let stopped = !process.is_running();
+            let still_in_proc = Path::new(&format!("/proc/{}/stat", child.id())).is_file();
+            if !stopped {
+                let _ = child.kill();
+            }
+            child.wait().unwrap();
+            assert!(
+                stopped,
+                "an exited but unreaped child still counted as running"
+            );
+            assert!(
+                still_in_proc,
+                "the test must cover a process still present in /proc"
+            );
+        }
     }
 }
 
@@ -582,6 +734,30 @@ mod tests {
             ignored: Vec::new(),
         };
         assert!(is_game(&browser, &added, false, unknown));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn unix_game_overrides_only_match_the_selected_executable() {
+        let selected = path_key("/games/Custom/Game");
+        let ignored = Lists {
+            games: Vec::new(),
+            ignored: vec![selected.clone()],
+        };
+        assert!(!is_game(&selected, &ignored, true, |_| true));
+        for distinct in [
+            "/games/Custom/game",
+            "/games/Custom/Game ",
+            r"/games/Custom\Game",
+        ] {
+            let key = path_key(distinct);
+            assert_ne!(key, selected);
+            assert!(is_game(&key, &ignored, true, |_| false));
+        }
+        assert!(in_library(&path_key(
+            "/home/me/.steam/steamapps/common/Game/game"
+        )));
+        assert!(in_library(&path_key("/home/me/Games/Heroic/Game/game")));
     }
 
     #[test]

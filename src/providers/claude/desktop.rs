@@ -82,6 +82,7 @@ fn config_roots() -> Vec<PathBuf> {
     roots
 }
 
+#[cfg(any(windows, test))]
 fn is_store_package_name(name: &str) -> bool {
     name.starts_with("Claude_") && name.ends_with("pzs8sxrjxfjjc")
 }
@@ -351,7 +352,7 @@ fn decrypt_oscrypt_v10(envelope: &str, master_key: &[u8]) -> Result<Vec<u8>> {
 /// `CryptUnprotectData` for the current user. The DPAPI blob is bound to the
 /// Windows account, so this only ever succeeds for the signed-in user.
 #[cfg(windows)]
-fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
+pub(crate) fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
     use windows_sys::Win32::{
         Foundation::LocalFree,
         Security::Cryptography::{CRYPT_INTEGER_BLOB, CryptUnprotectData},

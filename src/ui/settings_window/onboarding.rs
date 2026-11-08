@@ -285,6 +285,17 @@ impl OnboardingWindow {
         onboarding
     }
 
+    /// Keep the wizard's snapshot current with commits from other surfaces.
+    pub(crate) fn apply_sync(&mut self, settings: Settings, cx: &mut Context<Self>) {
+        if crate::settings::store::has_pending() || self.settled || self.finishing {
+            return;
+        }
+        self.enabled = enabled_providers(&settings);
+        self.settings = settings;
+        cx.refresh_windows();
+        cx.notify();
+    }
+
     /// Commit the current choices (without auto-activation) for the popup.
     fn publish(&self) {
         if self.settled {
@@ -678,7 +689,14 @@ impl OnboardingWindow {
                     .detail(div().pt(px(12.0)).child(theme_cards).into_any_element())
                     .render(k),
                 Row::new("onboarding-accent", crate::i18n::tr("accent-color"))
-                    .description(k, crate::i18n::tr("windows-follows-your-system-accent"))
+                    .description(
+                        k,
+                        if cfg!(windows) {
+                            crate::i18n::tr("windows-follows-your-system-accent")
+                        } else {
+                            crate::i18n::tr("linux-windows-follows-your-system-accent")
+                        },
+                    )
                     .detail(div().pt(px(12.0)).child(colors).into_any_element())
                     .render(k),
             ]
@@ -687,7 +705,14 @@ impl OnboardingWindow {
         let popup = kit::row_card(
             k,
             Row::new("onboarding-popup-theme", crate::i18n::tr("popup-theme"))
-                .description(k, crate::i18n::tr("popup-theme-description"))
+                .description(
+                    k,
+                    if cfg!(windows) {
+                        crate::i18n::tr("popup-theme-description")
+                    } else {
+                        crate::i18n::tr("linux-popup-theme-description")
+                    },
+                )
                 .detail(div().pt(px(12.0)).child(grid).into_any_element()),
         );
         let browser = self.open_vsx_inline(k, window, cx);
@@ -736,6 +761,10 @@ impl Render for OnboardingWindow {
             self.settings.accent_color,
             window.appearance(),
             self.fonts.clone(),
+        );
+        theme.font = crate::ui::popup_window::ui::theme::ui_font_family(
+            self.settings.font_family.as_deref(),
+            &self.fonts.text,
         );
         if self.backdrop.mica() {
             theme = theme.with_mica();
@@ -832,13 +861,11 @@ impl Render for OnboardingWindow {
             .text_color(theme.text)
             .bg(theme.window_bg)
             .child(
-                div()
-                    .id("onboarding-titlebar")
+                kit::window_drag_area(div().id("onboarding-titlebar"))
                     .flex()
                     .items_center()
                     .h(px(40.0))
                     .flex_none()
-                    .window_control_area(WindowControlArea::Drag)
                     .child(
                         div()
                             .flex()

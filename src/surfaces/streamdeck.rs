@@ -87,10 +87,16 @@ const IO_TIMEOUT: Duration = Duration::from_secs(3);
 /// Commands that must be executed by the existing tray/UI bridge thread.
 #[derive(Clone, Debug)]
 pub enum Command {
+    #[cfg(not(windows))]
+    ShowProvider {
+        provider: ProviderId,
+    },
     OpenPopup {
         provider: Option<ProviderId>,
     },
     RefreshData,
+    #[cfg(not(windows))]
+    RefreshAfterResume,
     /// Settings on the Command Palette page.
     OpenCommandPaletteSettings,
 }
@@ -116,6 +122,10 @@ enum Request {
         token: String,
     },
     OpenSettings {
+        token: String,
+    },
+    /// The report `codex-minibar status` prints.
+    Status {
         token: String,
     },
 }
@@ -151,6 +161,11 @@ enum Response {
         #[serde(flatten)]
         payload: crate::surfaces::cmdpal::Payload,
     },
+    Status {
+        ok: bool,
+        protocol: u32,
+        report: crate::surfaces::status::Report,
+    },
     Accepted {
         ok: bool,
     },
@@ -184,6 +199,10 @@ struct MetricInfo {
 /// the same thread as tray activation and avoids a second application runtime.
 pub fn start_server(state: Arc<AppState>) -> mpsc::Receiver<Command> {
     let (commands_tx, commands_rx) = mpsc::channel();
+    #[cfg(not(windows))]
+    crate::platform::linux::dbus::start(Arc::clone(&state), commands_tx.clone());
+    #[cfg(not(windows))]
+    crate::platform::linux::resume::start(commands_tx.clone());
     thread::spawn(move || {
         let endpoint_path = match crate::platform::paths::streamdeck_endpoint() {
             Ok(path) => path,
@@ -219,12 +238,9 @@ fn run_server(
         executable,
     };
 
-    if let Some(parent) = endpoint_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
     let endpoint_json = serde_json::to_vec_pretty(&endpoint)
         .map_err(|error| io::Error::other(format!("serialize endpoint: {error}")))?;
-    fs::write(&endpoint_path, endpoint_json)?;
+    write_endpoint(&endpoint_path, &endpoint_json)?;
 
     let active = Arc::new(AtomicUsize::new(0));
     for incoming in listener.incoming() {
@@ -250,6 +266,62 @@ fn run_server(
     Ok(())
 }
 
+/// The endpoint contains the loopback authorization token. Publish complete
+/// JSON in one rename, with private Unix permissions even when replacing an
+/// older endpoint created with the user's default umask.
+fn write_endpoint(path: &std::path::Path, contents: &[u8]) -> io::Result<()> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| io::Error::other("endpoint path has no parent directory"))?;
+    fs::create_dir_all(parent)?;
+    let mut staged = tempfile::NamedTempFile::new_in(parent)?;
+    staged.write_all(contents)?;
+    staged.as_file().sync_all()?;
+    publish_endpoint(staged, path)
+}
+
+#[cfg(not(windows))]
+fn publish_endpoint(staged: tempfile::NamedTempFile, path: &std::path::Path) -> io::Result<()> {
+    staged.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+/// ReplaceFile preserves existing readers' handles, unlike MoveFileEx (used by
+/// tempfile::persist). Close our staging handle before Windows opens it again.
+#[cfg(windows)]
+fn publish_endpoint(staged: tempfile::NamedTempFile, path: &std::path::Path) -> io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::{Foundation::ERROR_FILE_NOT_FOUND, Storage::FileSystem::ReplaceFileW};
+    let staged = staged.into_temp_path();
+    let destination: Vec<u16> = path.as_os_str().encode_wide().chain(Some(0)).collect();
+    let source: Vec<u16> = staged.as_os_str().encode_wide().chain(Some(0)).collect();
+    // SAFETY: paths are NUL-terminated and live for the call; optional pointers
+    // are null. The staging guard removes the temporary file on failure.
+    if unsafe {
+        ReplaceFileW(
+            destination.as_ptr(),
+            source.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    } != 0
+    {
+        return Ok(());
+    }
+    let error = io::Error::last_os_error();
+    if error.raw_os_error() != Some(ERROR_FILE_NOT_FOUND as i32) {
+        return Err(error);
+    }
+    // First publication has no destination. Do not overwrite one created by a
+    // concurrent writer after ReplaceFile reported a missing file.
+    staged
+        .persist_noclobber(path)
+        .map_err(|error| error.error)?;
+    Ok(())
+}
+
 /// Releases a connection-handler slot even if the handler panics.
 struct ConnectionSlot(Arc<AtomicUsize>);
 
@@ -260,6 +332,15 @@ impl Drop for ConnectionSlot {
 }
 
 /// 128 bits from the OS CSPRNG, hex encoded.
+#[cfg(not(windows))]
+fn generate_token() -> io::Result<String> {
+    let mut bytes = [0u8; 16];
+    crate::platform::linux::random_bytes(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// 128 bits from the OS CSPRNG, hex encoded.
+#[cfg(windows)]
 fn generate_token() -> io::Result<String> {
     use windows_sys::Win32::Security::Cryptography::{
         BCRYPT_USE_SYSTEM_PREFERRED_RNG, BCryptGenRandom,
@@ -338,7 +419,8 @@ fn handle_request(
         | Request::Refresh { token }
         | Request::OpenPopup { token, .. }
         | Request::Palette { token }
-        | Request::OpenSettings { token } => token,
+        | Request::OpenSettings { token }
+        | Request::Status { token } => token,
     };
     if token != expected_token {
         return Response::Error {
@@ -354,6 +436,11 @@ fn handle_request(
             providers: build_catalog(state),
         },
         Request::Snapshot { .. } => build_snapshot(state),
+        Request::Status { .. } => Response::Status {
+            ok: true,
+            protocol: PROTOCOL_VERSION,
+            report: status_report(state),
+        },
         Request::Palette { .. } => {
             let limits = state
                 .limits
@@ -433,6 +520,18 @@ fn build_catalog(state: &AppState) -> Vec<ProviderInfo> {
         .collect()
 }
 
+/// The report `codex-minibar status` and the Linux D-Bus service publish.
+pub(crate) fn status_report(state: &AppState) -> crate::surfaces::status::Report {
+    // Built from a copy: the D-Bus service polls this, and building can
+    // rasterize provider marks, so workers must not wait on the lock.
+    let limits = state
+        .limits
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .clone();
+    crate::surfaces::status::report(&limits)
+}
+
 fn build_snapshot(state: &AppState) -> Response {
     let limits = state
         .limits
@@ -458,4 +557,64 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
         .map_err(|error| io::Error::other(format!("serialize response: {error}")))?;
     stream.write_all(b"\n")?;
     stream.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn endpoint_publication_creates_then_replaces_a_complete_document() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory
+            .path()
+            .join("nested")
+            .join("streamdeck-bridge.json");
+        write_endpoint(&path, b"first-fixture").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"first-fixture");
+        write_endpoint(&path, b"second-fixture").unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"second-fixture");
+        assert_eq!(fs::read_dir(path.parent().unwrap()).unwrap().count(), 1);
+    }
+
+    #[test]
+    fn endpoint_publication_replaces_the_file_instead_of_truncating_a_readers_copy() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("streamdeck-bridge.json");
+        fs::write(&path, br#"{"token":"old-fixture"}"#).unwrap();
+        let mut reader = fs::File::open(&path).unwrap();
+        let new = br#"{"token":"new-fixture"}"#;
+        write_endpoint(&path, new).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), new);
+        let mut previous = String::new();
+        reader.read_to_string(&mut previous).unwrap();
+        assert_eq!(previous, r#"{"token":"old-fixture"}"#);
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                0o600
+            );
+        }
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn endpoint_publication_replaces_a_symlink_without_writing_its_target() {
+        use std::os::unix::fs::symlink;
+        let directory = tempfile::tempdir().unwrap();
+        let outside = directory.path().join("unrelated.json");
+        let endpoint = directory.path().join("streamdeck-bridge.json");
+        fs::write(&outside, b"unchanged").unwrap();
+        symlink(&outside, &endpoint).unwrap();
+        write_endpoint(&endpoint, br#"{"token":"fixture"}"#).unwrap();
+        assert_eq!(fs::read(&outside).unwrap(), b"unchanged");
+        assert!(
+            !fs::symlink_metadata(&endpoint)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+    }
 }

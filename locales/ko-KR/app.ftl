@@ -1092,10 +1092,10 @@ on = 켜기
 # src/ui/settings_window/providers/page.rs
 off = 끄기
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 more-options = 추가 옵션
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 custom-color = 사용자 지정 색상
 
 # src/ui/settings_window/troubleshoot.rs
@@ -2908,12 +2908,26 @@ time-late = { $time } 지연
 
 # Floating usage panel
 popup-floating = 플로팅 패널
+linux-popup-keep-open = 열린 상태 유지
+linux-popup-keep-open-description = 앱을 전환할 때 패널을 열린 상태로 유지합니다. Wayland에서는 패널 헤더를 오른쪽 클릭하고 데스크톱 창 메뉴에 «항상 위» 항목이 있으면 선택하세요.
+linux-popup-unpin = 패널 고정 해제
 popup-floating-description = 패널을 열어 두고 헤더를 드래그하여 위치나 모니터를 변경합니다.
 popup-always-on-top = 항상 위에 표시
 popup-always-on-top-description = 패널을 다른 앱 위에 표시하고 앱을 전환해도 열린 상태로 유지합니다.
 popup-position = 패널 위치
 popup-position-description = 세션 간에 위치가 저장됩니다.
 popup-reset-position = 위치 초기화
+popup-placement = 팝업 위치
+popup-placement-description = 화면에서 팝업이 열리는 위치입니다. 자동은 트레이나 작업 표시줄 옆에 엽니다.
+popup-placement-auto = 자동
+popup-placement-top-left = 왼쪽 위
+popup-placement-top-center = 가운데 위
+popup-placement-top-right = 오른쪽 위
+popup-placement-bottom-left = 왼쪽 아래
+popup-placement-bottom-center = 가운데 아래
+popup-placement-bottom-right = 오른쪽 아래
+linux-popup-placement-description = 화면에서 팝업이 열리는 위치입니다.
+linux-popup-placement-wayland = Wayland에서는 데스크톱이 창 위치를 정하므로 이 설정은 X11 세션에서만 적용됩니다.
 popup-drag-header = 드래그하여 이동
 popup-close = 패널 닫기
 
@@ -2935,13 +2949,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = 적립된 재설정을 �
 # src/ui/settings_window/providers/page.rs
 automatic-resets = 자동 재설정
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = 적립된 재설정이 자동으로 적용됨
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = 이 공급자에는 적립된 재설정이 없습니다.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = { $minutes }분 후 적립된 재설정이 적용됩니다
 
 # src/ui/settings_window/notifications.rs
@@ -2950,14 +2964,84 @@ before-an-automatic-reset = 자동 재설정 전
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = 적립된 재설정이 자동으로 적용되기 10분 전에 알립니다.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = 지금 적용
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = 취소
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = 적립된 재설정이 적용됨
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = 추가 Claude 계정에는 Claude Code CLI가 필요합니다. Claude 앱에 내장된 사본은 앱 자체 계정에만 사용됩니다.
+# src/surfaces/tray.rs
+linux-no-tray-title = 시스템 트레이를 찾을 수 없음
+
+# src/surfaces/tray.rs
+linux-no-tray-body = 패널에 Codex Minibar를 표시하려면 AppIndicator 확장을 켜세요. Codex Minibar를 다시 실행하면 열립니다.
+
+# src/ui/settings_window/general.rs
+start-at-login = 로그인 시 시작
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = 데스크톱 키보드 설정에서 이 명령을 실행하는 사용자 지정 단축키를 추가하면 팝업을 표시하거나 숨길 수 있습니다.
+
+# src/ui/settings_window/general.rs
+copy-command = 명령 복사
+
+# src/ui/settings_window/general.rs
+command-copied = 명령을 복사했습니다
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = AI 구독의 사용 한도, 초기화, 지출을 시스템 트레이에서 바로 확인하는 무료 오픈 소스 도우미입니다.
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = 모든 설정을 .toml 파일로 저장합니다. 저장된 키는 이 컴퓨터에 암호화된 상태로 남습니다.
+
+# src/ui/settings_window/appearance.rs
+linux-windows = 시스템
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = 시스템은 데스크톱 강조 색을 따릅니다.
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = 시스템 기본값
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = 팝업만 바뀝니다. 설정은 자체 모양을 유지합니다.
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = 팝업과 설정에서 부드럽게 전환합니다. 데스크톱의 애니메이션 설정도 따릅니다.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = 시스템 키링의 키로 암호화되며 설정 파일에는 저장되지 않습니다.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = 자격 증명을 저장했습니다(시스템 키링으로 암호화).
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API 키를 저장했습니다(시스템 키링으로 암호화).
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = 시스템 키링으로 암호화됨
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = 모든 앱 창과 알림에 즉시 적용됩니다. 자동은 시스템 언어를 따릅니다.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 구성 폴더를 CLAUDE_CONFIG_DIR로 지정해 { $name }의 Claude Code 로그인을 실행합니다. 로그인 정보는 해당 폴더에 보관되며 Claude Code가 갱신합니다.
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = Steam으로 실행한 게임과 Steam 또는 Heroic 라이브러리의 게임은 자동으로 감지됩니다. 다른 프로그램은 여기에 추가하세요.
+linux-popup-shortcut-native-description = 데스크톱의 키보드 설정에 저장됩니다. 변경 사항은 즉시 적용됩니다.
+linux-popup-shortcut-choose = 단축키 설정
+linux-popup-shortcut-dialog-hint = 사용할 키 조합을 누르세요. 데스크톱의 키보드 설정에 사용자 지정 단축키로 저장됩니다.
+linux-popup-shortcut-needs-modifier = Ctrl, Alt 또는 Super를 포함하거나 F13–F24를 사용하세요.
+linux-popup-shortcut-save-failed = 데스크톱에서 단축키를 받아들이지 않았습니다. 다시 시도하거나 키보드 설정에서 명령을 추가하세요.
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = 기존 공식 agy 로그인에서 구독 할당량을 읽습니다.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy 실행 파일이 포함된 폴더입니다. 자동으로 찾으려면 비워두세요.
+
+linux-folder-with-grok-cli = grok 실행 파일이 있는 폴더입니다. 비워 두면 자동으로 찾습니다.
+linux-folder-with-command-code-cli = command-code 또는 cmd가 있는 폴더입니다. 비워 두면 자동으로 찾습니다.

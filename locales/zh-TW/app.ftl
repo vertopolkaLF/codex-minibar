@@ -2010,12 +2010,26 @@ time-late = 延遲 { $time }
 
 # Floating usage panel
 popup-floating = 浮動面板
+linux-popup-keep-open = 保持開啟
+linux-popup-keep-open-description = 切換應用程式時保持面板開啟。在 Wayland 中，請在面板標題列按右鍵，如果桌面視窗選單中有「一律置頂」，請選取該選項。
+linux-popup-unpin = 取消固定面板
 popup-floating-description = 保持面板開啟，拖曳標題列可移至其他位置或螢幕。
 popup-always-on-top = 一律置頂
 popup-always-on-top-description = 將面板顯示在其他應用程式上方，切換應用程式時保持開啟。
 popup-position = 面板位置
 popup-position-description = 下次啟動時還原面板位置。
 popup-reset-position = 重設位置
+popup-placement = 彈出視窗位置
+popup-placement-description = 彈出視窗在螢幕上開啟的位置。「自動」會在系統匣或工作列旁開啟。
+popup-placement-auto = 自動
+popup-placement-top-left = 左上
+popup-placement-top-center = 頂部置中
+popup-placement-top-right = 右上
+popup-placement-bottom-left = 左下
+popup-placement-bottom-center = 底部置中
+popup-placement-bottom-right = 右下
+linux-popup-placement-description = 彈出視窗在螢幕上開啟的位置。
+linux-popup-placement-wayland = 在 Wayland 上，視窗的開啟位置由桌面決定，因此此設定僅在 X11 工作階段中生效。
 popup-drag-header = 拖曳以移動
 popup-close = 關閉面板
 
@@ -2037,13 +2051,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = 已儲備重置在到期�
 # src/ui/settings_window/providers/page.rs
 automatic-resets = 自動重置
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = 已自動套用已儲備重置
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = 此提供者沒有已儲備重置。
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = 已儲備重置將在 { $minutes } 分鐘後套用
 
 # src/ui/settings_window/notifications.rs
@@ -2052,14 +2066,84 @@ before-an-automatic-reset = 自動重置之前
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = 在自動套用已儲備重置前 10 分鐘提醒。
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = 立即套用
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = 取消
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = 已套用已儲備重置
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = 額外的 Claude 帳戶需要 Claude Code CLI。Claude 應用程式內建的副本只服務於應用程式本身的帳戶。
+# src/surfaces/tray.rs
+linux-no-tray-title = 找不到系統匣
+
+# src/surfaces/tray.rs
+linux-no-tray-body = 啟用 AppIndicator 擴充功能即可在面板中看到 Codex Minibar。再次啟動 Codex Minibar 即可開啟。
+
+# src/ui/settings_window/general.rs
+start-at-login = 登入時啟動
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = 在桌面的鍵盤設定中新增執行此命令的自訂快速鍵，即可顯示或隱藏彈出視窗。
+
+# src/ui/settings_window/general.rs
+copy-command = 複製命令
+
+# src/ui/settings_window/general.rs
+command-copied = 已複製命令
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = 免費開源的夥伴應用程式，在系統匣中查看 AI 訂閱的用量限制、重設與花費。
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = 將所有設定儲存到 .toml 檔案。已儲存的金鑰仍加密保存在這台電腦上。
+
+# src/ui/settings_window/appearance.rs
+linux-windows = 系統
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = 「系統」會跟隨桌面強調色。
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = 系統預設
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = 僅變更彈出視窗。設定維持自己的外觀。
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = 彈出視窗和設定中的平滑轉場。同時遵循桌面本身的動畫設定。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = 使用系統金鑰圈中的金鑰加密，絕不寫入設定檔。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = 憑證已儲存，並使用系統金鑰圈加密。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API 金鑰已儲存，並使用系統金鑰圈加密。
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = 已使用系統金鑰圈加密
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = 立即套用至所有應用程式視窗和通知。自動依照系統語言。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 為 { $name } 執行 Claude Code 自身的登入，將其設定資料夾設為 CLAUDE_CONFIG_DIR。登入資訊保留在該資料夾，由 Claude Code 自動續期。
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = 由 Steam 啟動的遊戲以及 Steam 或 Heroic 收藏庫中的遊戲會自動偵測。其他程式請在此新增。
+linux-popup-shortcut-native-description = 儲存在桌面的鍵盤設定中。變更會立即生效。
+linux-popup-shortcut-choose = 設定快捷鍵
+linux-popup-shortcut-dialog-hint = 按下要使用的組合鍵。它會作為自訂快捷鍵儲存到桌面的鍵盤設定中。
+linux-popup-shortcut-needs-modifier = 請包含 Ctrl、Alt 或 Super，或使用 F13–F24。
+linux-popup-shortcut-save-failed = 桌面未接受該快捷鍵。請重試，或在其鍵盤設定中新增命令。
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = 透過現有的官方 agy 登入讀取訂閱額度。
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = 包含 agy 可執行檔的資料夾。留空以自動查詢。
+
+linux-folder-with-grok-cli = 包含 grok 執行檔的資料夾。留空以自動尋找。
+linux-folder-with-command-code-cli = 包含 command-code 或 cmd 的資料夾。留空以自動尋找。

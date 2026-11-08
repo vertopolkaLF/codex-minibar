@@ -1076,10 +1076,10 @@ on = オン
 # src/ui/settings_window/providers/page.rs
 off = オフ
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 more-options = その他のオプション
 
-# src/ui/settings_window/kit.rs
+# src/ui/gui/kit.rs
 custom-color = カスタムカラー
 
 # src/ui/settings_window/troubleshoot.rs
@@ -2909,12 +2909,26 @@ time-late = { $time }遅延
 
 # Floating usage panel
 popup-floating = フローティングパネル
+linux-popup-keep-open = 開いたままにする
+linux-popup-keep-open-description = アプリの切り替え時にパネルを開いたままにします。Wayland では、パネルのヘッダーを右クリックし、デスクトップのウィンドウメニューに「最前面に表示」があれば選択してください。
+linux-popup-unpin = パネルの固定を解除
 popup-floating-description = パネルを開いたまま、ヘッダーをドラッグして位置やモニターを変更できます。
 popup-always-on-top = 常に最前面
 popup-always-on-top-description = パネルを他のアプリより手前に表示し、アプリを切り替えても開いたままにします。
 popup-position = パネルの位置
 popup-position-description = 位置は次回の起動時にも復元されます。
 popup-reset-position = 位置をリセット
+popup-placement = ポップアップの位置
+popup-placement-description = 画面上でポップアップを開く位置です。自動では通知領域やタスクバーの近くに開きます。
+popup-placement-auto = 自動
+popup-placement-top-left = 左上
+popup-placement-top-center = 上中央
+popup-placement-top-right = 右上
+popup-placement-bottom-left = 左下
+popup-placement-bottom-center = 下中央
+popup-placement-bottom-right = 右下
+linux-popup-placement-description = 画面上でポップアップを開く位置です。
+linux-popup-placement-wayland = Wayland ではウィンドウを開く位置をデスクトップが決めるため、この設定は X11 セッションでのみ有効です。
 popup-drag-header = ドラッグして移動
 popup-close = パネルを閉じる
 
@@ -2936,13 +2950,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = 保存済みリセット�
 # src/ui/settings_window/providers/page.rs
 automatic-resets = 自動リセット
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = 保存済みリセットを自動で適用しました
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = このプロバイダーには保存済みリセットがありません。
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = { $minutes } 分後に保存済みリセットを適用します
 
 # src/ui/settings_window/notifications.rs
@@ -2951,14 +2965,84 @@ before-an-automatic-reset = 自動リセットの前
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = 保存済みリセットを自動で適用する 10 分前に通知します。
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = 今すぐ適用
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = キャンセル
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = 保存済みリセットを適用しました
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = 追加の Claude アカウントには Claude Code CLI が必要です。Claude アプリに内蔵されたコピーはアプリ自身のアカウントにしか使えません。
+# src/surfaces/tray.rs
+linux-no-tray-title = システムトレイが見つかりません
+
+# src/surfaces/tray.rs
+linux-no-tray-body = パネルに Codex Minibar を表示するには AppIndicator 拡張機能を有効にしてください。Codex Minibar をもう一度起動すると開きます。
+
+# src/ui/settings_window/general.rs
+start-at-login = ログイン時に起動
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = デスクトップのキーボード設定でこのコマンドを実行するカスタムショートカットを追加すると、ポップアップを表示・非表示にできます。
+
+# src/ui/settings_window/general.rs
+copy-command = コマンドをコピー
+
+# src/ui/settings_window/general.rs
+command-copied = コマンドをコピーしました
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = AI サブスクリプションの利用上限・リセット・支出をシステムトレイで確認できる、無料のオープンソース コンパニオン。
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = すべての設定を .toml ファイルに保存します。保存済みのキーはこのコンピューター上で暗号化されたままです。
+
+# src/ui/settings_window/appearance.rs
+linux-windows = システム
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = 「システム」はデスクトップのアクセントカラーに従います。
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = システムの既定
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = ポップアップだけが変わります。設定画面は独自の見た目のままです。
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = ポップアップと設定で滑らかに切り替わります。デスクトップのアニメーション設定も尊重されます。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = システムのキーリングの鍵で暗号化され、設定ファイルには保存されません。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = 資格情報を保存しました（システムのキーリングで暗号化）。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API キーを保存しました（システムのキーリングで暗号化）。
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = システムのキーリングで暗号化
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = すべての画面と通知に即座に適用されます。「自動」はシステムの言語に従います。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 構成フォルダーを CLAUDE_CONFIG_DIR として、Claude Code 自身の { $name } ログインを実行します。ログインはそのフォルダーに残り、Claude Code によって最新の状態が保たれます。
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = Steam から起動したゲームと、Steam や Heroic のライブラリにあるゲームは自動で検出されます。その他のプログラムはここで追加してください。
+linux-popup-shortcut-native-description = デスクトップのキーボード設定に保存されます。変更はすぐに反映されます。
+linux-popup-shortcut-choose = ショートカットを設定
+linux-popup-shortcut-dialog-hint = 使用したいキーの組み合わせを押してください。デスクトップのキーボード設定にカスタムショートカットとして保存されます。
+linux-popup-shortcut-needs-modifier = Ctrl、Alt、Super のいずれかを含めるか、F13～F24 を使用してください。
+linux-popup-shortcut-save-failed = デスクトップがショートカットを受け付けませんでした。再試行するか、キーボード設定でコマンドを追加してください。
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = 既存の公式 agy サインインからサブスクリプション クォータを読み取ります。
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = agy 実行ファイルのフォルダー。自動的に検索されるようにするには、空のままにします。
+
+linux-folder-with-grok-cli = grok 実行ファイルがあるフォルダー。空欄にすると自動検索します。
+linux-folder-with-command-code-cli = command-code または cmd があるフォルダー。空欄にすると自動検索します。

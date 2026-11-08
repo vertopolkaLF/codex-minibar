@@ -676,6 +676,7 @@ impl ProviderStore {
         // Retention applies to every provider, not just the one being written.
         self.conn
             .execute("DELETE FROM usage_hourly WHERE hour < ?1", params![cutoff])?;
+        // Unchanged rows are skipped: rescans rewrite the whole window.
         let mut insert = self.conn.prepare(
             "INSERT INTO usage_hourly(
                 provider, hour, input_tokens, cached_input_tokens, output_tokens,
@@ -688,7 +689,15 @@ impl ProviderStore {
                 requests=excluded.requests,
                 estimated_cost_microusd=excluded.estimated_cost_microusd,
                 priced_requests=excluded.priced_requests,
-                cache_savings_microusd=excluded.cache_savings_microusd",
+                cache_savings_microusd=excluded.cache_savings_microusd
+             WHERE (usage_hourly.input_tokens, usage_hourly.cached_input_tokens,
+                    usage_hourly.output_tokens, usage_hourly.requests,
+                    usage_hourly.estimated_cost_microusd, usage_hourly.priced_requests,
+                    usage_hourly.cache_savings_microusd)
+                <> (excluded.input_tokens, excluded.cached_input_tokens,
+                    excluded.output_tokens, excluded.requests,
+                    excluded.estimated_cost_microusd, excluded.priced_requests,
+                    excluded.cache_savings_microusd)",
         )?;
         for (hour, usage) in hours {
             let hour_key = hour_key(*hour);
@@ -846,6 +855,7 @@ impl ProviderStore {
                     path,
                     CachedSessionFile {
                         offset,
+                        file_identity: meta.file_identity,
                         daily: Vec::new(),
                         current_model: meta.current_model,
                         fast_service_tier: meta.fast_service_tier,
@@ -980,6 +990,7 @@ impl ProviderStore {
                 )?;
                 for (path, file) in cache.files.iter().filter(|(_, file)| !file.persisted) {
                     let meta = serde_json::to_string(&CodexFileMeta {
+                        file_identity: file.file_identity.clone(),
                         current_model: file.current_model.clone(),
                         fast_service_tier: file.fast_service_tier,
                         last_usage_signature: file.last_usage_signature.clone(),
@@ -1081,7 +1092,7 @@ impl ProviderStore {
     pub(crate) fn load_claude_scan_offsets(
         &self,
         provider: ProviderId,
-    ) -> Result<Option<BTreeMap<String, u64>>> {
+    ) -> Result<Option<ClaudeScanOffsets>> {
         let flags = self.provider_flags(provider)?;
         let version = flags
             .get("cache_version")
@@ -1092,9 +1103,14 @@ impl ProviderStore {
         }
         let mut statement = self
             .conn
-            .prepare("SELECT path, offset FROM scan_files WHERE provider = ?1")?;
+            .prepare("SELECT path, offset, meta_json FROM scan_files WHERE provider = ?1")?;
         let rows = statement.query_map(params![provider.id()], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            let raw: String = row.get(2)?;
+            let meta: ClaudeFileMeta = serde_json::from_str(&raw).unwrap_or_default();
+            Ok((
+                row.get::<_, String>(0)?,
+                (row.get::<_, i64>(1)? as u64, meta.file_identity),
+            ))
         })?;
         Ok(Some(rows.collect::<rusqlite::Result<_>>()?))
     }
@@ -1114,17 +1130,23 @@ impl ProviderStore {
         {
             let mut statement = self
                 .conn
-                .prepare("SELECT path, offset FROM scan_files WHERE provider = ?1")?;
+                .prepare("SELECT path, offset, meta_json FROM scan_files WHERE provider = ?1")?;
             let rows = statement.query_map(params![provider.id()], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, String>(2)?,
+                ))
             })?;
             for row in rows {
-                let (path, offset) = row?;
+                let (path, offset, raw) = row?;
+                let meta: ClaudeFileMeta = serde_json::from_str(&raw).unwrap_or_default();
                 scanned.insert(path.clone());
                 files.insert(
                     path,
                     CachedClaudeSessionFile {
                         offset,
+                        file_identity: meta.file_identity,
                         entries: Vec::new(),
                         persisted: None,
                         cwd: None,
@@ -1218,9 +1240,9 @@ impl ProviderStore {
             {
                 let mut scan = tx.prepare(
                     "INSERT INTO scan_files(provider, path, offset, meta_json)
-                     VALUES(?1, ?2, ?3, '{}')
-                     ON CONFLICT(provider, path) DO UPDATE SET offset=excluded.offset
-                     WHERE offset IS NOT excluded.offset",
+                     VALUES(?1, ?2, ?3, ?4)
+                     ON CONFLICT(provider, path) DO UPDATE SET offset=excluded.offset, meta_json=excluded.meta_json
+                     WHERE offset IS NOT excluded.offset OR meta_json IS NOT excluded.meta_json",
                 )?;
                 let mut events = tx.prepare(
                     "INSERT INTO usage_events(
@@ -1258,7 +1280,10 @@ impl ProviderStore {
                         OR model IS NOT excluded.model",
                 )?;
                 for (path, file) in cache.files.iter().filter(|(_, file)| pending(file)) {
-                    scan.execute(params![provider.id(), path, file.offset as i64])?;
+                    let meta = serde_json::to_string(&ClaudeFileMeta {
+                        file_identity: file.file_identity.clone(),
+                    })?;
+                    scan.execute(params![provider.id(), path, file.offset as i64, meta])?;
                     let first_new = match file.persisted {
                         Some((_, stored)) if stored <= file.entries.len() => stored,
                         _ => 0,
@@ -1271,8 +1296,8 @@ impl ProviderStore {
                             entry.timestamp.to_rfc3339(),
                             entry.message_id,
                             entry.request_id,
-                            entry.is_sidechain as i64,
-                            entry.has_speed as i64,
+                            i64::from(entry.is_sidechain),
+                            i64::from(entry.has_speed),
                             entry.usage.input_tokens as i64,
                             entry.usage.cached_input_tokens as i64,
                             entry.usage.output_tokens as i64,
@@ -1970,8 +1995,17 @@ fn delete_stale_event_rows(
     Ok(())
 }
 
+type ClaudeScanOffsets = BTreeMap<String, (u64, Option<String>)>;
+
+#[derive(Default, Serialize, Deserialize)]
+struct ClaudeFileMeta {
+    file_identity: Option<String>,
+}
+
 #[derive(Default, Serialize, Deserialize)]
 struct CodexFileMeta {
+    #[serde(default)]
+    file_identity: Option<String>,
     current_model: Option<String>,
     #[serde(default)]
     fast_service_tier: bool,
@@ -2067,6 +2101,25 @@ mod tests {
             .unwrap()
             .collect::<rusqlite::Result<Vec<_>>>()
             .unwrap()
+    }
+
+    #[test]
+    fn unchanged_hourly_rollups_do_not_write_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = test_store(&dir.path().join("hourly.sqlite"));
+        let provider = id(ProviderKind::Codex);
+        let at = truncate_hour(Local::now());
+        let rows = vec![(at, hour_usage(10))];
+        store.replace_usage_hourly(provider, &rows).unwrap();
+        let before = store.conn.total_changes();
+        store.replace_usage_hourly(provider, &rows).unwrap();
+        assert_eq!(store.conn.total_changes(), before);
+        store
+            .replace_usage_hourly(provider, &[(at, hour_usage(11))])
+            .unwrap();
+        assert_eq!(store.conn.total_changes(), before + 1);
+        let loaded = store.load_usage_hourly(provider, at, at).unwrap();
+        assert_eq!(loaded[&at], hour_usage(11));
     }
 
     #[test]
@@ -2567,11 +2620,22 @@ mod tests {
         let store = test_store(&dir.path().join("test.sqlite"));
         let codex = id(ProviderKind::Codex);
         let mut cache = sample_codex_cache();
+        cache
+            .files
+            .get_mut("sessions/sample.jsonl")
+            .unwrap()
+            .file_identity = Some("7:42".into());
         let other = cache.files["sessions/sample.jsonl"].clone();
         cache.files.insert("sessions/other.jsonl".into(), other);
         store.save_codex_cache(codex, &cache, Vec::new()).unwrap();
 
         let mut cache = store.load_codex_cache(codex).unwrap();
+        assert_eq!(
+            cache.files["sessions/sample.jsonl"]
+                .file_identity
+                .as_deref(),
+            Some("7:42")
+        );
         assert_eq!(cache.files.len(), 2);
         track_file_writes(&store);
         {
@@ -2621,6 +2685,7 @@ mod tests {
                 "/p/a.jsonl".into(),
                 CachedClaudeSessionFile {
                     offset: 10,
+                    file_identity: Some("7:99".into()),
                     entries: vec![entry("m1"), entry("m2")],
                     persisted: None,
                     ..Default::default()
@@ -2641,6 +2706,14 @@ mod tests {
                 .unwrap()
         };
         let mut cache = store.load_claude_cache(claude).unwrap();
+        assert_eq!(
+            cache.files["/p/a.jsonl"].file_identity.as_deref(),
+            Some("7:99")
+        );
+        assert_eq!(
+            store.load_claude_scan_offsets(claude).unwrap().unwrap()["/p/a.jsonl"],
+            (10, Some("7:99".into()))
+        );
         let before = store.conn.total_changes();
         store.save_claude_cache(claude, &cache).unwrap();
         assert_eq!(store.conn.total_changes(), before);

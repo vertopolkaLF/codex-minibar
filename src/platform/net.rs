@@ -5,6 +5,7 @@ use std::{
     io::{Read, Write},
     path::Path,
     sync::{Arc, OnceLock},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, bail};
@@ -18,10 +19,18 @@ const MAX_DOWNLOAD_BYTES: u64 = 64 * 1024 * 1024;
 /// ureq does not pick its `native-tls` backend on its own, so every agent
 /// that needs it must be configured here.
 pub fn native_tls_agent() -> ureq::AgentBuilder {
+    with_native_connector(ureq::native_tls::TlsConnector::new())
+}
+
+fn with_native_connector(
+    connector: Result<ureq::native_tls::TlsConnector, impl std::fmt::Display>,
+) -> ureq::AgentBuilder {
     let builder = ureq::AgentBuilder::new();
-    match ureq::native_tls::TlsConnector::new() {
+    match connector {
         Ok(tls) => builder.tls_connector(Arc::new(tls)),
         Err(error) => {
+            // Cargo enables ureq's `tls` feature: its default connector is
+            // Rustls with certificate verification and bundled public roots.
             crate::platform::logger::info(format!("falling back to bundled TLS: {error}"));
             builder
         }
@@ -32,12 +41,19 @@ pub fn native_tls_agent() -> ureq::AgentBuilder {
 pub(crate) fn shared_agent() -> ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
     AGENT
-        .get_or_init(|| {
-            native_tls_agent()
-                .user_agent("codex-minibar-updater")
-                .build()
-        })
+        .get_or_init(|| shared_agent_with_read_timeout(Duration::from_secs(30)))
         .clone()
+}
+
+/// Bounds network stalls, not total download time: large packages may take
+/// minutes on a slow connection as long as bytes keep arriving.
+fn shared_agent_with_read_timeout(read_timeout: Duration) -> ureq::Agent {
+    native_tls_agent()
+        .user_agent("codex-minibar-updater")
+        .timeout_connect(Duration::from_secs(10))
+        .timeout_read(read_timeout)
+        .timeout_write(Duration::from_secs(30))
+        .build()
 }
 
 pub(crate) fn download(url: &str, destination: &Path) -> Result<()> {
@@ -169,6 +185,40 @@ pub(crate) fn provider_response(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_requests_time_out_when_the_server_never_sends_headers() {
+        use std::{sync::mpsc, thread};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let (release_tx, release_rx) = mpsc::channel();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = [0; 1024];
+            let _ = stream.read(&mut request);
+            let _ = release_rx.recv();
+        });
+        let (result_tx, result_rx) = mpsc::channel();
+        let client = thread::spawn(move || {
+            let result = shared_agent_with_read_timeout(Duration::from_millis(100))
+                .get(&format!("http://{address}/stalled"))
+                .call();
+            result_tx.send(result.is_err()).unwrap();
+        });
+        let result = result_rx.recv_timeout(Duration::from_secs(3));
+        // Release the fixture even when the timeout regresses, so no test
+        // process or thread remains stuck after the assertion fails.
+        let _ = release_tx.send(());
+        server.join().unwrap();
+        client.join().unwrap();
+        assert!(result.unwrap());
+    }
+
+    #[test]
+    fn native_tls_initialization_failure_does_not_panic() {
+        let failure = Err(std::io::Error::other("fixture TLS configuration failure"));
+        let _agent = with_native_connector(failure).build();
+    }
 
     #[test]
     fn copy_limited_enforces_cap_and_hashes() {

@@ -145,6 +145,8 @@ pub trait Activator: Send + 'static {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WorkerCommand {
     Refresh,
+    /// Reschedule a regular poll without bypassing provider backoff.
+    RefreshAutomatic,
     /// Wakes the sibling task after this provider's shared 429 cooldown changes.
     RateLimitPauseChanged,
     ClearUsageData(u64),
@@ -219,20 +221,18 @@ impl WorkerHandle {
     /// of blocking the bridge/UI thread that disables or restarts a provider.
     /// Output from the retiring worker is discarded through `retired_flag`.
     pub fn shutdown(mut self) {
-        self.retired.store(true, Ordering::Release);
-        let _ = self.commands.send(WorkerCommand::Shutdown);
-        if let Some(join) = self.join.take() {
-            thread::spawn(move || {
-                let _ = join.join();
-            });
-        }
+        self.stop();
     }
 
     fn stop(&mut self) {
         self.retired.store(true, Ordering::Release);
         let _ = self.commands.send(WorkerCommand::Shutdown);
         if let Some(join) = self.join.take() {
-            let _ = join.join();
+            // Drop can run on the UI bridge too (for example on teardown).
+            // A provider request or transcript scan must not block that thread.
+            thread::spawn(move || {
+                let _ = join.join();
+            });
         }
     }
 
@@ -331,6 +331,9 @@ pub fn start_worker(
                 WorkerCommand::Refresh => {
                     let _ = limit_commands.send(WorkerCommand::Refresh);
                     let _ = usage_commands.send(WorkerCommand::Refresh);
+                }
+                WorkerCommand::RefreshAutomatic => {
+                    let _ = limit_commands.send(WorkerCommand::RefreshAutomatic);
                 }
                 WorkerCommand::RateLimitPauseChanged => {}
                 WorkerCommand::ClearUsageData(generation) => {
@@ -528,13 +531,16 @@ fn run_limit_task(
                         );
                 }
             }
+            Ok(WorkerCommand::RefreshAutomatic) => next_poll = Instant::now(),
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::RateLimitPauseChanged) => {}
             Err(RecvTimeoutError::Timeout) => {}
-            Ok(WorkerCommand::ClearUsageData(_)) | Ok(WorkerCommand::ResumeUsageRefresh(_)) => {}
-            Ok(WorkerCommand::SetHistoryRetentionDays(_))
-            | Ok(WorkerCommand::SetUsageRefreshInterval(_))
-            | Ok(WorkerCommand::SetUsageCollectionEnabled(_)) => {}
+            Ok(WorkerCommand::ClearUsageData(_) | WorkerCommand::ResumeUsageRefresh(_)) => {}
+            Ok(
+                WorkerCommand::SetHistoryRetentionDays(_)
+                | WorkerCommand::SetUsageRefreshInterval(_)
+                | WorkerCommand::SetUsageCollectionEnabled(_),
+            ) => {}
         }
     }
 }
@@ -603,12 +609,15 @@ fn run_usage_task_with_rate_limit(
             Ok(WorkerCommand::SetUsageRefreshInterval(interval)) => {
                 usage_refresh_interval = interval.max(Duration::from_secs(60));
             }
-            Ok(WorkerCommand::Refresh)
-            | Ok(WorkerCommand::RateLimitPauseChanged)
-            | Ok(WorkerCommand::SetLimitRefreshInterval(_))
-            | Ok(WorkerCommand::SetAutomaticActivation(_))
-            | Ok(WorkerCommand::SetScheduledActivations(_))
-            | Ok(WorkerCommand::SetAutoActivationPauses(_)) => {}
+            Ok(
+                WorkerCommand::Refresh
+                | WorkerCommand::RefreshAutomatic
+                | WorkerCommand::RateLimitPauseChanged
+                | WorkerCommand::SetLimitRefreshInterval(_)
+                | WorkerCommand::SetAutomaticActivation(_)
+                | WorkerCommand::SetScheduledActivations(_)
+                | WorkerCommand::SetAutoActivationPauses(_),
+            ) => {}
             Ok(WorkerCommand::ClearUsageData(generation)) => {
                 // Barrier only: the bridge wipes the store exactly once after
                 // every worker has acknowledged, so this worker must not scan
@@ -743,11 +752,16 @@ fn run_usage_task_with_rate_limit(
 
         let wake_at = active_rate_limit_pause(&rate_limit_pause, now)
             .map_or(next_refresh, |paused_until| next_refresh.max(paused_until));
-        match commands.recv_timeout(
+        // A clear barrier suppresses scans even after their deadline passes.
+        // Waiting on that expired deadline would spin until Resume arrives.
+        let wait = if paused_after_clear.is_some() {
+            provider.identity_poll_interval()
+        } else {
             wake_at
                 .saturating_duration_since(now)
-                .min(provider.identity_poll_interval()),
-        ) {
+                .min(provider.identity_poll_interval())
+        };
+        match commands.recv_timeout(wait) {
             Ok(WorkerCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => break,
             Ok(WorkerCommand::SetHistoryRetentionDays(days)) => {
                 let days = days.clamp(1, crate::platform::local_time::RETENTION_DAYS);
@@ -781,6 +795,7 @@ fn run_usage_task_with_rate_limit(
                 next_refresh = Instant::now();
             }
             Err(RecvTimeoutError::Timeout) => {}
+            Ok(WorkerCommand::RefreshAutomatic) => {}
             Ok(WorkerCommand::Refresh) => manual_refresh_requested = true,
             Ok(WorkerCommand::ClearUsageData(generation)) => {
                 let _ = events.send(WorkerEvent::UsageDataCleared(generation));
@@ -793,11 +808,13 @@ fn run_usage_task_with_rate_limit(
                 }
             }
             Ok(WorkerCommand::SetUsageCollectionEnabled(true)) => {}
-            Ok(WorkerCommand::SetLimitRefreshInterval(_))
-            | Ok(WorkerCommand::SetAutomaticActivation(_))
-            | Ok(WorkerCommand::SetScheduledActivations(_))
-            | Ok(WorkerCommand::SetAutoActivationPauses(_))
-            | Ok(WorkerCommand::RateLimitPauseChanged) => {}
+            Ok(
+                WorkerCommand::SetLimitRefreshInterval(_)
+                | WorkerCommand::SetAutomaticActivation(_)
+                | WorkerCommand::SetScheduledActivations(_)
+                | WorkerCommand::SetAutoActivationPauses(_)
+                | WorkerCommand::RateLimitPauseChanged,
+            ) => {}
         }
     }
 }
@@ -998,10 +1015,37 @@ mod tests {
     }
 
     #[test]
-    fn successful_partial_result_still_pauses_worker_after_429() {
-        struct PartialProvider;
+    fn dropping_worker_handle_does_not_wait_for_a_stalled_worker() {
+        let (commands, _) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let (finished, done) = mpsc::channel();
+        let retired = Arc::new(AtomicBool::new(false));
+        let handle = WorkerHandle {
+            commands,
+            events: None,
+            join: Some(thread::spawn(move || {
+                let _ = wait.recv();
+            })),
+            retired: Arc::clone(&retired),
+        };
+        let dropping = thread::spawn(move || {
+            drop(handle);
+            finished.send(()).unwrap();
+        });
+        let result = done.recv_timeout(Duration::from_secs(2));
+        // Release even on failure, so the regression cannot strand a test thread.
+        let _ = release.send(());
+        dropping.join().unwrap();
+        assert!(result.is_ok());
+        assert!(retired.load(Ordering::Acquire));
+    }
+
+    #[test]
+    fn automatic_resume_refresh_preserves_pause_after_a_partial_429_result() {
+        struct PartialProvider(Arc<std::sync::atomic::AtomicUsize>);
         impl LimitProvider for PartialProvider {
             fn read_limits(&mut self) -> Result<RateLimits> {
+                self.0.fetch_add(1, Ordering::SeqCst);
                 Ok(limits_at(15, 0))
             }
             fn take_rate_limit_response(&mut self) -> bool {
@@ -1016,9 +1060,11 @@ mod tests {
         let pause = Arc::new(Mutex::new(ProviderRateLimitPause::default()));
         let task_pause = Arc::clone(&pause);
         let ready = Arc::new(AtomicBool::new(false));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let task_calls = Arc::clone(&calls);
         let task = thread::spawn(move || {
             run_limit_task(
-                PartialProvider,
+                PartialProvider(task_calls),
                 Some(Box::new(CountingActivator(0))),
                 WorkerOptions {
                     activation_path: state_path,
@@ -1047,8 +1093,13 @@ mod tests {
                 .try_iter()
                 .any(|event| matches!(event, WorkerEvent::LimitsUpdated(_)))
         );
+        // FIFO processing must handle the resume before shutdown. A resume
+        // incorrectly treated as manual refresh would make a second request
+        // on the next loop iteration, before it can consume Shutdown.
+        commands_tx.send(WorkerCommand::RefreshAutomatic).unwrap();
         commands_tx.send(WorkerCommand::Shutdown).unwrap();
         task.join().unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1780,6 +1831,58 @@ mod tests {
             }
         }
         panic!("no clear acknowledgement");
+    }
+
+    #[test]
+    fn clear_barrier_waits_instead_of_spinning_on_expired_scan_deadline() {
+        use std::sync::atomic::AtomicUsize;
+        struct IdentityCounter(Arc<AtomicUsize>);
+        impl UsageProvider for IdentityCounter {
+            fn account_identity(&self) -> Option<String> {
+                self.0.fetch_add(1, Ordering::SeqCst);
+                None
+            }
+            fn identity_poll_interval(&self) -> Duration {
+                Duration::from_millis(20)
+            }
+            fn load_cached_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                Ok(UsageStatistics::default())
+            }
+            fn refresh_usage_statistics(&mut self, _: u16) -> Result<UsageStatistics> {
+                panic!("clear barrier must prevent scans");
+            }
+        }
+        let polls = Arc::new(AtomicUsize::new(0));
+        let provider = IdentityCounter(Arc::clone(&polls));
+        let (tx, rx) = mpsc::channel();
+        let (events, received) = mpsc::channel();
+        // Queue the barrier before startup: next_refresh is already due when
+        // limits become ready, making this exercise an expired scan deadline.
+        tx.send(WorkerCommand::ClearUsageData(1)).unwrap();
+        let ready = Arc::new(AtomicBool::new(false));
+        let worker_ready = Arc::clone(&ready);
+        let task = thread::spawn(move || {
+            run_usage_task(
+                provider,
+                30,
+                Duration::from_secs(600),
+                true,
+                rx,
+                events,
+                worker_ready,
+            );
+        });
+        recv_cleared(&received, 1);
+        ready.store(true, Ordering::Release);
+        thread::sleep(Duration::from_millis(200));
+        tx.send(WorkerCommand::Shutdown).unwrap();
+        task.join().unwrap();
+        let count = polls.load(Ordering::SeqCst);
+        eprintln!("clear barrier: {count} identity samples in 200ms");
+        assert!(
+            count <= 15,
+            "busy-polled identity {count} times while paused"
+        );
     }
 
     #[test]

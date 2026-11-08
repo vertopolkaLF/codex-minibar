@@ -11,6 +11,8 @@ pub(crate) mod controls;
 mod footer;
 mod home;
 mod keys;
+#[cfg(not(windows))]
+mod linux_host;
 #[cfg(test)]
 pub(crate) use home::donut_segments;
 #[cfg(windows)]
@@ -19,7 +21,10 @@ mod backdrop;
 mod blur_effect;
 mod root;
 pub(crate) mod theme;
+// In-app cards are Windows-only; Linux posts desktop notifications.
+#[cfg(windows)]
 mod toast;
+#[cfg(windows)]
 mod toast_summary;
 mod tooltip;
 mod usage;
@@ -28,10 +33,13 @@ pub(crate) mod win32;
 
 use std::sync::Arc;
 
+#[cfg(windows)]
 use futures::StreamExt;
+use gpui::Application;
+#[cfg(windows)]
 use gpui::{
-    AppContext, Application, Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind,
-    WindowOptions, point, px, size,
+    AppContext, Bounds, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point,
+    px, size,
 };
 
 pub(crate) use root::PopupRoot;
@@ -83,15 +91,26 @@ pub(crate) struct ShowPlan {
     pub(crate) first_show: bool,
 }
 
-/// Which corner of the work area the popup stands in.
+/// Which spot of the work area the popup stands in: a corner, or the middle
+/// of the top or bottom edge when `center` is set (`left` is then ignored).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Placement {
     pub(crate) left: bool,
     pub(crate) top: bool,
+    pub(crate) center: bool,
 }
 
 #[cfg(windows)]
 impl Placement {
+    /// The spot a fixed popup position stands in; `None` follows the tray.
+    pub(crate) fn fixed(placement: crate::settings::PopupPlacement) -> Option<Self> {
+        (placement != crate::settings::PopupPlacement::Auto).then(|| Self {
+            left: placement.is_left(),
+            top: placement.is_top(),
+            center: placement.is_center(),
+        })
+    }
+
     /// The corner by the taskbar: the tray's end by default, or the end
     /// nearest `anchor` when the popup opens `beside` a taskbar widget.
     pub(crate) fn for_anchor(monitor: Monitor, anchor: (i32, i32), beside: bool) -> Self {
@@ -103,6 +122,7 @@ impl Placement {
         Self {
             left: edge == Edge::Left || (edge != Edge::Right && beside && anchor.0 < center_x),
             top: edge == Edge::Top || (vertical && beside && anchor.1 < center_y),
+            center: false,
         }
     }
 }
@@ -172,7 +192,10 @@ pub(crate) fn host_rect(monitor: Monitor, placement: Placement) -> win32::Rect {
         >= f64::from(crate::ui::popup::POPUP_WIDE_WIDTH);
     let (width, height) = host_size(monitor, wide);
     let work = monitor.work;
-    let (left, right) = if placement.left {
+    let (left, right) = if placement.center {
+        let left = work.left + (work.width() - width) / 2;
+        (left, left + width)
+    } else if placement.left {
         (work.left, work.left + width)
     } else {
         (work.right - width, work.right)
@@ -223,80 +246,92 @@ pub(crate) fn start(
     }
 }
 
-fn run(
-    state: Arc<AppState>,
-    mut commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>,
-) {
+fn run(state: Arc<AppState>, commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>) {
     Application::new()
         .with_assets(crate::ui::gui::assets::Assets)
         .run(move |cx| {
             crate::ui::gui::theme::register_bundled_fonts(cx);
             crate::ui::gui::input::bind_keys(cx);
             let default_font = crate::ui::gui::theme::default_font_family(cx);
-            let settings_state = Arc::clone(&state);
-            // The tray starts hidden. Do not allocate large swap-chain/MSAA
-            // surfaces before the user has even opened the popup.
-            let initial = size(px(1.0), px(1.0));
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds {
-                    origin: point(px(0.0), px(0.0)),
-                    size: initial,
-                })),
-                titlebar: None,
-                focus: false,
-                show: false,
-                kind: WindowKind::PopUp,
-                is_movable: false,
-                is_resizable: false,
-                is_minimizable: false,
-                display_id: None,
-                // Never enable HWND-wide Acrylic: it ignores the capsule's
-                // region. A separate clipped composition visual supplies blur.
-                window_background: WindowBackgroundAppearance::Transparent,
-                app_id: None,
-                window_min_size: None,
-                window_max_size: None,
-                window_decorations: None,
-                tabbing_identifier: None,
-            };
-            let window = match cx.open_window(options, |window, cx| {
-                cx.new(|cx| PopupRoot::new(state, default_font, window, cx))
-            }) {
-                Ok(window) => window,
-                Err(error) => {
-                    eprintln!("could not create the popup window: {error:#}");
-                    return;
-                }
-            };
-
-            cx.spawn(async move |cx| {
-                #[cfg(windows)]
-                {
-                    let hwnd = window
-                        .update(cx, |_, window, _| crate::ui::gui::hwnd_from_window(window))
-                        .ok()
-                        .flatten();
-                    if let Some(hwnd) = hwnd {
-                        win32::configure(hwnd);
-                        let _ = window.update(cx, |root, _, _| {
-                            root.attach_native_host(hwnd);
-                        });
-                        win32::park_hidden(hwnd);
-                        cx.spawn(async move |cx| prewarm(window, cx).await).detach();
-                    }
-                }
-                while let Some(command) = commands.next().await {
-                    if let PopupCommand::Settings(command) = command {
-                        crate::ui::settings_window::handle(command, &settings_state, cx);
-                        continue;
-                    }
-                    handle_command(command, &window, cx);
-                }
-            })
-            .detach();
+            #[cfg(not(windows))]
+            linux_host::start(state, default_font, commands, cx);
+            #[cfg(windows)]
+            open_windows_host(state, default_font, commands, cx);
         });
 }
 
+/// Opens the long-lived popup host window and serves popup commands.
+#[cfg(windows)]
+fn open_windows_host(
+    state: Arc<AppState>,
+    default_font: gpui::SharedString,
+    mut commands: futures::channel::mpsc::UnboundedReceiver<PopupCommand>,
+    cx: &mut gpui::App,
+) {
+    let settings_state = Arc::clone(&state);
+    // The tray starts hidden. Do not allocate large swap-chain/MSAA
+    // surfaces before the user has even opened the popup.
+    let initial = size(px(1.0), px(1.0));
+    let options = WindowOptions {
+        window_bounds: Some(WindowBounds::Windowed(Bounds {
+            origin: point(px(0.0), px(0.0)),
+            size: initial,
+        })),
+        titlebar: None,
+        focus: false,
+        show: false,
+        kind: WindowKind::PopUp,
+        is_movable: false,
+        is_resizable: false,
+        is_minimizable: false,
+        display_id: None,
+        // Never enable HWND-wide Acrylic: it ignores the capsule's
+        // region. A separate clipped composition visual supplies blur.
+        window_background: WindowBackgroundAppearance::Transparent,
+        app_id: None,
+        window_min_size: None,
+        window_max_size: None,
+        window_decorations: None,
+        tabbing_identifier: None,
+    };
+    let window = match cx.open_window(options, |window, cx| {
+        cx.new(|cx| PopupRoot::new(state, default_font, window, cx))
+    }) {
+        Ok(window) => window,
+        Err(error) => {
+            eprintln!("could not create the popup window: {error:#}");
+            return;
+        }
+    };
+
+    cx.spawn(async move |cx| {
+        #[cfg(windows)]
+        {
+            let hwnd = window
+                .update(cx, |_, window, _| crate::ui::gui::hwnd_from_window(window))
+                .ok()
+                .flatten();
+            if let Some(hwnd) = hwnd {
+                win32::configure(hwnd);
+                let _ = window.update(cx, |root, _, _| {
+                    root.attach_native_host(hwnd);
+                });
+                win32::park_hidden(hwnd);
+                cx.spawn(async move |cx| prewarm(window, cx).await).detach();
+            }
+        }
+        while let Some(command) = commands.next().await {
+            if let PopupCommand::Settings(command) = command {
+                crate::ui::settings_window::handle(command, &settings_state, cx);
+                continue;
+            }
+            handle_command(command, &window, cx);
+        }
+    })
+    .detach();
+}
+
+#[cfg(windows)]
 fn handle_command(
     command: PopupCommand,
     window: &gpui::WindowHandle<PopupRoot>,
@@ -309,11 +344,12 @@ fn handle_command(
                 .update(cx, |root, _, _| {
                     root.ui.settings.popup_floating != ui.settings.popup_floating
                         || root.ui.settings.popup_position != ui.settings.popup_position
+                        || root.ui.settings.popup_placement != ui.settings.popup_placement
                         || (ui.settings.popup_floating
                             && root.ui.settings.popup_two_columns != ui.settings.popup_two_columns)
                 })
                 .unwrap_or(false);
-            let _ = window.update(cx, |root, window, cx| root.apply_ui(*ui, window, cx));
+            let _ = window.update(cx, |root, window, cx| root.apply_ui(*ui, Some(window), cx));
             #[cfg(windows)]
             {
                 if geometry_changed {
@@ -591,7 +627,14 @@ mod tests {
             } else {
                 rect(0, 0, 1920, 1032)
             });
-            let host = super::host_rect(monitor, Placement { left: false, top });
+            let host = super::host_rect(
+                monitor,
+                Placement {
+                    left: false,
+                    top,
+                    center: false,
+                },
+            );
             assert_eq!(host.height(), monitor.bounds.height());
             if top {
                 assert_eq!(
@@ -619,6 +662,7 @@ mod tests {
         let left = Placement {
             left: true,
             top: false,
+            center: false,
         };
         assert_eq!(Placement::for_anchor(bottom, (100, 1050), true), left);
         assert_eq!(Placement::for_anchor(bottom, (1500, 1050), true), tray);
@@ -629,6 +673,7 @@ mod tests {
             Placement {
                 left: true,
                 top: true,
+                center: false,
             }
         );
         let side = monitor(rect(62, 0, 1920, 1080));
@@ -638,6 +683,7 @@ mod tests {
             Placement {
                 left: true,
                 top: true,
+                center: false,
             }
         );
     }
@@ -659,6 +705,7 @@ mod tests {
             Placement {
                 left: true,
                 top: false,
+                center: false,
             }
         );
         // A bottom dock plus a top taskbar.
@@ -669,6 +716,7 @@ mod tests {
             Placement {
                 left: false,
                 top: true,
+                center: false,
             }
         );
     }

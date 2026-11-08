@@ -516,7 +516,14 @@ fn parse_window(parent: &Value, names: &[&str], sampled_at: DateTime<Utc>) -> Op
     .iter()
     .find_map(|key| object.get(*key).and_then(Value::as_i64));
     let resets_at = resets_at.or_else(|| {
-        reset_in_seconds.map(|seconds| sampled_at + chrono::Duration::seconds(seconds.max(0)))
+        reset_in_seconds.and_then(|seconds| {
+            let reset = chrono::Duration::try_seconds(seconds.max(0))
+                .and_then(|duration| sampled_at.checked_add_signed(duration));
+            if reset.is_none() {
+                crate::platform::logger::info("OpenCode returned an out-of-range reset interval");
+            }
+            reset
+        })
     });
     Some(LimitWindow {
         // The OpenCode Go API reports percentage points. In particular, 1 is
@@ -573,6 +580,20 @@ fn non_negative_i64(value: i64) -> u64 {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    #[test]
+    fn go_usage_ignores_out_of_range_reset_intervals() {
+        for (sampled_at, seconds) in [
+            (Utc::now(), i64::MAX),
+            (Utc::now(), i64::MAX / 1000),
+            (DateTime::<Utc>::MAX_UTC, 1),
+        ] {
+            let raw = serde_json::json!({"rolling": {"percent": 25, "resetInSec": seconds}});
+            let limits = parse_go_usage(&raw.to_string(), sampled_at).unwrap();
+            assert_eq!(limits.primary.used_percent, Some(25));
+            assert_eq!(limits.primary.resets_at, None);
+        }
+    }
 
     #[test]
     fn go_usage_maps_all_windows_without_rescaling_one_percent() {
@@ -730,5 +751,27 @@ mod tests {
             statistics_from_daily(&go.read_local_usage_from_path(&path).unwrap().daily, 30);
         assert_eq!(go_stats.history.requests, 1);
         assert_eq!(go_stats.history.estimated_cost_microusd, 0);
+    }
+
+    #[test]
+    fn go_usage_normalizes_offsets_clamps_percent_and_ignores_null_optional_windows() {
+        let now = Utc.with_ymd_and_hms(2026, 11, 1, 5, 0, 0).unwrap();
+        let limits = parse_go_usage(
+            r#"{"data":{"usage":{
+            "rolling":{"percent":101.5,"resetsAt":"2026-11-01T01:30:00-04:00","resetInSec":1},
+            "weekly":null, "monthly":{"percent":null}, "future":{"percent":99}
+        }}}"#,
+            now,
+        )
+        .unwrap();
+        assert_eq!(limits.primary.used_percent, Some(100));
+        assert_eq!(
+            limits.primary.resets_at,
+            Some(now + chrono::Duration::minutes(30))
+        );
+        assert_eq!(limits.secondary, LimitWindow::default());
+        assert!(limits.additional_limits.is_empty());
+        assert!(parse_go_usage(r#"{"usage":{"rolling":{"percent":null}}}"#, now).is_err());
+        assert!(parse_model_count(r#"{"data":null}"#).is_err());
     }
 }

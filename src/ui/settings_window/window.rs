@@ -102,6 +102,11 @@ pub(crate) struct SettingsWindow {
     pub(super) hotkey_recording: bool,
     /// The last combination pressed while recording had no modifier.
     pub(super) hotkey_rejected: bool,
+    /// The popup shortcut as the desktop has it, and its open dialog.
+    #[cfg(not(windows))]
+    pub(super) desktop_shortcut: super::shortcut::DesktopShortcut,
+    #[cfg(not(windows))]
+    pub(super) shortcut_dialog: Option<super::shortcut::ShortcutDialog>,
     /// Dialogs that are open or still playing their exit transition.
     pub(super) overlays: Overlays,
     pub(super) tray_previews: super::tray::PreviewCache,
@@ -238,6 +243,10 @@ impl SettingsWindow {
             confirm_reset: false,
             hotkey_recording: false,
             hotkey_rejected: false,
+            #[cfg(not(windows))]
+            desktop_shortcut: super::shortcut::DesktopShortcut::load(),
+            #[cfg(not(windows))]
+            shortcut_dialog: None,
             overlays: Overlays::default(),
             tray_previews: Default::default(),
             taskbar_previews: Default::default(),
@@ -524,6 +533,11 @@ impl SettingsWindow {
             cx.stop_propagation();
             return;
         }
+        #[cfg(not(windows))]
+        if self.record_shortcut(event, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if event.keystroke.key != "escape" {
             return;
         }
@@ -550,13 +564,11 @@ impl SettingsWindow {
     fn titlebar(&self, k: &Kit) -> AnyElement {
         let theme = &k.theme;
         let caption = |id, glyph, area, close| kit::caption_button(k, id, glyph, area, close);
-        div()
-            .id("settings-titlebar")
+        kit::window_drag_area(div().id("settings-titlebar"))
             .flex()
             .items_center()
             .h(px(TITLEBAR_HEIGHT))
             .flex_none()
-            .window_control_area(WindowControlArea::Drag)
             .child(
                 div()
                     .flex()
@@ -657,7 +669,7 @@ impl SettingsWindow {
     fn root_sidebar(&mut self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
         let selected_index = Tab::ALL.iter().position(|tab| *tab == self.root_tab);
         let mut list = div().relative().flex().flex_col().gap(px(NAV_ITEM_GAP));
-        for tab in Tab::ALL {
+        for &tab in Tab::ALL {
             let trailing = if tab == Tab::Providers {
                 vec![icon("caret-right", 12.0, k.theme.text_secondary).into_any_element()]
             } else {
@@ -1295,6 +1307,10 @@ impl Render for SettingsWindow {
             window.appearance(),
             self.fonts.clone(),
         );
+        theme.font = crate::ui::popup_window::ui::theme::ui_font_family(
+            self.settings.font_family.as_deref(),
+            &self.fonts.text,
+        );
         if self.backdrop.mica() {
             theme = theme.with_mica();
         }
@@ -1347,6 +1363,10 @@ impl Render for SettingsWindow {
             overlays.push(overlay);
         }
         if let Some(overlay) = self.open_vsx_overlay(&mut k, window, cx) {
+            overlays.push(overlay);
+        }
+        #[cfg(not(windows))]
+        if let Some(overlay) = self.shortcut_overlay(&mut k, cx) {
             overlays.push(overlay);
         }
         k.end_frame(window);
@@ -1404,6 +1424,8 @@ pub(super) struct Overlays {
     pub(super) troubleshoot: kit::Presence<crate::app::troubleshoot::ToolPickerState>,
     pub(super) reset: kit::Presence<()>,
     pub(super) open_vsx: kit::Presence<()>,
+    #[cfg(not(windows))]
+    pub(super) shortcut: kit::Presence<super::shortcut::ShortcutDialog>,
 }
 
 /// Drag payload for reordering providers in the sidebar.

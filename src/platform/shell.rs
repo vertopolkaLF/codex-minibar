@@ -67,8 +67,6 @@ fn shell_execute(target: &std::ffi::OsStr, description: &str) -> Result<()> {
     }
     #[cfg(not(windows))]
     {
-        let _ = target;
-        let _ = description;
-        bail!("opening URLs is only supported on Windows")
+        crate::platform::linux::desktop::open(target).with_context(|| format!("open {description}"))
     }
 }

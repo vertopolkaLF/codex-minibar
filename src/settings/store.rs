@@ -233,6 +233,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn committed_snapshot_is_announced_only_after_the_job_finishes() {
+        let (ready, started) = mpsc::channel();
+        let (release, resume) = mpsc::channel::<()>();
+        submit(move || {
+            *UNANNOUNCED.lock().unwrap() = Some(Settings::default());
+            ready.send(()).unwrap();
+            resume.recv().unwrap();
+            Box::new(|| {})
+        });
+        started.recv().unwrap();
+        // A very fast commit must not reach the windows while that write is
+        // still marked pending.
+        assert!(has_pending());
+        assert!(UNANNOUNCED.lock().unwrap().is_some());
+        release.send(()).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while UNANNOUNCED.lock().unwrap().is_some() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "commit never announced"
+            );
+            std::thread::yield_now();
+        }
+    }
+
+    #[test]
     fn fallible_jobs_run_serially_in_submission_order() {
         let order = std::sync::Arc::new(Mutex::new(Vec::new()));
         let mut receivers = Vec::new();

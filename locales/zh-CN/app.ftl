@@ -2010,12 +2010,26 @@ time-late = 延迟 { $time }
 
 # Floating usage panel
 popup-floating = 浮动面板
+linux-popup-keep-open = 保持打开
+linux-popup-keep-open-description = 切换应用时保持面板打开。在 Wayland 中，右键点击面板标题栏，如果桌面窗口菜单中有“总在最前”，请选择该选项。
+linux-popup-unpin = 取消固定面板
 popup-floating-description = 保持面板打开，拖动标题栏可移动到其他位置或显示器。
 popup-always-on-top = 始终置顶
 popup-always-on-top-description = 将面板显示在其他应用上方，切换应用时保持打开。
 popup-position = 面板位置
 popup-position-description = 下次启动时恢复面板位置。
 popup-reset-position = 重置位置
+popup-placement = 弹出窗口位置
+popup-placement-description = 弹出窗口在屏幕上打开的位置。“自动”会在托盘或任务栏旁打开。
+popup-placement-auto = 自动
+popup-placement-top-left = 左上
+popup-placement-top-center = 顶部居中
+popup-placement-top-right = 右上
+popup-placement-bottom-left = 左下
+popup-placement-bottom-center = 底部居中
+popup-placement-bottom-right = 右下
+linux-popup-placement-description = 弹出窗口在屏幕上打开的位置。
+linux-popup-placement-wayland = 在 Wayland 上，窗口的打开位置由桌面决定，因此此设置仅在 X11 会话中生效。
 popup-drag-header = 拖动以移动
 popup-close = 关闭面板
 
@@ -2037,13 +2051,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = 已储备重置在过期�
 # src/ui/settings_window/providers/page.rs
 automatic-resets = 自动重置
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = 已自动应用已储备重置
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = 此提供商没有已储备重置。
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = 已储备重置将在 { $minutes } 分钟后应用
 
 # src/ui/settings_window/notifications.rs
@@ -2052,14 +2066,84 @@ before-an-automatic-reset = 自动重置之前
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = 在自动应用已储备重置前 10 分钟提醒。
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = 立即应用
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = 取消
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = 已应用已储备重置
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = 额外的 Claude 账户需要 Claude Code CLI。Claude 应用内置的副本只服务于应用自己的账户。
+# src/surfaces/tray.rs
+linux-no-tray-title = 未找到系统托盘
+
+# src/surfaces/tray.rs
+linux-no-tray-body = 启用 AppIndicator 扩展即可在面板中看到 Codex Minibar。再次启动 Codex Minibar 可将其打开。
+
+# src/ui/settings_window/general.rs
+start-at-login = 登录时启动
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = 在桌面的键盘设置中添加运行此命令的自定义快捷键，即可显示或隐藏弹出窗口。
+
+# src/ui/settings_window/general.rs
+copy-command = 复制命令
+
+# src/ui/settings_window/general.rs
+command-copied = 已复制命令
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = 免费开源的伴侣应用，在系统托盘中查看 AI 订阅的用量限制、重置和花费。
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = 将所有设置保存到 .toml 文件。已保存的密钥仍加密保存在这台电脑上。
+
+# src/ui/settings_window/appearance.rs
+linux-windows = 系统
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = “系统”跟随桌面强调色。
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = 系统默认
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = 仅更改弹出窗口。设置保持自己的外观。
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = 弹出窗口和设置中的平滑过渡。同时遵循桌面自身的动画设置。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = 使用系统密钥环中的密钥加密，绝不写入设置文件。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = 凭据已保存，并使用系统密钥环加密。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = API 密钥已保存，并使用系统密钥环加密。
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = 已使用系统密钥环加密
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = 立即应用于所有应用窗口和通知。自动跟随系统语言。
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = 为 { $name } 运行 Claude Code 自身的登录，将其配置文件夹设为 CLAUDE_CONFIG_DIR。登录信息保留在该文件夹，由 Claude Code 自动续期。
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = 由 Steam 启动的游戏以及 Steam 或 Heroic 库中的游戏会被自动识别。其他程序请在此添加。
+linux-popup-shortcut-native-description = 保存在桌面的键盘设置中。更改会立即生效。
+linux-popup-shortcut-choose = 设置快捷键
+linux-popup-shortcut-dialog-hint = 按下要使用的组合键。它将作为自定义快捷键保存到桌面的键盘设置中。
+linux-popup-shortcut-needs-modifier = 请包含 Ctrl、Alt 或 Super，或使用 F13–F24。
+linux-popup-shortcut-save-failed = 桌面未接受该快捷键。请重试，或在其键盘设置中添加命令。
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = 通过现有的官方 agy 登录读取订阅额度。
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = 包含 agy 可执行文件的文件夹。留空以自动查找。
+
+linux-folder-with-grok-cli = 包含 grok 可执行文件的文件夹。留空以自动查找。
+linux-folder-with-command-code-cli = 包含 command-code 或 cmd 的文件夹。留空以自动查找。

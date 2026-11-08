@@ -3,12 +3,13 @@ use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Command, Stdio},
     sync::{OnceLock, mpsc},
     thread,
     time::Duration as StdDuration,
 };
 
+use crate::providers::support::{ManagedChild as Child, spawn_command};
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, TimeZone, Utc};
@@ -133,11 +134,12 @@ impl CodexActivator {
         ));
         let args = activation_args(&workspace, &last_message_path);
         let prepared = crate::providers::codex::discovery::prepare(&self.executable)?;
-        let mut child = command_for_codex(&prepared.path, &args, self.home.as_deref())
+        let mut command = command_for_codex(&prepared.path, &args, self.home.as_deref());
+        command
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .spawn()
+            .stderr(Stdio::piped());
+        let mut child = spawn_command(command)
             .with_context(|| format!("launch activation through {}", self.executable.display()))?;
         let stderr = child.stderr.take();
         let stderr_reader = thread::spawn(move || {
@@ -959,12 +961,12 @@ fn spawn_codex(
     let prepared = crate::providers::codex::discovery::prepare(executable)?;
     // The lease covers the preparation-to-spawn gap. Windows protects the
     // executable mapping from deletion for the child's lifetime afterwards.
-    command_for_codex(&prepared.path, args, home)
+    let mut command = command_for_codex(&prepared.path, args, home);
+    command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(stderr)
-        .spawn()
-        .with_context(|| format!("launch {}", executable.display()))
+        .stderr(stderr);
+    spawn_command(command).with_context(|| format!("launch {}", executable.display()))
 }
 
 fn command_for_codex(
@@ -1076,6 +1078,28 @@ fn reset_outcome(value: &str) -> Result<Outcome> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn app_server_timeout_stops_the_native_child_of_a_unix_shim() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let shim = root.path().join("codex");
+        fs::write(
+            &shim,
+            "#!/bin/sh\n(sleep 1; echo survived > \"$0.survived\") &\nwait\n",
+        )
+        .unwrap();
+        fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+        let client = CodexClient::new(&shim).with_timeout(StdDuration::from_millis(100));
+        let started = Instant::now();
+        assert!(client.read_rate_limits_via_app_server().is_err());
+        assert!(started.elapsed() < StdDuration::from_secs(2));
+        // The helper would write after the request timed out if only the shim
+        // were killed. Its inherited stderr also must close immediately.
+        thread::sleep(StdDuration::from_millis(1100));
+        assert!(!shim.with_extension("survived").exists());
+    }
 
     #[test]
     fn reset_outcomes_are_distinct_and_unknown_is_not_success() {
@@ -1301,5 +1325,42 @@ mod tests {
         assert!(args.contains(&ACTIVATION_MODEL.into()));
         assert!(args.contains(&"model_reasoning_effort=\"low\"".into()));
         assert!(!args.iter().any(|arg| arg == "service_tier=\"priority\""));
+    }
+
+    #[test]
+    fn wham_null_windows_and_future_plan_do_not_invent_quota_or_credits() {
+        let value = json!({
+            "rate_limit": {"primary_window": null},
+            "plan_type": "future-enterprise", "email": "  ada@example.com  ",
+            "credits": null, "additional_rate_limits": null, "future": true
+        });
+        let parsed = parse_wham_usage(&value, Utc::now()).unwrap();
+        assert_eq!(parsed.primary, LimitWindow::default());
+        assert_eq!(parsed.secondary, LimitWindow::default());
+        assert_eq!(parsed.plan_type.as_deref(), Some("future-enterprise"));
+        assert_eq!(parsed.account_name.as_deref(), Some("ada@example.com"));
+        assert!(!parsed.credits.has_credits);
+        assert_eq!(parsed.credits.balance, None);
+        assert!(parsed.additional_limits.is_empty());
+        assert!(parse_wham_usage(&json!({}), Utc::now()).is_err());
+    }
+
+    #[test]
+    fn reset_credit_future_status_and_bad_dates_remain_distinct_from_available() {
+        let summary = parse_wham_reset_credits(Some(&json!({
+            "credits": [
+                {"status": "future-status", "expires_at": "2026-11-01T01:30:00-04:00"},
+                {"status": null, "expires_at": "not-a-date", "granted_at": null}
+            ]
+        })))
+        .unwrap();
+        assert_eq!(summary.available_count, 0);
+        assert_eq!(summary.credits[0].status, "future-status");
+        assert_eq!(
+            summary.credits[0].expires_at,
+            Some("2026-11-01T05:30:00Z".parse().unwrap())
+        );
+        assert_eq!(summary.credits[1].expires_at, None);
+        assert_eq!(summary.credits[1].granted_at, None);
     }
 }

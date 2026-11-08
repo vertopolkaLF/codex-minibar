@@ -4,7 +4,7 @@ use crate::settings::{ProviderInstance, Settings};
 
 #[test]
 fn tab_tags_are_unique() {
-    let mut tags = Tab::ALL.map(Tab::tag).to_vec();
+    let mut tags = Tab::ALL.iter().map(|tab| tab.tag()).collect::<Vec<_>>();
     tags.sort_unstable();
     tags.dedup();
     assert_eq!(tags.len(), Tab::ALL.len());
@@ -26,8 +26,9 @@ fn every_sidebar_icon_is_embedded() {
 fn page_keys_are_unique_per_tab_and_instance() {
     let work = crate::providers::instances::ProviderId::new(ProviderKind::Claude, "claude-work");
     let pages = Tab::ALL
+        .iter()
+        .copied()
         .map(Page::Root)
-        .into_iter()
         .chain([
             Page::Provider(work),
             Page::Provider(ProviderKind::Claude.into()),

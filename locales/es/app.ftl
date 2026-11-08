@@ -2031,12 +2031,26 @@ time-late = { $time } de retraso
 
 # Floating usage panel
 popup-floating = Panel flotante
+linux-popup-keep-open = Mantener abierto
+linux-popup-keep-open-description = Mantener el panel abierto al cambiar de aplicación. En Wayland, haz clic derecho en la cabecera del panel y elige «Siempre encima» en el menú de ventanas del escritorio, si está disponible.
+linux-popup-unpin = Desanclar panel
 popup-floating-description = Mantén el panel abierto y arrastra su cabecera a otra posición o monitor.
 popup-always-on-top = Siempre visible
 popup-always-on-top-description = Mantener el panel encima de otras aplicaciones y abierto al cambiar de aplicación.
 popup-position = Posición del panel
 popup-position-description = La posición se recuerda entre sesiones.
 popup-reset-position = Restablecer posición
+popup-placement = Posición de la ventana
+popup-placement-description = Dónde se abre la ventana en la pantalla. Automático la abre junto a la bandeja o la barra de tareas.
+popup-placement-auto = Automático
+popup-placement-top-left = Arriba a la izquierda
+popup-placement-top-center = Arriba al centro
+popup-placement-top-right = Arriba a la derecha
+popup-placement-bottom-left = Abajo a la izquierda
+popup-placement-bottom-center = Abajo al centro
+popup-placement-bottom-right = Abajo a la derecha
+linux-popup-placement-description = Dónde se abre la ventana en la pantalla.
+linux-popup-placement-wayland = En Wayland, el escritorio decide dónde se abren las ventanas, así que esto solo se aplica en sesiones X11.
 popup-drag-header = Arrastra para mover
 popup-close = Cerrar panel
 
@@ -2058,13 +2072,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = Cuánto tiempo antes de c
 # src/ui/settings_window/providers/page.rs
 automatic-resets = Restablecimientos automáticos
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = Restablecimiento acumulado aplicado automáticamente
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = Este proveedor no tiene restablecimientos acumulados.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = El restablecimiento acumulado se aplicará en { $minutes } min
 
 # src/ui/settings_window/notifications.rs
@@ -2073,14 +2087,84 @@ before-an-automatic-reset = Antes de un restablecimiento automático
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = Avisa 10 minutos antes de aplicar automáticamente un restablecimiento acumulado.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = Aplicar ahora
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = Cancelar
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = Restablecimiento acumulado aplicado
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = Las cuentas adicionales de Claude necesitan la CLI de Claude Code. La copia integrada en la app de Claude solo sirve a la cuenta de la propia app.
+# src/surfaces/tray.rs
+linux-no-tray-title = No se encontró la bandeja del sistema
+
+# src/surfaces/tray.rs
+linux-no-tray-body = Activa la extensión AppIndicator para ver Codex Minibar en el panel. Vuelve a iniciar Codex Minibar para abrirlo.
+
+# src/ui/settings_window/general.rs
+start-at-login = Iniciar al iniciar sesión
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = Añade un atajo personalizado en la configuración de teclado de tu escritorio que ejecute este comando para mostrar u ocultar la ventana emergente.
+
+# src/ui/settings_window/general.rs
+copy-command = Copiar comando
+
+# src/ui/settings_window/general.rs
+command-copied = Comando copiado
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = Compañero gratuito y de código abierto para los límites de uso, reinicios y gastos de tus suscripciones de IA, en la bandeja del sistema.
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Guarda todos los ajustes en un archivo .toml. Las claves guardadas permanecen cifradas en este equipo.
+
+# src/ui/settings_window/appearance.rs
+linux-windows = Sistema
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = Sistema sigue el color de acento de tu escritorio.
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = Predeterminada del sistema
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = Solo cambia la ventana emergente. Los ajustes mantienen su propio aspecto.
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Transiciones suaves en la ventana emergente y en los ajustes. También se respeta el ajuste de animaciones de tu escritorio.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Cifrada con una clave del llavero del sistema, nunca en el archivo de ajustes.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Credencial guardada, cifrada con el llavero del sistema.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = Clave de API guardada, cifrada con el llavero del sistema.
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Cifrada con el llavero del sistema
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Se aplica inmediatamente a todas las ventanas y notificaciones de la aplicación. Automático sigue el idioma del sistema.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Ejecuta el inicio de sesión de Claude Code para { $name }, usando su carpeta de configuración como CLAUDE_CONFIG_DIR. El inicio de sesión permanece en esa carpeta, donde Claude Code lo mantiene actualizado.
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = Los juegos iniciados por Steam y los de las bibliotecas de Steam o Heroic se detectan solos. Añade aquí cualquier otro programa.
+linux-popup-shortcut-native-description = Se guarda en los ajustes de teclado de tu escritorio. Los cambios se aplican de inmediato.
+linux-popup-shortcut-choose = Definir atajo
+linux-popup-shortcut-dialog-hint = Pulsa la combinación de teclas que quieras usar. Se guardará como atajo personalizado en los ajustes de teclado de tu escritorio.
+linux-popup-shortcut-needs-modifier = Incluye Ctrl, Alt o Super, o usa F13–F24.
+linux-popup-shortcut-save-failed = El escritorio no aceptó el atajo. Reinténtalo o añade el comando en sus ajustes de teclado.
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Lee la cuota de suscripción desde tu inicio de sesión oficial actual de agy.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Carpeta con el ejecutable agy. Déjalo vacío para encontrarlo automáticamente.
+
+linux-folder-with-grok-cli = Carpeta con el ejecutable grok. Déjala vacía para buscarlo automáticamente.
+linux-folder-with-command-code-cli = Carpeta con command-code o cmd. Déjala vacía para buscarlo automáticamente.

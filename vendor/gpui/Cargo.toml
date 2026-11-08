@@ -42,6 +42,7 @@ default = [
     "windows-manifest",
 ]
 inspector = ["gpui_macros/inspector"]
+keep-alive = []
 leak-detection = ["backtrace"]
 macos-blade = [
     "blade-graphics",

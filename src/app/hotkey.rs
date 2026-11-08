@@ -168,6 +168,7 @@ pub fn is_suspended() -> bool {
     SUSPENDED.load(Ordering::SeqCst)
 }
 
+#[cfg(windows)]
 const HOTKEY_ID: i32 = 0x4D42; // "MB"
 
 /// Notes a `WM_HOTKEY` for the popup shortcut. Called by the bridge's

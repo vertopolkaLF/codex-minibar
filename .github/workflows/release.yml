@@ -99,6 +99,46 @@ jobs:
           path: dist/${{ needs.version.outputs.version }}/*
           if-no-files-found: error
 
+  linux:
+    name: Build Linux x64
+    needs: version
+    # The oldest supported runner keeps the glibc requirement low.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
+            libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev \
+            libvulkan-dev libfontconfig-dev libfreetype-dev libdbus-1-dev \
+            libssl-dev libzstd-dev patchelf rpm
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.95.0
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-x64
+          cache-on-failure: true
+
+      - name: Fetch dependencies
+        run: cargo fetch --locked
+
+      - name: Build tarball, .deb, .rpm and AppImage
+        run: ./build-linux.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: build-linux-x64
+          path: dist/${{ needs.version.outputs.version }}/*
+          if-no-files-found: error
+
   streamdeck:
     name: Pack Stream Deck plugin
     runs-on: windows-latest
@@ -146,7 +186,7 @@ jobs:
 
   release:
     name: Draft GitHub release
-    needs: [version, build, streamdeck]
+    needs: [version, build, linux, streamdeck]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

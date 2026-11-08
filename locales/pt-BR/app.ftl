@@ -2031,12 +2031,26 @@ time-late = { $time } de atraso
 
 # Floating usage panel
 popup-floating = Painel flutuante
+linux-popup-keep-open = Manter aberto
+linux-popup-keep-open-description = Manter o painel aberto ao alternar entre aplicativos. No Wayland, clique com o botão direito no cabeçalho e escolha «Sempre no topo» no menu de janelas do desktop, se disponível.
+linux-popup-unpin = Desafixar painel
 popup-floating-description = Mantenha o painel aberto e arraste o cabeçalho para outra posição ou monitor.
 popup-always-on-top = Sempre no topo
 popup-always-on-top-description = Manter o painel acima de outros aplicativos e aberto ao alternar entre eles.
 popup-position = Posição do painel
 popup-position-description = A posição é lembrada entre sessões.
 popup-reset-position = Redefinir posição
+popup-placement = Posição da janela
+popup-placement-description = Onde a janela abre na tela. Automático abre perto da bandeja ou da barra de tarefas.
+popup-placement-auto = Automático
+popup-placement-top-left = Superior esquerdo
+popup-placement-top-center = Superior central
+popup-placement-top-right = Superior direito
+popup-placement-bottom-left = Inferior esquerdo
+popup-placement-bottom-center = Inferior central
+popup-placement-bottom-right = Inferior direito
+linux-popup-placement-description = Onde a janela abre na tela.
+linux-popup-placement-wayland = No Wayland, o ambiente de trabalho decide onde as janelas abrem, então isso só se aplica a sessões X11.
 popup-drag-header = Arraste para mover
 popup-close = Fechar painel
 
@@ -2058,13 +2072,13 @@ how-long-before-a-banked-reset-expires-it-is-applied = Quanto tempo antes de exp
 # src/ui/settings_window/providers/page.rs
 automatic-resets = Redefinições automáticas
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied-automatically = Redefinição acumulada aplicada automaticamente
 
 # src/providers/instances.rs
 this-provider-has-no-banked-resets = Este provedor não tem redefinições acumuladas.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applies-in-minutes = A redefinição acumulada será aplicada em { $minutes } min
 
 # src/ui/settings_window/notifications.rs
@@ -2073,14 +2087,84 @@ before-an-automatic-reset = Antes de uma redefinição automática
 # src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = Avisa 10 minutos antes de uma redefinição acumulada ser aplicada automaticamente.
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 apply-reset-now = Aplicar agora
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 skip-automatic-reset = Cancelar
 
-# src/ui/popup_window/auto_reset.rs
+# src/app/auto_reset.rs
 banked-reset-applied = Redefinição acumulada aplicada
 
 # src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = Contas extras do Claude precisam da CLI do Claude Code. A cópia embutida no app do Claude só atende a conta do próprio app.
+# src/surfaces/tray.rs
+linux-no-tray-title = Bandeja do sistema não encontrada
+
+# src/surfaces/tray.rs
+linux-no-tray-body = Ative a extensão AppIndicator para ver o Codex Minibar no painel. Abra o Codex Minibar de novo para exibi-lo.
+
+# src/ui/settings_window/general.rs
+start-at-login = Iniciar ao entrar na sessão
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = Adicione um atalho personalizado nas configurações de teclado do seu desktop que execute este comando para mostrar ou ocultar o pop-up.
+
+# src/ui/settings_window/general.rs
+copy-command = Copiar comando
+
+# src/ui/settings_window/general.rs
+command-copied = Comando copiado
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = Companheiro gratuito e de código aberto para limites de uso, redefinições e gastos de assinaturas de IA, direto na bandeja do sistema.
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Salva todas as configurações em um arquivo .toml. As chaves salvas continuam criptografadas neste computador.
+
+# src/ui/settings_window/appearance.rs
+linux-windows = Sistema
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = Sistema segue a cor de destaque do seu desktop.
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = Padrão do sistema
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = Altera apenas o pop-up. As configurações mantêm a própria aparência.
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Transições suaves no pop-up e nas configurações. A configuração de animação do seu desktop também é respeitada.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Criptografado com uma chave do chaveiro do sistema, nunca no arquivo de configurações.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Credencial salva, criptografada com o chaveiro do sistema.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = Chave de API salva, criptografada com o chaveiro do sistema.
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Criptografado com o chaveiro do sistema
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Aplica-se imediatamente a todas as janelas e notificações do aplicativo. Automático segue o idioma do sistema.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Executa o login do próprio Claude Code para { $name }, usando sua pasta de configuração como CLAUDE_CONFIG_DIR. O login fica nessa pasta, onde o Claude Code o mantém atualizado.
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = Jogos iniciados pelo Steam e jogos das bibliotecas do Steam ou Heroic são detectados sozinhos. Adicione aqui qualquer outro programa.
+linux-popup-shortcut-native-description = Salvo nas configurações de teclado do seu ambiente de trabalho. As alterações são aplicadas imediatamente.
+linux-popup-shortcut-choose = Definir atalho
+linux-popup-shortcut-dialog-hint = Pressione a combinação de teclas que deseja usar. Ela será salva como atalho personalizado nas configurações de teclado do seu ambiente de trabalho.
+linux-popup-shortcut-needs-modifier = Inclua Ctrl, Alt ou Super, ou use F13–F24.
+linux-popup-shortcut-save-failed = O ambiente de trabalho não aceitou o atalho. Tente novamente ou adicione o comando nas configurações de teclado dele.
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Lê a cota da assinatura a partir do seu login oficial existente do agy.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Pasta com o executável agy. Deixe em branco para encontrar automaticamente.
+
+linux-folder-with-grok-cli = Pasta com o executável grok. Deixe em branco para encontrá-lo automaticamente.
+linux-folder-with-command-code-cli = Pasta com command-code ou cmd. Deixe em branco para encontrá-lo automaticamente.

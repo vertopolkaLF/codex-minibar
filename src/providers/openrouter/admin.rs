@@ -583,4 +583,22 @@ mod tests {
         );
         assert_eq!(api_error_message("not json"), None);
     }
+
+    #[test]
+    fn directory_future_reset_and_missing_usage_keep_safe_defaults() {
+        let keys = parse_key_list(
+            r#"{"data":[{"hash":"fixture","name":null,
+            "label":"CLI key","limit":null,"limit_reset":"future",
+            "usage":null,"expires_at":"invalid","future":true}]}"#,
+        )
+        .unwrap();
+        let key = &keys[0];
+        assert_eq!(key.name, "CLI key");
+        assert_eq!(key.limit_reset, LimitReset::Never);
+        assert_eq!(key.limit_microusd, None);
+        assert_eq!(key.usage_microusd, 0);
+        assert_eq!(key.expires_at, None);
+        assert!(parse_key_list(r#"{"data":[{"name":"missing hash"}]}"#).is_err());
+        assert!(parse_key_list(r#"{"data":null}"#).is_err());
+    }
 }

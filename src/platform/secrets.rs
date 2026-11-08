@@ -11,7 +11,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result, bail};
+#[cfg(windows)]
+use anyhow::bail;
+use anyhow::{Context, Result};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
 
@@ -59,9 +61,17 @@ struct SecretFile {
 }
 
 pub fn load(name: &str) -> Result<Option<String>> {
-    let _guard = operation_guard()?;
-    let path = crate::platform::paths::secrets()?;
-    load_from(&path, name)
+    // Decrypt outside the lock: getting the key may wait for the login keyring
+    // to unlock, and the UI thread must never queue behind that wait.
+    let encoded = {
+        let _guard = operation_guard()?;
+        read_encoded(&crate::platform::paths::secrets()?, name)?
+    };
+    encoded
+        .as_deref()
+        .map(decode)
+        .transpose()
+        .map(Option::flatten)
 }
 
 /// Whether `name` holds a readable, non-blank value.
@@ -69,13 +79,35 @@ pub fn has_value(name: &str) -> bool {
     load(name).ok().flatten().is_some()
 }
 
+/// Prepares for writing `changes` before `OPERATIONS` is taken. See [`load`].
+pub(crate) fn prepare_save(changes: &[(String, Option<String>)]) -> Result<()> {
+    #[cfg(not(windows))]
+    if changes.iter().any(|(_, value)| {
+        value
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    }) {
+        crate::platform::linux::keyring::prepare_write()?;
+    }
+    #[cfg(windows)]
+    let _ = changes;
+    Ok(())
+}
+
+#[cfg(all(test, windows))]
 fn load_from(path: &Path, name: &str) -> Result<Option<String>> {
-    let Some(file) = read_secret_file(path)? else {
-        return Ok(None);
-    };
-    let Some(encoded) = file.values.get(name) else {
-        return Ok(None);
-    };
+    read_encoded(path, name)?
+        .as_deref()
+        .map(decode)
+        .transpose()
+        .map(Option::flatten)
+}
+
+fn read_encoded(path: &Path, name: &str) -> Result<Option<String>> {
+    Ok(read_secret_file(path)?.and_then(|mut file| file.values.remove(name)))
+}
+
+fn decode(encoded: &str) -> Result<Option<String>> {
     let protected = STANDARD
         .decode(encoded)
         .context("decode protected provider secret")?;
@@ -106,6 +138,7 @@ impl EncodedRollback {
 /// Capture the prior ciphertext and publish the batch under one lock. Later
 /// rollback compares exact ciphertext so a newer write to a slot always wins.
 pub(crate) fn apply_with_rollback(changes: &[(String, Option<String>)]) -> Result<EncodedRollback> {
+    prepare_save(changes)?;
     let _guard = operation_guard()?;
     apply_with_rollback_to(&crate::platform::paths::secrets()?, changes)
 }
@@ -145,6 +178,7 @@ pub fn save(name: &str, value: Option<&str>) -> Result<()> {
 /// Validation and DPAPI encryption happen before the existing file changes,
 /// so account-level edits cannot leave only part of their keys updated.
 pub fn save_many(changes: &[(String, Option<String>)]) -> Result<()> {
+    prepare_save(changes)?;
     let _guard = operation_guard()?;
     let path = crate::platform::paths::secrets()?;
     save_many_to(&path, changes)
@@ -177,6 +211,14 @@ fn apply_changes(file: &mut SecretFile, changes: &[(String, Option<String>)]) ->
     }
 
     Ok(())
+}
+
+/// Called during Linux key initialization, including under `OPERATIONS`.
+/// Do not acquire that lock again: only inspect the atomically stored file.
+#[cfg(not(windows))]
+pub(crate) fn has_stored_secrets() -> Result<bool> {
+    Ok(read_secret_file(&crate::platform::paths::secrets()?)?
+        .is_some_and(|file| !file.values.is_empty()))
 }
 
 fn read_secret_file(path: &Path) -> Result<Option<SecretFile>> {
@@ -338,8 +380,8 @@ fn protect(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(windows))]
-fn protect(_data: &[u8]) -> Result<Vec<u8>> {
-    bail!("manual provider secrets are only supported on Windows")
+fn protect(data: &[u8]) -> Result<Vec<u8>> {
+    crate::platform::linux::keyring::protect(data)
 }
 
 #[cfg(windows)]
@@ -381,8 +423,8 @@ fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
 }
 
 #[cfg(not(windows))]
-fn unprotect(_data: &[u8]) -> Result<Vec<u8>> {
-    bail!("manual provider secrets are only supported on Windows")
+fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
+    crate::platform::linux::keyring::unprotect(data)
 }
 
 #[cfg(all(test, windows))]

@@ -1,15 +1,17 @@
 //! General: startup, Usage Stats, the reset feed and provider status pages.
 
 use gpui::{
-    AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, SharedString, Styled, Window,
-    div, px, relative,
+    AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, Styled, Window, div, px,
+    relative,
 };
 
 use super::Host;
 use super::window::SettingsWindow;
 use crate::settings::choice::Choice;
 use crate::settings::{ResetAnnouncementRefreshInterval, UsageRefreshInterval};
-use crate::ui::gui::kit::{self, Button, Kit, Row};
+#[cfg(windows)]
+use crate::ui::gui::kit::Button;
+use crate::ui::gui::kit::{self, Kit, Row};
 
 pub(super) fn usage_refresh_labels() -> [&'static str; 7] {
     [
@@ -44,9 +46,11 @@ impl SettingsWindow {
                 k,
                 "general-language",
                 crate::i18n::tr("language"),
-                Some(crate::i18n::tr(
-                    "applies-immediately-to-every-app-window-and-notification-auto-fol",
-                )),
+                Some(crate::i18n::tr(if cfg!(windows) {
+                    "applies-immediately-to-every-app-window-and-notification-auto-fol"
+                } else {
+                    "linux-applies-immediately-to-every-app-window-and-notification-auto-fol"
+                })),
                 kit::options(&crate::i18n::Language::labels()),
                 s.language.index(),
                 false,
@@ -61,7 +65,11 @@ impl SettingsWindow {
             vec![kit::toggle_row(
                 k,
                 "general-startup",
-                crate::i18n::tr("start-with-windows"),
+                if cfg!(windows) {
+                    crate::i18n::tr("start-with-windows")
+                } else {
+                    crate::i18n::tr("start-at-login")
+                },
                 Some(crate::i18n::tr("open-codex-minibar-in-the-tray-when-you-sign-in").into()),
                 start_at_login,
                 Self::h(cx, |this, value: bool, _, cx| {
@@ -216,10 +224,11 @@ impl SettingsWindow {
 
     /// Records the popup shortcut: the button waits for the next combination,
     /// Esc cancels and Backspace or Delete clears it.
+    #[cfg(windows)]
     fn popup_hotkey_row(&self, k: &mut Kit, cx: &mut Context<Self>) -> AnyElement {
         let recording = self.hotkey_recording;
         let current = self.settings.popup_hotkey;
-        let label: SharedString = if recording {
+        let label: gpui::SharedString = if recording {
             crate::i18n::tr("press-a-shortcut").into()
         } else if let Some(hotkey) = current {
             hotkey.label().into()
@@ -373,10 +382,18 @@ impl SettingsWindow {
                 }),
             );
             let check = match reason {
-                Some(reason) => {
-                    kit::tooltip_host(k, format!("usage-tip-{}", provider.id()), reason, check)
-                }
-                None => check,
+                Some(reason) => kit::tooltip_host(
+                    k,
+                    format!("usage-tip-{}", provider.id()),
+                    format!("{}\n{reason}", provider.qualified_name()),
+                    check,
+                ),
+                None => kit::tooltip_host(
+                    k,
+                    format!("usage-tip-{}", provider.id()),
+                    provider.qualified_name(),
+                    check,
+                ),
             };
             grid = grid.child(div().w(relative(1.0 / 3.0)).pr(px(12.0)).child(check));
         }

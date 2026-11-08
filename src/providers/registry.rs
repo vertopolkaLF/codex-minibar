@@ -1333,4 +1333,35 @@ mod tests {
         assert_eq!(session_window.used_percent, Some(12));
         assert_eq!(weekly_window.used_percent, Some(12));
     }
+
+    #[test]
+    fn unknown_metric_temporarily_falls_back_then_recovers_when_reported() {
+        let configured = dynamic_metric_id(ProviderKind::Claude, "future_model");
+        let mut limits = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(20),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let fallback = resolve_metric(ProviderKind::Claude, &limits, &configured).unwrap();
+        assert_ne!(fallback.0, configured);
+        assert!(std::ptr::eq(fallback.2, &limits.primary));
+        limits
+            .additional_limits
+            .push(crate::quota::limits::AdditionalLimit {
+                id: "future_model".into(),
+                title: "Future model".into(),
+                window: LimitWindow {
+                    used_percent: Some(75),
+                    ..Default::default()
+                },
+            });
+        let recovered = resolve_metric(ProviderKind::Claude, &limits, &configured).unwrap();
+        assert_eq!(recovered.0, configured);
+        assert_eq!(recovered.2.used_percent, Some(75));
+        assert!(
+            resolve_metric(ProviderKind::Claude, &RateLimits::default(), &configured).is_none()
+        );
+    }
 }

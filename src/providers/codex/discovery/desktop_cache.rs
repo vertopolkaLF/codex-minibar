@@ -70,6 +70,7 @@ pub(crate) struct PreparedCli {
 }
 
 impl PreparedCli {
+    #[cfg(windows)]
     pub(crate) fn is_cached(&self) -> bool {
         self.pinned
     }

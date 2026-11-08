@@ -119,6 +119,8 @@ pub(crate) struct UsageCache {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct CachedSessionFile {
+    #[serde(default)]
+    pub(crate) file_identity: Option<String>,
     /// Number of complete JSONL bytes already incorporated into `daily`.
     pub(crate) offset: u64,
     pub(crate) daily: Vec<DailyTokenUsage>,
@@ -161,17 +163,13 @@ pub(crate) struct CachedSessionFile {
 
 impl CachedSessionFile {
     fn reset_scan_state(&mut self) {
-        self.persisted = false;
-        self.offset = 0;
-        self.daily.clear();
-        self.model_daily.clear();
-        self.last_usage_signature = None;
-        self.saw_session_meta = false;
-        self.suppressing_fork_copies = false;
-        self.fork_copy_anchor_ms = 0;
-        self.session_id.clear();
-        // The rebuilt scan re-reads session_meta, which may name a new session.
-        self.cwd_persisted = false;
+        // A replacement may omit context that existed in the previous log.
+        // Keep only the filesystem identity; never inherit its project,
+        // pricing model, service tier or event state into the rebuilt scan.
+        *self = Self {
+            file_identity: self.file_identity.take(),
+            ..Self::default()
+        };
     }
 
     fn set_cwd(&mut self, cwd: String) {
@@ -332,6 +330,17 @@ fn refresh_instance_usage_statistics(
     // One hour of slack for files written just before the window opened.
     let recent_since = std::time::SystemTime::now()
         - std::time::Duration::from_secs((HOURLY_WINDOW_HOURS as u64 + 1) * 3600);
+    // SCAN above serializes refreshes, including retiring workers. Keep only
+    // recent, still-discovered files, and never retain raw transcript events.
+    static HOURLY: std::sync::Mutex<BTreeMap<ProviderId, BTreeMap<PathBuf, HourlyFileScan>>> =
+        std::sync::Mutex::new(BTreeMap::new());
+    let mut hourly_cache = HOURLY
+        .lock()
+        .map_err(|_| anyhow::anyhow!("hourly scan lock poisoned"))?;
+    let scans = hourly_cache.entry(provider).or_default();
+    let paths: BTreeSet<_> = files.iter().map(|(path, _)| path).collect();
+    scans.retain(|path, _| paths.contains(path));
+    drop(paths);
     let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
     for (path, key) in files {
         let cached = cache.files.entry(key.clone()).or_default();
@@ -340,28 +349,84 @@ fn refresh_instance_usage_statistics(
         }
         scan_file_delta(&path, &key, cached)?;
         cached.prune_before(oldest);
-        // The daily cache is incremental, so recent hours are rebuilt from a
-        // throwaway scan of logs touched in the window (Past 24h view).
+        // Keep hourly totals incremental too, while retaining the same recent
+        // file selection used by the Past 24h view.
         if fs::metadata(&path)
             .and_then(|meta| meta.modified())
             .is_ok_and(|modified| modified >= recent_since)
         {
-            let delta = scan_file_delta(&path, &key, &mut CachedSessionFile::default())?;
-            for event in delta.events {
-                let at = event.timestamp.with_timezone(&Local);
-                if at >= hourly_from {
-                    hourly
-                        .entry(truncate_hour(at))
-                        .or_default()
-                        .add(&event.usage);
-                }
+            let scan = scans.entry(path.clone()).or_default();
+            scan.refresh(&path, &key, hourly_from)?;
+            for (at, usage) in &scan.hourly {
+                hourly.entry(*at).or_default().add(usage);
             }
+        } else {
+            scans.remove(&path);
         }
     }
     store::with_store(|store| {
         store.save_codex_cache(provider, &cache, hourly.into_iter().collect())
     })?;
     load_cached_usage_statistics(provider, history_days)
+}
+
+/// In-memory hourly rollups for additional Codex accounts. The daily scan
+/// remains persisted separately; hourly state can always be rebuilt on startup.
+#[derive(Default)]
+struct HourlyFileScan {
+    state: CachedSessionFile,
+    hourly: BTreeMap<DateTime<Local>, TokenUsage>,
+    modified: Option<std::time::SystemTime>,
+    size: u64,
+    pricing_generation: u64,
+    from: Option<DateTime<Local>>,
+}
+
+impl HourlyFileScan {
+    fn refresh(&mut self, path: &Path, source: &str, from: DateTime<Local>) -> Result<()> {
+        let metadata = fs::metadata(path)?;
+        let modified = metadata.modified().ok();
+        let generation = pricing::catalog_generation();
+        // Appends preserve parser/dedupe state. A rewrite, replacement or new
+        // price catalog requires a clean rebuild, just as a cold scan does.
+        if self.from.is_some_and(|previous| from < previous)
+            || generation != self.pricing_generation
+            || metadata.len() < self.size
+            || session_file_identity(&metadata) != self.state.file_identity
+            || (metadata.len() == self.size && modified != self.modified)
+        {
+            *self = Self::default();
+        }
+        if self.from.is_some() && metadata.len() == self.size && modified == self.modified {
+            // Also skip unchanged unfinished lines; offset intentionally stays
+            // before their bytes until a writer appends the terminating newline.
+            self.hourly.retain(|at, _| *at >= from);
+            self.from = Some(from);
+            return Ok(());
+        }
+        let delta = scan_file_delta(path, source, &mut self.state)?;
+        if delta.rebuilt {
+            self.hourly.clear();
+        }
+        for event in delta.events {
+            let at = event.timestamp.with_timezone(&Local);
+            if at >= from {
+                self.hourly
+                    .entry(truncate_hour(at))
+                    .or_default()
+                    .add(&event.usage);
+            }
+        }
+        self.hourly.retain(|at, _| *at >= from);
+        // Only the parser's context and offset are needed between refreshes.
+        self.state.daily.clear();
+        self.state.model_daily.clear();
+        self.modified = modified;
+        self.size = metadata.len();
+        self.pricing_generation = generation;
+        self.from = Some(from);
+        Ok(())
+    }
 }
 
 /// Merges same-day rows and builds today/history totals for the requested window.
@@ -515,19 +580,37 @@ pub(crate) struct FileDelta {
     pub rebuilt: bool,
 }
 
+fn session_file_identity(metadata: &fs::Metadata) -> Option<String> {
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+    }
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        None
+    }
+}
+
 pub(crate) fn scan_file_delta(
     path: &Path,
     source: &str,
     cached: &mut CachedSessionFile,
 ) -> Result<FileDelta> {
     let mut events = Vec::new();
-    let file_size = fs::metadata(path)
-        .with_context(|| format!("read metadata for {}", path.display()))?
-        .len();
-    let rebuilt = cached.offset == 0 || file_size < cached.offset;
-    if file_size < cached.offset {
-        // Codex rewrote/truncated a session log. Its old aggregate is invalid.
+    let metadata =
+        fs::metadata(path).with_context(|| format!("read metadata for {}", path.display()))?;
+    let file_size = metadata.len();
+    let identity = session_file_identity(&metadata);
+    let replaced = identity.is_some() && cached.file_identity != identity;
+    let rebuilt = cached.offset == 0 || file_size < cached.offset || replaced;
+    if file_size < cached.offset || replaced {
         cached.reset_scan_state();
+    }
+    if cached.file_identity != identity {
+        cached.file_identity = identity;
+        cached.persisted = false;
     }
     if file_size == cached.offset {
         backfill_codex_cwd(path, cached);
@@ -648,16 +731,35 @@ pub(crate) fn collect_codex_session_files(root: &Path) -> Result<Vec<(PathBuf, S
 }
 
 fn collect_session_files(root: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    collect_session_files_in(root, files, &mut BTreeSet::new())
+}
+
+fn collect_session_files_in(
+    root: &Path,
+    files: &mut Vec<PathBuf>,
+    visited: &mut BTreeSet<PathBuf>,
+) -> Result<()> {
+    let Ok(identity) = root.canonicalize() else {
+        return Ok(());
+    };
+    if !visited.insert(identity) {
+        return Ok(());
+    }
     let Ok(entries) = fs::read_dir(root) else {
         return Ok(());
     };
+    // Stable ordering keeps the chosen path deterministic when several
+    // directory symlinks point to the same logs.
+    let mut entries = entries.collect::<std::io::Result<Vec<_>>>()?;
+    entries.sort_by_key(|entry| entry.path());
     for entry in entries {
-        let path = entry?.path();
+        let path = entry.path();
         if path.is_dir() {
-            collect_session_files(&path, files)?;
+            collect_session_files_in(&path, files, visited)?;
         } else if path
             .extension()
             .is_some_and(|extension| extension == "jsonl")
+            && path.is_file()
         {
             files.push(path);
         }
@@ -849,6 +951,8 @@ pub(crate) struct ClaudeUsageCache {
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub(crate) struct CachedClaudeSessionFile {
+    #[serde(default)]
+    pub(crate) file_identity: Option<String>,
     /// Number of complete JSONL bytes incorporated into `entries`.
     pub(crate) offset: u64,
     pub(crate) entries: Vec<CachedClaudeUsageEntry>,
@@ -990,8 +1094,13 @@ fn claude_logs_unchanged(
     Ok(files.iter().all(|path| {
         offsets
             .get(path.to_string_lossy().as_ref())
-            .is_some_and(|&offset| fs::metadata(path).is_ok_and(|meta| meta.len() == offset))
+            .is_some_and(|(offset, identity)| claude_log_matches_scan(path, *offset, identity))
     }))
+}
+
+fn claude_log_matches_scan(path: &Path, offset: u64, identity: &Option<String>) -> bool {
+    fs::metadata(path)
+        .is_ok_and(|meta| meta.len() == offset && session_file_identity(&meta) == *identity)
 }
 
 /// Folder below `projects` that holds a Claude log. Claude Code derives it
@@ -1091,12 +1200,20 @@ fn claude_entry_should_replace(
 }
 
 fn scan_claude_file_delta(path: &Path, cached: &mut CachedClaudeSessionFile) -> Result<()> {
-    let file_size = fs::metadata(path)
-        .with_context(|| format!("read metadata for {}", path.display()))?
-        .len();
-    if file_size < cached.offset {
+    let metadata =
+        fs::metadata(path).with_context(|| format!("read metadata for {}", path.display()))?;
+    let file_size = metadata.len();
+    let identity = session_file_identity(&metadata);
+    let replaced = identity.is_some() && cached.file_identity != identity;
+    if file_size < cached.offset || replaced {
         cached.offset = 0;
         cached.entries.clear();
+        cached.persisted = None;
+        cached.cwd = None;
+        cached.cwd_persisted = false;
+    }
+    if cached.file_identity != identity {
+        cached.file_identity = identity;
         cached.persisted = None;
     }
     if file_size == cached.offset {
@@ -1355,6 +1472,225 @@ fn collect_claude_session_files(roots: &[PathBuf]) -> Vec<PathBuf> {
 mod tests {
     use super::*;
     use chrono::TimeZone;
+
+    fn synthetic_codex_line(at: DateTime<Utc>, tokens: u64) -> String {
+        format!(
+            "{{\"timestamp\":\"{}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"info\":{{\"last_token_usage\":{{\"model\":\"gpt-5.4\",\"input_tokens\":{tokens},\"output_tokens\":2}}}}}}}}\n",
+            at.to_rfc3339()
+        )
+    }
+
+    fn full_hourly(path: &Path, from: DateTime<Local>) -> BTreeMap<DateTime<Local>, TokenUsage> {
+        let delta = scan_file_delta(path, "fixture", &mut CachedSessionFile::default()).unwrap();
+        let mut rows = BTreeMap::<_, TokenUsage>::new();
+        for event in delta.events {
+            let at = event.timestamp.with_timezone(&Local);
+            if at >= from {
+                rows.entry(truncate_hour(at)).or_default().add(&event.usage);
+            }
+        }
+        rows
+    }
+
+    #[test]
+    fn hourly_incremental_scan_matches_full_scan_through_log_changes() {
+        use std::io::Write;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let now = Utc::now();
+        let from = truncate_hour(now.with_timezone(&Local)) - Duration::hours(1);
+        let first = synthetic_codex_line(now, 10);
+        fs::write(&path, first.repeat(2)).unwrap();
+        let mut scan = HourlyFileScan::default();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        assert_eq!(scan.hourly.values().map(|v| v.requests).sum::<u64>(), 1);
+        let offset = scan.state.offset;
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.state.offset, offset);
+        // Consecutive duplicate suppression survives an incremental boundary.
+        let next = synthetic_codex_line(now + Duration::hours(1), 20);
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        write!(file, "{first}{}", next.trim_end()).unwrap();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        writeln!(file).unwrap();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        assert_eq!(
+            scan.hourly.values().map(|v| v.input_tokens).sum::<u64>(),
+            30
+        );
+        // Truncation and replacement discard the previous hourly totals.
+        fs::write(&path, synthetic_codex_line(now, 7)).unwrap();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        assert_eq!(scan.hourly.values().map(|v| v.input_tokens).sum::<u64>(), 7);
+        // A same-length rewrite must invalidate the hourly memo even on
+        // Windows, where session_file_identity is unavailable.
+        let modified = scan.modified.unwrap();
+        fs::write(&path, synthetic_codex_line(now, 9)).unwrap();
+        File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_times(
+                fs::FileTimes::new().set_modified(modified + std::time::Duration::from_secs(1)),
+            )
+            .unwrap();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        assert_eq!(scan.hourly.values().map(|v| v.input_tokens).sum::<u64>(), 9);
+        // Catalog updates must reprice all events, not just appended events.
+        scan.pricing_generation = u64::MAX;
+        scan.hourly.clear();
+        scan.refresh(&path, "fixture", from).unwrap();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        scan.refresh(&path, "fixture", from + Duration::hours(3))
+            .unwrap();
+        assert!(scan.hourly.is_empty());
+    }
+
+    #[test]
+    fn daily_aggregation_merges_and_filters_without_changing_totals() {
+        let today = Local::now().date_naive();
+        let usage = TokenUsage {
+            input_tokens: 10,
+            output_tokens: 3,
+            requests: 1,
+            ..Default::default()
+        };
+        let days = [
+            today,
+            today,
+            today - Duration::days(1),
+            today - Duration::days(30),
+            today + Duration::days(1),
+        ];
+        let days: Vec<_> = days
+            .into_iter()
+            .map(|date| DailyTokenUsage {
+                date,
+                usage: usage.clone(),
+            })
+            .collect();
+        let stats = statistics_from_daily(&days, 7);
+        assert_eq!(stats.daily.len(), 2);
+        assert_eq!(stats.today.input_tokens, 20);
+        assert_eq!(stats.history.total_tokens(), 39);
+        assert_eq!(stats.history.requests, 3);
+    }
+
+    #[test]
+    #[ignore = "synthetic performance measurement; run with --ignored --nocapture"]
+    fn benchmark_incremental_hourly() {
+        use std::time::Instant;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl");
+        let now = Utc::now();
+        let from = truncate_hour(now.with_timezone(&Local)) - Duration::hours(47);
+        let transcript: String = (1..=20_000).map(|n| synthetic_codex_line(now, n)).collect();
+        fs::write(&path, &transcript).unwrap();
+        let mut scan = HourlyFileScan::default();
+        scan.refresh(&path, "fixture", from).unwrap();
+        let started = Instant::now();
+        for _ in 0..10 {
+            assert_eq!(full_hourly(&path, from), scan.hourly);
+        }
+        let full = started.elapsed();
+        let started = Instant::now();
+        for _ in 0..10 {
+            scan.refresh(&path, "fixture", from).unwrap();
+        }
+        let idle = started.elapsed();
+        eprintln!(
+            "hourly: 20,000 events, {} bytes, 10 refreshes: full={full:?}, incremental idle={idle:?}",
+            transcript.len()
+        );
+        use std::io::Write;
+        let mut file = fs::OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(synthetic_codex_line(now, 20_001).as_bytes())
+            .unwrap();
+        let started = Instant::now();
+        scan.refresh(&path, "fixture", from).unwrap();
+        let appended = started.elapsed();
+        assert_eq!(scan.hourly, full_hourly(&path, from));
+        eprintln!("hourly: one appended event refresh={appended:?}");
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn session_scan_only_collects_regular_logs_including_linked_files() {
+        use std::os::unix::{ffi::OsStrExt, fs::symlink, net::UnixListener};
+        let root = tempfile::tempdir().unwrap();
+        let file = root.path().join("regular.jsonl");
+        fs::write(&file, "fixture").unwrap();
+        let linked = root.path().join("linked.jsonl");
+        symlink(&file, &linked).unwrap();
+        symlink(
+            root.path().join("missing"),
+            root.path().join("broken.jsonl"),
+        )
+        .unwrap();
+        let fifo = root.path().join("pipe.jsonl");
+        let fifo_name = std::ffi::CString::new(fifo.as_os_str().as_bytes()).unwrap();
+        // SAFETY: fifo_name is a valid NUL-terminated path in our test folder.
+        assert_eq!(unsafe { libc::mkfifo(fifo_name.as_ptr(), 0o600) }, 0);
+        let _socket = UnixListener::bind(root.path().join("socket.jsonl")).unwrap();
+        let mut files = Vec::new();
+        collect_session_files(root.path(), &mut files).unwrap();
+        assert_eq!(files, vec![linked, file]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn session_scan_follows_linked_directories_once_and_stops_cycles() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let logs = root.path().join("logs");
+        let external = root.path().join("external");
+        fs::create_dir(&logs).unwrap();
+        fs::create_dir(&external).unwrap();
+        fs::write(external.join("session.jsonl"), "fixture").unwrap();
+        symlink(&external, logs.join("a-link")).unwrap();
+        symlink(&external, logs.join("b-link")).unwrap();
+        symlink(&logs, external.join("cycle")).unwrap();
+        let mut files = Vec::new();
+        collect_session_files(&logs, &mut files).unwrap();
+        assert_eq!(files, vec![logs.join("a-link/session.jsonl")]);
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn claude_same_length_replacement_invalidates_fast_path_and_rebuilds_events() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("claude.jsonl");
+        let line = r#"{"type":"assistant","cwd":"/old","timestamp":"2026-07-14T10:00:00Z","message":{"id":"m1","model":"claude-sonnet-4-20250514","usage":{"output_tokens":0,"input_tokens":10}}}"#;
+        fs::write(&path, format!("{line}\n")).unwrap();
+        let mut cached = CachedClaudeSessionFile::default();
+        scan_claude_file_delta(&path, &mut cached).unwrap();
+        let identity = cached.file_identity.clone();
+        let offset = cached.offset;
+        assert!(claude_log_matches_scan(&path, offset, &identity));
+        let replacement = root.path().join("replacement");
+        fs::write(
+            &replacement,
+            format!(
+                "{}\n",
+                line.replace("/old", "/new")
+                    .replace(":10}", ":20}")
+                    .replace("m1", "m2")
+            ),
+        )
+        .unwrap();
+        fs::rename(replacement, &path).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().len(), offset);
+        assert!(!claude_log_matches_scan(&path, offset, &identity));
+        scan_claude_file_delta(&path, &mut cached).unwrap();
+        assert_eq!(cached.entries.len(), 1);
+        assert_eq!(cached.entries[0].usage.input_tokens, 20);
+        assert_eq!(cached.cwd.as_deref(), Some("/new"));
+    }
 
     #[test]
     fn reads_per_request_token_usage() {
@@ -1637,6 +1973,51 @@ mod tests {
         assert!(delta.rebuilt);
         assert_eq!(delta.events.len(), 1);
         assert_eq!(cached.daily[0].usage.total_tokens(), 10);
+        assert_eq!(cached.daily[0].usage.requests, 1);
+    }
+
+    #[test]
+    fn truncated_codex_log_does_not_inherit_old_project_or_pricing_context() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        fs::write(&path, "{\"type\":\"session_meta\",\"payload\":{\"id\":\"old\",\"cwd\":\"/old-project\"}}\n{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.4\",\"service_tier\":\"fast\"}}\n").unwrap();
+        let mut cached = CachedSessionFile::default();
+        scan_file_delta(&path, "source", &mut cached).unwrap();
+        assert_eq!(cached.current_model.as_deref(), Some("gpt-5.4"));
+        assert_eq!(cached.cwd.as_deref(), Some("/old-project"));
+        cached.fast_service_tier = true;
+        fs::write(&path, "{}\n").unwrap();
+        assert!(
+            scan_file_delta(&path, "source", &mut cached)
+                .unwrap()
+                .rebuilt
+        );
+        assert_eq!(cached.current_model, None);
+        assert!(!cached.fast_service_tier);
+        assert_eq!(cached.cwd.as_deref(), Some(""));
+        assert!(cached.session_id.is_empty());
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn replacing_a_codex_log_at_the_same_length_rebuilds_cached_usage() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("session.jsonl");
+        let line = "{\"timestamp\":\"2026-07-14T10:00:00Z\",\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\"last_token_usage\":{\"input_tokens\":10}}}}\n";
+        let line =
+            format!("{{\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-5.4\"}}}}\n{line}");
+        fs::write(&path, &line).unwrap();
+        let mut cached = CachedSessionFile::default();
+        scan_file_delta(&path, "source", &mut cached).unwrap();
+        let previous_identity = cached.file_identity.clone();
+        let replacement = root.path().join("replacement");
+        fs::write(&replacement, line.replace(":10}", ":20}")).unwrap();
+        assert_eq!(fs::metadata(&replacement).unwrap().len(), cached.offset);
+        fs::rename(replacement, &path).unwrap();
+        let delta = scan_file_delta(&path, "source", &mut cached).unwrap();
+        assert!(delta.rebuilt);
+        assert_ne!(cached.file_identity, previous_identity);
+        assert_eq!(cached.daily[0].usage.input_tokens, 20);
         assert_eq!(cached.daily[0].usage.requests, 1);
     }
 

@@ -1374,14 +1374,17 @@ fn action_bar_visibility_setting_only_controls_the_regular_popup() {
                 ..Settings::default()
             };
             let mut ui = ui_from(&settings);
+            assert_eq!(ui.settings.popup_floating, floating);
             assert_eq!(ui.compact_bar_visible(), floating || shown);
             let updated = Settings {
-                popup_floating: floating,
+                popup_floating: !floating,
                 show_popup_action_bar: !shown,
                 ..settings
             };
             ui.set_settings(updated);
-            assert_eq!(ui.compact_bar_visible(), floating || !shown);
+            assert_eq!(ui.settings.popup_floating, !floating);
+            assert_eq!(ui.settings.show_popup_action_bar, !shown);
+            assert_eq!(ui.compact_bar_visible(), !floating || !shown);
         }
     }
 }

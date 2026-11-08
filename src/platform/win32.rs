@@ -39,6 +39,9 @@ pub fn primary_taskbar() -> HWND {
 /// Whether the shell (taskbar and notification area) uses the light theme.
 /// The shell follows the "Windows mode" (`SystemUsesLightTheme`), not the
 /// app mode; Windows 10 and 11 default to a dark taskbar when it is missing.
+/// On Linux this is the panel hosting the tray: GNOME-family top bars are dark
+/// in both color schemes; other desktops follow the portal color scheme and
+/// default to light without a preference.
 pub fn shell_uses_light_theme() -> bool {
     #[cfg(windows)]
     {
@@ -50,7 +53,10 @@ pub fn shell_uses_light_theme() -> bool {
         .is_some_and(|value| value != 0)
     }
     #[cfg(not(windows))]
-    false
+    {
+        !crate::platform::linux::desktop::panel_always_dark()
+            && crate::platform::linux::desktop::prefers_dark() != Some(true)
+    }
 }
 
 /// An open registry key, closed on drop.

@@ -2337,4 +2337,47 @@ mod tests {
             0
         );
     }
+
+    #[test]
+    fn auth_decoder_distinguishes_torn_json_from_explicit_logout() {
+        let stamp = std::time::UNIX_EPOCH + std::time::Duration::from_secs(100);
+        for raw in [b"{".as_slice(), b"not JSON"] {
+            assert_eq!(decode_auth(raw, stamp), Observation::Uncertain);
+        }
+        for raw in [
+            r"{}",
+            r#"{"tokens":null}"#,
+            r#"{"tokens":{"account_id":null}}"#,
+            r#"{"tokens":{"account_id":"  "}}"#,
+        ] {
+            assert_eq!(decode_auth(raw.as_bytes(), stamp), Observation::LoggedOut);
+        }
+        assert_eq!(
+            decode_auth(br#"{"tokens":{"account_id":"  account-a  ","id_token":"malformed"},"future":true}"#, stamp),
+            Observation::Account(Identity { id: "account-a".into(), stamp: 100_000_000_000, session: None })
+        );
+    }
+
+    #[test]
+    fn login_session_prefers_sid_and_falls_back_to_auth_time_only_when_valid() {
+        use base64::Engine;
+        for (claims, expected) in [
+            (
+                json!({"sid":"session-a","auth_time":123}),
+                Some("sid:session-a"),
+            ),
+            (json!({"sid":"","auth_time":123}), Some("auth:123")),
+            (json!({"sid":null,"auth_time":"123"}), None),
+            (json!({"future":true}), None),
+        ] {
+            let token = format!(
+                "header.{}.signature",
+                base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string())
+            );
+            assert_eq!(
+                login_session(&json!({"tokens":{"id_token":token}})).as_deref(),
+                expected
+            );
+        }
+    }
 }

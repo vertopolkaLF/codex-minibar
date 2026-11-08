@@ -300,6 +300,7 @@ struct Bridge {
     ui_changed: bool,
     tray: TrayManager,
     widgets: Vec<TrayWidget>,
+    #[cfg(windows)]
     hotkey: crate::app::hotkey::Registration,
     update_phase: UpdatePhase,
     events: Option<Receiver<AppEvent>>,
@@ -328,6 +329,7 @@ impl Bridge {
             streamdeck_rx: crate::surfaces::streamdeck::start_server(Arc::clone(&state)),
             tray: TrayManager::new(),
             // Registered from this thread so WM_HOTKEY reaches its message pump.
+            #[cfg(windows)]
             hotkey: crate::app::hotkey::Registration::default(),
             widgets: visible_widgets(&ui.settings),
             update_phase: state.updates.snapshot(),
@@ -501,6 +503,10 @@ impl Bridge {
 
     fn apply_settings(&mut self, settings: Settings) {
         let state = Arc::clone(&self.state);
+        // Also affects checks already in flight, whose result may arrive later.
+        state.updates.set_notifications_enabled(
+            settings.check_for_updates && settings.notifications.update_available,
+        );
         if settings.check_for_updates && !self.ui.settings.check_for_updates {
             state.updates.check_async(false);
         }
@@ -637,6 +643,19 @@ impl Bridge {
                 crate::surfaces::streamdeck::Command::RefreshData => {
                     self.state.refresh_all();
                 }
+                #[cfg(not(windows))]
+                crate::surfaces::streamdeck::Command::RefreshAfterResume => {
+                    for (_, commands) in self.state.worker_commands() {
+                        let _ = commands.send(WorkerCommand::RefreshAutomatic);
+                    }
+                }
+                // Panel widgets ask for one provider; unlike a key press this
+                // never hides a popup that is already up.
+                #[cfg(not(windows))]
+                crate::surfaces::streamdeck::Command::ShowProvider { provider } => {
+                    crate::ui::popup_window::request_view(PendingPopupView::Provider(provider));
+                    crate::ui::popup_window::ensure_shown(Origin::PrimaryMonitor);
+                }
                 crate::surfaces::streamdeck::Command::OpenPopup { provider } => {
                     crate::ui::popup_window::toggle(
                         Origin::PrimaryMonitor,
@@ -650,8 +669,15 @@ impl Bridge {
         }
     }
 
+    /// Linux has no in-process hotkey: the desktop runs
+    /// `codex-minibar --toggle`, which the single-instance socket delivers
+    /// (`platform::linux::instance`).
+    #[cfg(not(windows))]
+    fn pump_hotkey(&mut self) {}
+
     /// Keeps the popup shortcut registered as configured and toggles the
     /// popup when it is pressed, the same way a tray click does.
+    #[cfg(windows)]
     fn pump_hotkey(&mut self) {
         // Settings releases the shortcut while it records a new one; the flag
         // cannot outlive the window that set it.
@@ -754,8 +780,39 @@ impl Bridge {
         false
     }
 
+    /// Tray input arrives from the StatusNotifierItem threads. Outside clicks
+    /// and Escape are handled by the popup window itself (focus loss and key
+    /// events): Linux clients cannot observe global input on Wayland.
     #[cfg(not(windows))]
     fn pump_tray(&mut self) -> bool {
+        use crate::surfaces::tray::TrayEvent;
+
+        for event in self.tray.drain_events() {
+            match event {
+                TrayEvent::Activate(x, y) => {
+                    if popup::just_dismissed_by_focus_loss()
+                        && !(popup::is_visible() && !popup::is_closing())
+                    {
+                        // The click that closed the popup by taking its focus.
+                        continue;
+                    }
+                    let origin = if (x, y) == (0, 0) {
+                        Origin::Cursor
+                    } else {
+                        Origin::Tray(x, y)
+                    };
+                    crate::ui::popup_window::toggle(origin, None);
+                }
+                TrayEvent::ShowPopup => {
+                    crate::ui::popup_window::ensure_shown(Origin::Cursor);
+                }
+                TrayEvent::Menu(command) => {
+                    if run_menu_command(command) {
+                        return true;
+                    }
+                }
+            }
+        }
         false
     }
 
@@ -935,6 +992,9 @@ impl Bridge {
                         ("error", error.to_string()),
                     ],
                 );
+                if self.ui.settings.notifications.activation_failure {
+                    notifications::show_error(&provider.qualified_name(), &self.ui.last_activation);
+                }
             }
             WorkerEvent::PollFailed(error) => {
                 crate::platform::logger::info(format!("{name} polling failed: {error}"));

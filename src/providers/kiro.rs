@@ -5,9 +5,9 @@
 use std::env;
 use std::{
     fs,
-    io::{BufRead, BufReader},
+    io::{BufRead, BufReader, Read, Seek},
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{Command, Stdio},
     time::{Duration, Instant, SystemTime},
 };
 
@@ -199,24 +199,33 @@ fn cli_identity_account_name(executable: &Path) -> Option<String> {
         return None;
     }
 
-    let mut child =
-        crate::providers::support::cli_command(executable, ["whoami", "--format", "json"])
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .ok()?;
-    let status = crate::providers::support::wait_with_timeout(&mut child, Duration::from_secs(5))
+    let command =
+        crate::providers::support::cli_command(executable, ["whoami", "--format", "json"]);
+    cli_identity_from_command(command, Duration::from_secs(5))
+}
+
+fn cli_identity_from_command(mut command: Command, timeout: Duration) -> Option<String> {
+    // A file avoids filling a pipe while waiting for exit, and does not wait
+    // for EOF from helpers that inherit the CLI output descriptor.
+    let mut stdout = tempfile::tempfile().ok()?;
+    command
+        .stdin(Stdio::null())
+        .stdout(stdout.try_clone().ok()?)
+        .stderr(Stdio::null());
+    let mut child = crate::providers::support::spawn_command(command).ok()?;
+    let status = crate::providers::support::wait_with_timeout(&mut child, timeout)
         .ok()
         .flatten()?;
     if !status.success() {
         return None;
     }
-    let output = child.wait_with_output().ok()?;
-    if !output.status.success() {
+    stdout.rewind().ok()?;
+    let mut output = Vec::new();
+    stdout.take(1024 * 1024 + 1).read_to_end(&mut output).ok()?;
+    if output.len() > 1024 * 1024 {
         return None;
     }
-    let response: Value = serde_json::from_slice(&output.stdout).ok()?;
+    let response: Value = serde_json::from_slice(&output).ok()?;
     let user = response
         .get("userInfo")
         .or_else(|| response.get("user_info"))
@@ -226,51 +235,53 @@ fn cli_identity_account_name(executable: &Path) -> Option<String> {
 }
 
 fn cli_auth_cache_is_fresh() -> bool {
-    #[cfg(windows)]
-    {
-        let Some(path) = directories::BaseDirs::new()
-            .map(|base| base.data_local_dir().join("Kiro-Cli/data.sqlite3"))
-            .filter(|path| path.is_file())
-        else {
-            return false;
-        };
-        let Ok(connection) = Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        else {
-            return false;
-        };
-        if connection.busy_timeout(Duration::from_millis(250)).is_err() {
-            return false;
-        }
-        let Ok(mut statement) =
-            connection.prepare("SELECT value FROM auth_kv WHERE key LIKE 'kirocli:%:token'")
-        else {
-            return false;
-        };
-        let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
-            return false;
-        };
-        return rows.flatten().any(|raw| {
-            serde_json::from_str::<Value>(&raw)
-                .ok()
-                .is_some_and(|token| {
-                    let has_access_token = token
-                        .get("access_token")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| !value.trim().is_empty());
-                    let not_expired = token
-                        .get("expires_at")
-                        .and_then(timestamp_value)
-                        .is_some_and(|expires_at| {
-                            expires_at > Utc::now() + chrono::Duration::seconds(30)
-                        });
-                    has_access_token && not_expired
-                })
-        });
+    let Some(base) = directories::BaseDirs::new() else {
+        return false;
+    };
+    let folder = if cfg!(windows) {
+        "Kiro-Cli"
+    } else {
+        "kiro-cli"
+    };
+    cli_auth_cache_is_fresh_at(
+        &base.data_local_dir().join(folder).join("data.sqlite3"),
+        Utc::now(),
+    )
+}
+
+fn cli_auth_cache_is_fresh_at(path: &Path, now: DateTime<Utc>) -> bool {
+    if !path.is_file() {
+        return false;
     }
-    #[cfg(not(windows))]
-    {
-        false
+    let Ok(connection) = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY) else {
+        return false;
+    };
+    if connection.busy_timeout(Duration::from_millis(250)).is_err() {
+        return false;
     }
+    let Ok(mut statement) =
+        connection.prepare("SELECT value FROM auth_kv WHERE key LIKE 'kirocli:%:token'")
+    else {
+        return false;
+    };
+    let Ok(rows) = statement.query_map([], |row| row.get::<_, String>(0)) else {
+        return false;
+    };
+    rows.flatten().any(|raw| {
+        serde_json::from_str::<Value>(&raw)
+            .ok()
+            .is_some_and(|token| {
+                let has_access_token = token
+                    .get("access_token")
+                    .and_then(Value::as_str)
+                    .is_some_and(|value| !value.trim().is_empty());
+                let not_expired = token
+                    .get("expires_at")
+                    .and_then(timestamp_value)
+                    .is_some_and(|expires_at| expires_at > now + chrono::Duration::seconds(30));
+                has_access_token && not_expired
+            })
+    })
 }
 
 impl LimitProvider for KiroClient {
@@ -418,40 +429,38 @@ pub fn ide_source_path(explicit: Option<&Path>) -> Option<PathBuf> {
 
 /// Finds the desktop Kiro Crew app across per-user and all-users installs.
 pub fn crew_installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
-    explicit
-        .and_then(|path| executable_from_crew_path(path, true))
-        .or_else(|| {
-            #[cfg(windows)]
-            {
-                let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
-                let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
-                let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
-                let mut roots = Vec::new();
-                if let Some(root) = local_app_data {
-                    roots.push(root.join("Programs"));
-                }
-                roots.extend(program_files);
-                roots.extend(program_files_x86);
-                roots
+    let explicit = explicit.and_then(|path| executable_from_crew_path(path, true));
+    // Kiro Crew ships for Windows only; elsewhere only a configured path counts.
+    #[cfg(windows)]
+    {
+        explicit.or_else(|| {
+            let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+            let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+            let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+            let mut roots = Vec::new();
+            if let Some(root) = local_app_data {
+                roots.push(root.join("Programs"));
+            }
+            roots.extend(program_files);
+            roots.extend(program_files_x86);
+            roots
+                .into_iter()
+                .flat_map(|root| {
+                    [
+                        "KiroCrew",
+                        "Kiro Crew",
+                        "KiroCrew Nightly",
+                        "Kiro Crew Nightly",
+                    ]
                     .into_iter()
-                    .flat_map(|root| {
-                        [
-                            "KiroCrew",
-                            "Kiro Crew",
-                            "KiroCrew Nightly",
-                            "Kiro Crew Nightly",
-                        ]
-                        .into_iter()
-                        .map(move |folder| root.join(folder))
-                    })
-                    .chain(registered_crew_install_locations())
-                    .find_map(|path| executable_from_crew_path(&path, false))
-            }
-            #[cfg(not(windows))]
-            {
-                None
-            }
+                    .map(move |folder| root.join(folder))
+                })
+                .chain(registered_crew_install_locations())
+                .find_map(|path| executable_from_crew_path(&path, false))
         })
+    }
+    #[cfg(not(windows))]
+    explicit
 }
 
 fn executable_from_crew_path(path: &Path, allow_explicit_file: bool) -> Option<PathBuf> {
@@ -541,23 +550,25 @@ fn registered_crew_install_locations() -> Vec<PathBuf> {
     locations
 }
 
-#[cfg(not(windows))]
-fn registered_crew_install_locations() -> Vec<PathBuf> {
-    Vec::new()
-}
-
 pub fn cli_path(explicit: Option<&Path>) -> Option<PathBuf> {
+    #[cfg(windows)]
+    const NAMES: &[&str] = &["kiro-cli.exe", "kiro-cli"];
+    #[cfg(not(windows))]
+    const NAMES: &[&str] = &["kiro-cli"];
     let mut known = Vec::new();
     #[cfg(windows)]
     if let Some(local_app_data) = env::var_os("LOCALAPPDATA") {
         known.push(PathBuf::from(local_app_data).join("kiro-cli/kiro-cli.exe"));
     }
     if let Some(base) = directories::BaseDirs::new() {
-        known.push(base.home_dir().join(".local/bin/kiro-cli.exe"));
-        known.push(base.home_dir().join(".local/bin/kiro-cli"));
+        known.extend(
+            NAMES
+                .iter()
+                .map(|name| base.home_dir().join(".local/bin").join(name)),
+        );
     }
     let search = crate::providers::support::CliSearch {
-        names: &["kiro-cli.exe", "kiro-cli"],
+        names: NAMES,
         known,
         user_bins: false,
     };
@@ -567,41 +578,46 @@ pub fn cli_path(explicit: Option<&Path>) -> Option<PathBuf> {
 }
 
 pub fn installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
-    explicit
-        .and_then(|path| {
-            if path.is_file() {
-                Some(path.to_path_buf())
-            } else {
-                let executable = path.join("Kiro.exe");
-                executable.is_file().then_some(executable)
-            }
-        })
-        .or_else(|| {
-            #[cfg(windows)]
-            {
-                let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
-                let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
-                let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
-                local_app_data
+    const EXECUTABLE: &str = if cfg!(windows) { "Kiro.exe" } else { "kiro" };
+    let explicit = explicit.and_then(|path| {
+        if path.is_file() {
+            Some(path.to_path_buf())
+        } else {
+            let executable = path.join(EXECUTABLE);
+            executable.is_file().then_some(executable)
+        }
+    });
+    if explicit.is_some() {
+        return explicit;
+    }
+    #[cfg(windows)]
+    {
+        let local_app_data = env::var_os("LOCALAPPDATA").map(PathBuf::from);
+        let program_files = env::var_os("ProgramFiles").map(PathBuf::from);
+        let program_files_x86 = env::var_os("ProgramFiles(x86)").map(PathBuf::from);
+        local_app_data
+            .into_iter()
+            .map(|path| path.join("Programs/Kiro/Kiro.exe"))
+            .chain(
+                program_files
                     .into_iter()
-                    .map(|path| path.join("Programs/Kiro/Kiro.exe"))
-                    .chain(
-                        program_files
-                            .into_iter()
-                            .map(|path| path.join("Kiro/Kiro.exe")),
-                    )
-                    .chain(
-                        program_files_x86
-                            .into_iter()
-                            .map(|path| path.join("Kiro/Kiro.exe")),
-                    )
-                    .find(|path| path.is_file())
-            }
-            #[cfg(not(windows))]
-            {
-                None
-            }
-        })
+                    .map(|path| path.join("Kiro/Kiro.exe")),
+            )
+            .chain(
+                program_files_x86
+                    .into_iter()
+                    .map(|path| path.join("Kiro/Kiro.exe")),
+            )
+            .find(|path| path.is_file())
+    }
+    #[cfg(not(windows))]
+    {
+        crate::platform::linux::apps::find_app(
+            &["kiro"],
+            &["/usr/share/kiro/kiro", "/opt/Kiro/kiro", "/opt/kiro/kiro"],
+            "kiro",
+        )
+    }
 }
 
 fn state_database_path() -> Option<PathBuf> {
@@ -812,7 +828,7 @@ fn limits_from_live_usage(response: KiroLiveUsageResponse) -> Result<RateLimits>
     let resets_at = resets_at.or_else(|| {
         local_fallback
             .as_ref()
-            .and_then(|local| local.secondary.resets_at.as_ref().cloned())
+            .and_then(|local| local.secondary.resets_at)
     });
     let used_percent = ((used / limit) * 100.0).round().clamp(0.0, 100.0) as u8;
     let duration_minutes = resets_at.and_then(month_duration_minutes);
@@ -1184,4 +1200,148 @@ fn numeric_value(value: &Value) -> Option<f64> {
 fn month_duration_minutes(resets_at: DateTime<Utc>) -> Option<u32> {
     let start = resets_at.checked_sub_months(Months::new(1))?;
     u32::try_from((resets_at - start).num_minutes()).ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[cfg(not(windows))]
+    #[test]
+    fn linux_cli_discovery_does_not_prefer_a_windows_binary_in_the_same_folder() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let unix = root.path().join("kiro-cli");
+        for path in [&unix, &root.path().join("kiro-cli.exe")] {
+            fs::write(path, b"fixture, never launched").unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(cli_path(Some(root.path())), Some(unix));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn cli_identity_reads_large_output_without_filling_a_pipe() {
+        let mut command = Command::new("/bin/sh");
+        command.args([
+            "-c",
+            "printf '%131072s{\"userInfo\":{\"email\":\"fixture@example.com\"}}' ' '",
+        ]);
+        assert_eq!(
+            cli_identity_from_command(command, Duration::from_secs(2)).as_deref(),
+            Some("fixture@example.com")
+        );
+        let mut oversized = Command::new("/bin/sh");
+        oversized.args(["-c", "printf '%1048577s{}' ' '"]);
+        assert_eq!(
+            cli_identity_from_command(oversized, Duration::from_secs(2)),
+            None
+        );
+    }
+
+    #[test]
+    fn cli_auth_cache_requires_a_fresh_token_and_never_updates_the_database() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("data.sqlite3");
+        let now: DateTime<Utc> = "2026-11-04T00:00:00Z".parse().unwrap();
+        assert!(!cli_auth_cache_is_fresh_at(&path, now));
+        assert!(!path.exists());
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute(
+                "CREATE TABLE auth_kv (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+                [],
+            )
+            .unwrap();
+        for raw in [
+            r#"{"access_token":"fixture","expires_at":"2026-11-03T23:59:00Z"}"#,
+            r#"{"access_token":"","expires_at":"2026-11-05T00:00:00Z"}"#,
+            "malformed JSON",
+        ] {
+            connection
+                .execute(
+                    "INSERT OR REPLACE INTO auth_kv VALUES ('kirocli:oidc:token', ?1)",
+                    [raw],
+                )
+                .unwrap();
+            assert!(!cli_auth_cache_is_fresh_at(&path, now));
+        }
+        connection
+            .execute(
+                "INSERT OR REPLACE INTO auth_kv VALUES ('kirocli:oidc:token', ?1)",
+                [r#"{"access_token":"fixture","expires_at":"2026-11-04T01:00:00Z"}"#],
+            )
+            .unwrap();
+        drop(connection);
+        let before = std::fs::read(&path).unwrap();
+        assert!(cli_auth_cache_is_fresh_at(&path, now));
+        assert_eq!(std::fs::read(&path).unwrap(), before);
+    }
+
+    #[test]
+    fn live_credits_prefer_precision_and_ignore_unrelated_resources() {
+        let response = serde_json::from_value(serde_json::json!({
+            "nextDateReset": "2024-03-01T03:00:00+03:00",
+            "subscriptionInfo": {"subscriptionTitle": "Kiro Pro", "type": "FUTURE_PLAN"},
+            "userInfo": {"email": "ada@example.com"},
+            "usageBreakdownList": [
+                {"resourceType": "FUTURE_RESOURCE", "currentUsage": 999, "usageLimit": 1},
+                {"resourceType": "CREDIT", "currentUsage": 10,
+                 "currentUsageWithPrecision": "12.75", "usageLimit": 100,
+                 "usageLimitWithPrecision": "150", "nextDateReset": null}
+            ],
+            "futureField": true
+        }))
+        .unwrap();
+        let limits = limits_from_live_usage(response).unwrap();
+        let amount = limits.secondary_usage_amount.unwrap();
+        assert_eq!(amount.used, 12.75);
+        assert_eq!(amount.limit, 150.0);
+        assert_eq!(limits.secondary.used_percent, Some(9));
+        assert_eq!(limits.account_name.as_deref(), Some("ada@example.com"));
+        assert_eq!(limits.plan_type.as_deref(), Some("Pro"));
+        assert_eq!(
+            limits.secondary.resets_at,
+            Some("2024-03-01T00:00:00Z".parse().unwrap())
+        );
+        assert_eq!(limits.secondary.duration_minutes, Some(29 * 24 * 60));
+    }
+
+    #[test]
+    fn live_credits_reject_absent_or_invalid_amounts() {
+        for raw in [
+            r"{}",
+            r#"{"usageBreakdownList":[]}"#,
+            r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":null,"usageLimit":100}]}"#,
+            r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":-1,"usageLimit":100}]}"#,
+            r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":1,"usageLimit":0}]}"#,
+            r#"{"usageBreakdownList":[{"resourceType":"CREDIT","currentUsage":"NaN","usageLimit":100}]}"#,
+        ] {
+            assert!(
+                limits_from_live_usage(serde_json::from_str(raw).unwrap()).is_err(),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn reset_timestamps_accept_offsets_and_numeric_units_but_not_nonfinite_values() {
+        let expected = timestamp_value(&serde_json::json!("2024-03-01T00:00:00Z"));
+        for value in [
+            serde_json::json!("2024-02-29T19:00:00-05:00"),
+            serde_json::json!(1709251200),
+            serde_json::json!(1709251200000_i64),
+            serde_json::json!("1709251200"),
+        ] {
+            assert_eq!(timestamp_value(&value), expected, "{value}");
+        }
+        for value in [
+            Value::Null,
+            serde_json::json!("NaN"),
+            serde_json::json!("Infinity"),
+            serde_json::json!("not-a-date"),
+        ] {
+            assert_eq!(timestamp_value(&value), None);
+        }
+    }
 }

@@ -1,0 +1,17 @@
+[Desktop Entry]
+Type=Application
+Name=Codex Minibar
+GenericName=AI usage monitor
+Comment=AI tools usage limits, resets and spend in the system tray
+Exec=codex-minibar --show
+Icon=codex-minibar
+Terminal=false
+Categories=Utility;
+Keywords=codex;claude;cursor;usage;limits;tray;
+StartupWMClass=io.github.vertopolkalf.CodexMinibar
+StartupNotify=false
+Actions=Toggle;
+
+[Desktop Action Toggle]
+Name=Show or hide the popup
+Exec=codex-minibar --toggle
