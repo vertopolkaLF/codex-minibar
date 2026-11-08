@@ -1,4 +1,4 @@
-// In-app notifications, mirrored from src/popup_window/ui/toast.rs.
+// In-app notifications, mirrored from src/ui/popup_window/ui/toast.rs.
 import React from "react";
 import { Palette } from "./palette";
 import { Icon, ProviderMark, T, cardStyle } from "./kit";

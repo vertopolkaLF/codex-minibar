@@ -51,27 +51,13 @@ Before finishing appearance work, review both cold-start paths (popup first and 
 
 ## Settings window
 
-The Settings and onboarding windows are GPUI windows in the same application as the popup (`src/settings_window`). Build UI from `kit.rs` components; every edit goes through `SettingsWindow::edit`, which updates the local snapshot immediately and queues the write on the serial settings writer. Committed changes from any surface flow back through `sync_open_window`.
+The Settings and onboarding windows are GPUI windows in the same application as the popup (`src/ui/settings_window`). Build UI from `src/ui/gui/kit.rs` components; every edit goes through `Host::edit` (the trait in `src/ui/settings_window.rs` that `SettingsWindow` and `OnboardingWindow` implement), which updates the window's snapshot immediately and queues the changed settings on the serial settings writer. Committed changes from any surface flow back through `sync_open_window`.
 
 ## Provider UI guardrails
 
-When adding or changing a provider, update every provider enumeration, settings migration, worker lifecycle, popup state, tray source and provider-tab path as one atomic change. Native popup provider tabs use swap-chain icon hosts: key the complete tab selector by the enabled-provider set so reconciliation cannot reuse an old provider's text or icon in another provider's slot. Do not treat `Element::Empty` as sufficient remounting.
+When adding or changing a provider, update every provider enumeration, settings migration, worker lifecycle, popup state, tray source and provider-tab path as one atomic change. Popup provider tabs carry their instance (or driver) identity in their GPUI element id, so a slot can never keep another provider's icon, badge or label; keep it that way when adding tab kinds.
 
 Before finishing provider UI work, verify all enabled-provider combinations (each provider alone, every pair, all providers, and none) in code review. Confirm that every visible tab has the right label/icon and points to the matching provider snapshot. Always run `cargo check` after the change; never launch the app to perform that verification on LF-PC.
-
-## Swap-chain icon / popup chrome identity
-
-Popup tabs and icon buttons paint through `SwapChainPanel` hosts. The painter runs **only on mount** (`acrylic::install_*_into`). In-place updates do **not** repaint the glyph. Recycled native panels can also retain a previous XAML child — installers must **clear and replace** panel children, never early-return because the panel is already non-empty.
-
-Prevent “button/tab shows a copy of its neighbor” bugs:
-
-1. **Stable keys for ephemeral UI state.** Do not put hover/selection into a swap-chain host’s `with_key`. Remounting on hover recycles native panels and can leave another control’s icon in the slot. Prefer dual hosts with opacity crossfade (idle + accent/emphasized).
-2. **Identity keys for real content changes.** Key by glyph name, tint/theme, and provider/action id so a real icon change remounts the host.
-3. **No `Element::Empty` placeholders** in rows that contain swap-chain children. Build a `Vec` of only live tabs/actions. Empty siblings collapse during reconcile and shift slots.
-4. **Key the whole strip** when membership or control kind changes (provider tab selector by enabled set + tint mode + theme; footer actions by quit-vs-update + theme).
-5. **Never assume `Element::Empty` or a parent re-render remounts** an existing swap-chain host. If the painted content must change, the host key (or its parent strip key) must change — or clear/replace inside the installer.
-
-When touching popup footer tabs/buttons or `icons::element` / `acrylic::install_*`, re-check that refresh/settings/quit stay distinct and that provider tabs keep the correct marks after enabling/disabling providers and after theme flips.
 
 https://github.com/steipete/CodexBar - similar app for macos. You can use it as a reference for the features and implementations.
 
@@ -86,7 +72,7 @@ All layout shifts have to be animated, respect the user's preference for animati
 ## Linux
 
 The app also targets Linux (X11 and Wayland). `cfg(not(windows))` code is the Linux
-build; desktop integration lives in `src/linux/` (StatusNotifierItem tray via `ksni`,
+build; desktop integration lives in `src/platform/linux/` (StatusNotifierItem tray via `ksni`,
 freedesktop notifications, XDG portal settings, Secret Service key for secrets,
 XDG autostart, single-instance socket with `--toggle`). On Linux run plain Cargo
 (`cargo check --locked`, `cargo test --all-targets --all-features --locked`,

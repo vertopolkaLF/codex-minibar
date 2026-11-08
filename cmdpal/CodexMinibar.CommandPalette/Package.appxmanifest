@@ -10,7 +10,7 @@
 
   <!-- Installed unsigned (Add-AppxPackage -AllowUnsigned): the OID marks the
        identity as unsigned, so it can never collide with a signed package.
-       src/cmdpal.rs hard-codes the package family derived from it. -->
+       src/surfaces/cmdpal.rs hard-codes the package family derived from it. -->
   <Identity
     Name="CodexMinibar.CommandPalette"
     Publisher="CN=Codex Minibar, OID.2.25.311729368913984317654407730594956997722=1"

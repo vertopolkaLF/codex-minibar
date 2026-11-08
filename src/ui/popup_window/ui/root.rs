@@ -1,0 +1,3034 @@
+//! The popup root view: lifecycle, geometry, pager and shell chrome.
+
+use std::{
+    cell::{Cell, RefCell},
+    collections::{HashMap, HashSet},
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
+use gpui::{
+    AnyElement, App, AvailableSpace, Bounds, Context, Div, ElementId, Entity, FontWeight,
+    InteractiveElement, IntoElement, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, Task, WeakEntity, Window,
+    canvas, div, point, px,
+};
+
+use super::{
+    components::{self, Severity},
+    theme::{self, Palette},
+    tooltip::{TipContent, TipRequest},
+};
+use crate::ui::gui::{
+    color::{rgba8, system_dark},
+    fx::{self, Fx, Spring},
+};
+use crate::ui::popup_window::{
+    model::{self, *},
+    *,
+};
+use crate::{
+    quota::reset_detection::AnnouncedReset,
+    usage::overview::{BreakdownMode, OverviewMetric, OverviewRange, OverviewSnapshot},
+};
+
+/// Fluent motion tokens used by Windows edge panels.
+const OPEN_ANIMATION: Duration = Duration::from_millis(250);
+const CLOSE_ANIMATION: Duration = Duration::from_millis(167);
+/// How long a reset redemption result stays on its card.
+pub(super) const RESET_STATUS_TTL: Duration = Duration::from_secs(8);
+/// Longest frame the open slide advances through; slower frames are hitches.
+const SLIDE_MAX_FRAME_STEP: Duration = Duration::from_millis(34);
+/// Invisible frames rendered at launch before the popup host is parked.
+const PREWARM_FRAMES: u32 = 3;
+/// Following prewarm frames park the capsule one pixel from the screen edge,
+/// where every open slide starts, and expose that pixel. DWM skips windows
+/// with an empty region, so without this the first real open pays for the
+/// backdrop's effect compilation and desktop capture inside DWM, a stall the
+/// slide clock cannot see.
+const PREWARM_EXPOSED_FRAMES: u32 = 6;
+/// Frames an open from hidden keeps the capsule beyond the monitor edge
+/// before its slide clock starts. DWM composes a re-shown window's regrown
+/// swap chain a few frames late, while `DwmFlush` keeps GPUI's own frames
+/// short, so the slide clock cannot see the gap. The entrance curve covers
+/// most of its distance early, so a hidden start reads as no animation.
+const OPEN_HOLD_FRAMES: u32 = 3;
+/// The first open after launch also binds the backdrop and full-size swap
+/// chain in DWM for the first time.
+const FIRST_OPEN_HOLD_FRAMES: u32 = 8;
+/// Pinned profile switcher between the page and the footer.
+const PROFILE_COLUMNS: usize = 4;
+const PROFILE_ROW_GAP: f32 = 6.0;
+const PROFILE_GRID_PADDING: f32 = 12.0;
+
+fn profile_grid_height(count: usize) -> f32 {
+    let rows = count.div_ceil(PROFILE_COLUMNS);
+    if rows == 0 {
+        return 0.0;
+    }
+    rows as f32 * crate::ui::gui::segmented::SEGMENT_HEIGHT
+        + rows.saturating_sub(1) as f32 * PROFILE_ROW_GAP
+        + PROFILE_GRID_PADDING
+}
+
+fn profile_rows<T: Copy + PartialEq>(
+    members: &[T],
+    selected: Option<T>,
+) -> Vec<(Vec<T>, Option<usize>)> {
+    members
+        .chunks(PROFILE_COLUMNS)
+        .map(|row| {
+            (
+                row.to_vec(),
+                row.iter().position(|member| Some(*member) == selected),
+            )
+        })
+        .collect()
+}
+/// Small inner inset keeps page/footer content clear of the capsule stroke.
+const CHROME_INSET: f32 = 1.0;
+const PAGE_PADDING: f32 = 16.0;
+
+/// One account bar's text and its animated, measured height.
+#[derive(Default)]
+pub(crate) struct AccountBar {
+    spec: Option<AccountBarSpec>,
+    height: Rc<Cell<f32>>,
+}
+
+#[derive(Clone)]
+struct AccountBarSpec {
+    title: String,
+    message: String,
+    severity: Severity,
+    action: bool,
+}
+/// Smooth wheel scrolling: one notch glides over this duration.
+const SCROLL_GLIDE: Duration = Duration::from_millis(140);
+/// How long the overlay scrollbar stays after the last wheel tick.
+const SCROLLBAR_LINGER: Duration = Duration::from_millis(900);
+/// Brief scrollbar flash when a page first overflows, hinting it scrolls.
+const SCROLLBAR_FLASH: Duration = Duration::from_millis(1100);
+/// Pointer zone along the right edge that reveals the scrollbar.
+const SCROLLBAR_HOVER_ZONE: f32 = 14.0;
+/// Edge shadows hinting at content above or below the viewport.
+const SCROLL_SHADE_HEIGHT: f32 = 14.0;
+
+/// Round the independent MaxContent measurement once to physical pixels.
+fn measured_page_height(height: f32, scale: f32) -> f32 {
+    let scale = scale.max(0.5);
+    ((height * scale - 0.01).ceil() / scale).max(PAGE_PADDING * 2.0)
+}
+
+fn popup_height_bounds(content: f32, chrome: f32, screen: f32) -> (f32, f32) {
+    let maximum = (content + chrome).clamp(80.0_f32.min(screen), screen);
+    let minimum = (chrome + 64.0).max(160.0).min(maximum);
+    (minimum, maximum)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Phase {
+    Hidden,
+    /// Launch-time invisible render (empty region) that warms the renderer,
+    /// composition, glyph/icon atlases and usage snapshots before first open.
+    Prewarm,
+    Opening(Instant),
+    Open,
+    /// Closing from the given starting slide offset (DIP).
+    Closing(Instant, f32),
+}
+
+/// Native host state. All geometry is in DIP unless suffixed `_px`.
+pub(super) struct Host {
+    #[cfg(windows)]
+    pub(super) hwnd: Option<windows_sys::Win32::Foundation::HWND>,
+    #[cfg(windows)]
+    backdrop: Option<super::backdrop::Backdrop>,
+    pub(super) monitor: Option<super::Monitor>,
+    /// The work-area corner the popup stands in.
+    pub(super) placement: super::Placement,
+    #[cfg(windows)]
+    pub(super) floating_rect: Option<super::win32::Rect>,
+    pub(super) header_height: f32,
+    resizing_height: bool,
+    reopen_after_hide: bool,
+    pub(super) phase: Phase,
+    pub(super) height: Spring,
+    pub(super) width: Spring,
+    pub(super) offset: f32,
+    pub(super) last_region: Option<(i32, i32, i32, i32, i32)>,
+    /// Capsule pixels last published for outside-click tests.
+    #[cfg(windows)]
+    last_surface: Option<(i32, i32, i32, i32)>,
+    pub(super) scale: f32,
+    /// Previous frame of the open slide; long gaps are not counted as motion.
+    pub(super) slide_frame: Option<Instant>,
+    /// Frames rendered during `Phase::Prewarm`.
+    pub(super) prewarm_frames: u32,
+    /// Remaining off-screen frames before the open slide starts.
+    open_hold_frames: u32,
+    /// Whether any open from hidden has happened since launch.
+    opened_once: bool,
+    /// Linux: the window has had focus since it was shown, so losing it
+    /// is an outside click rather than the compositor not focusing it yet.
+    #[cfg(not(windows))]
+    pub(super) was_active: bool,
+}
+
+impl Host {
+    fn new() -> Self {
+        Self {
+            #[cfg(windows)]
+            hwnd: None,
+            #[cfg(windows)]
+            backdrop: None,
+            monitor: None,
+            placement: super::Placement::default(),
+            #[cfg(windows)]
+            floating_rect: None,
+            header_height: super::footer::FLOATING_HEADER_HEIGHT,
+            resizing_height: false,
+            reopen_after_hide: false,
+            phase: Phase::Hidden,
+            height: Spring::at(f64::from(INITIAL_HEIGHT)),
+            width: Spring::at(f64::from(crate::ui::popup::POPUP_WIDTH)),
+            offset: 0.0,
+            last_region: None,
+            #[cfg(windows)]
+            last_surface: None,
+            scale: 1.0,
+            slide_frame: None,
+            prewarm_frames: 0,
+            open_hold_frames: 0,
+            opened_once: false,
+            #[cfg(not(windows))]
+            was_active: false,
+        }
+    }
+
+    pub(super) fn visible(&self) -> bool {
+        !matches!(self.phase, Phase::Hidden)
+    }
+
+    /// The prewarm frame that shows DWM the capsule's edge pixel.
+    fn prewarm_exposed(&self) -> bool {
+        self.phase == Phase::Prewarm
+            && (PREWARM_FRAMES..PREWARM_FRAMES + PREWARM_EXPOSED_FRAMES)
+                .contains(&self.prewarm_frames)
+    }
+
+    /// Wide two-column layout fits on the monitor that owns the popup.
+    pub(super) fn wide_available(&self) -> bool {
+        self.monitor.is_none_or(|monitor| {
+            #[cfg(windows)]
+            if let Some(rect) = self.floating_rect {
+                return f64::from(rect.width() - crate::ui::popup::EDGE_MARGIN_PX)
+                    / monitor.scale()
+                    >= f64::from(crate::ui::popup::POPUP_WIDE_WIDTH);
+            }
+            f64::from(monitor.bounds.width() - crate::ui::popup::EDGE_MARGIN_PX * 2)
+                / monitor.scale()
+                >= f64::from(crate::ui::popup::POPUP_WIDE_WIDTH)
+        })
+    }
+
+    pub(super) fn max_height(&self) -> f32 {
+        self.monitor.map_or(4096.0, |monitor| {
+            #[cfg(windows)]
+            {
+                (f64::from(
+                    self.floating_rect
+                        .unwrap_or_else(|| super::host_rect(monitor, self.placement))
+                        .height(),
+                ) / monitor.scale()) as f32
+            }
+            #[cfg(not(windows))]
+            {
+                (f64::from(monitor.work.height() - crate::ui::popup::EDGE_MARGIN_PX * 2)
+                    / monitor.scale()) as f32
+            }
+        })
+    }
+
+    /// Gap between the capsule and the screen edge inside the host. On Linux
+    /// the window is the capsule; the gap lies outside it.
+    pub(super) fn margin(&self) -> f32 {
+        if cfg!(windows) {
+            crate::ui::popup::EDGE_MARGIN_PX as f32 / self.scale.max(0.5)
+        } else {
+            0.0
+        }
+    }
+}
+
+/// Baseline height before the first content measurement.
+const INITIAL_HEIGHT: f32 = 300.0;
+
+/// Windows slides the capsule in and out of a fixed technical host. On Linux
+/// the window is the capsule, so the compositor animates map and unmap.
+const SLIDES_IN: bool = cfg!(windows);
+
+/// Last measured Home block and column bounds (window coordinates).
+#[derive(Default)]
+pub(super) struct WidgetLayout {
+    pub(super) widgets: HashMap<HomeWidgetId, Bounds<Pixels>>,
+    pub(super) columns: [Option<Bounds<Pixels>>; 2],
+}
+
+#[derive(Clone, Default)]
+pub(super) struct PageMetrics {
+    pub(super) content_height: Rc<Cell<f32>>,
+    pub(super) scroll_target: f32,
+    /// Whether the page overflowed on its last frame; a rising edge flashes
+    /// the scrollbar.
+    pub(super) overflowing: bool,
+    /// The overlay scrollbar stays visible until this moment.
+    pub(super) reveal_until: Option<Instant>,
+}
+
+pub(super) struct SnapshotCache {
+    pub(super) key: Option<String>,
+    pub(super) pending: Option<String>,
+    pub(super) value: Arc<OverviewSnapshot>,
+    pub(super) task: Option<Task<()>>,
+}
+
+impl Default for SnapshotCache {
+    fn default() -> Self {
+        Self {
+            key: None,
+            pending: None,
+            value: Arc::new(OverviewSnapshot::default()),
+            task: None,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub(super) enum SnapshotSlot {
+    Spend,
+    Overview,
+}
+
+/// Everything the palette is built from. Settings and the VS Code theme are
+/// compared by identity: a settings commit or edit replaces the snapshot, and
+/// reinstalling a theme replaces its entry.
+struct PaletteKey {
+    settings: Arc<crate::settings::Settings>,
+    vscode: Option<Arc<crate::ui::vscode_themes::VsCodeTheme>>,
+    system_dark: bool,
+    accent: crate::ui::theme::AccentRamp,
+    material: crate::settings::PopupBackgroundMaterial,
+    preview_generation: u64,
+}
+
+impl PartialEq for PaletteKey {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.settings, &other.settings)
+            && match (&self.vscode, &other.vscode) {
+                (Some(current), Some(next)) => Arc::ptr_eq(current, next),
+                (None, None) => true,
+                _ => false,
+            }
+            && self.system_dark == other.system_dark
+            && self.accent == other.accent
+            && self.material == other.material
+            && self.preview_generation == other.preview_generation
+    }
+}
+
+pub(crate) struct PopupRoot {
+    pub(super) state: Arc<AppState>,
+    pub(super) ui: Rc<UiState>,
+    pub(super) limits: Rc<ProviderLimits>,
+    pub(super) forced_resets: Rc<Vec<AnnouncedReset>>,
+    pub(super) provider_statuses: Rc<Vec<crate::providers::status::ProviderStatus>>,
+    pub(super) palette: Palette,
+    pub(super) accent: crate::ui::theme::AccentRamp,
+    /// Windows UI family used when no custom font is selected.
+    pub(super) default_font: SharedString,
+    /// The `vscode_themes::preview_generation` the palette was built for.
+    pub(super) preview_generation: u64,
+    /// What `palette` was last built from.
+    palette_key: Option<PaletteKey>,
+    pub(super) fx: Fx,
+    pub(super) hover: HashSet<u64>,
+    pub(super) host: Host,
+    pub(super) pager: PagerState,
+    pub(super) pager_started: Instant,
+    pub(super) overview_metric: OverviewMetric,
+    pub(super) overview_range: OverviewRange,
+    pub(super) overview_breakdown: BreakdownMode,
+    /// Providers toggled off on the Usage tab for this app session.
+    pub(super) usage_excluded: std::collections::BTreeSet<ProviderId>,
+    pub(super) chart_hover: Option<usize>,
+    pub(super) open_reset_card: Option<String>,
+    pub(super) reset_confirm: Option<ProviderId>,
+    pub(super) reset_busy: HashSet<ProviderId>,
+    /// Latest redemption result per provider and when it arrived; it fades
+    /// out after `RESET_STATUS_TTL` and is dropped when the popup hides.
+    pub(super) reset_status: HashMap<ProviderId, (crate::quota::banked_reset::Status, Instant)>,
+    /// OpenRouter key administration on the OpenRouter tab.
+    pub(super) keys: super::keys::KeyAdmin,
+    /// Settings-window controls (dropdowns) reused by popup forms.
+    pub(super) kit: crate::ui::gui::kit::Kit,
+    kit_fonts: crate::ui::gui::theme::Fonts,
+    pub(super) tab_scroll: f32,
+    pub(super) snapshots: HashMap<SnapshotSlot, SnapshotCache>,
+    pub(super) usage_filtered: Option<super::usage::UsageFilterCache>,
+    pub(super) usage_chart_cache: Option<super::usage::UsageChartCache>,
+    pub(super) usage_plot: Option<Entity<super::usage::UsagePlot>>,
+    pub(super) charts: HashMap<String, super::activity::ChartState>,
+    pub(super) tip: Option<TipRequest>,
+    language: crate::i18n::Language,
+    pub(super) pages: HashMap<PopupView, PageMetrics>,
+    pub(super) widget_bounds: Rc<RefCell<WidgetLayout>>,
+    pub(super) usage_spinner_started: Option<Instant>,
+    /// Home edit mode: reveals the widget reorder grips.
+    pub(super) home_editing: bool,
+    pub(super) widget_drag: Option<HomeWidgetId>,
+    pub(super) widget_drop: Option<(HomeWidgetId, Option<usize>)>,
+    pub(super) tab_drag: Option<PopupView>,
+    pub(super) tab_drop: Option<PopupView>,
+    pub(super) refresh_started: Option<Instant>,
+    pub(super) profile_layout: String,
+    pub(super) profile_fade_started: Option<Instant>,
+    profile_height: f32,
+    profile_scroll: gpui::ScrollHandle,
+    profile_members: Vec<ProviderId>,
+    profile_selected: Option<ProviderId>,
+    /// Account bars per page, kept while they collapse after clearing.
+    pub(super) account_bars: HashMap<(PopupView, ProviderId), AccountBar>,
+    /// Body items that grow in and out, with how present each one is.
+    pub(super) body_presence: Vec<(usize, f32)>,
+    pub(super) capsule_origin: Point<Pixels>,
+    pub(super) capsule_size: (f32, f32),
+    pub(super) _subscriptions: Vec<Subscription>,
+    pub(super) _clock: Option<Task<()>>,
+    /// Repaints once the scrollbar reveal expires so it can fade out.
+    pub(super) scrollbar_timer: Option<Task<()>>,
+}
+
+impl PopupRoot {
+    #[cfg(windows)]
+    pub(crate) fn new(
+        state: Arc<AppState>,
+        default_font: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let mut root = Self::detached(state, default_font, system_dark(window), cx);
+        root.attach_window(window, cx);
+        root
+    }
+
+    /// Subscribes to the window currently hosting the popup. Linux opens a
+    /// new window on every show; the entity and its state outlive them.
+    pub(crate) fn attach_window(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let appearance = cx.observe_window_appearance(window, |this, window, cx| {
+            this.refresh_palette(window);
+            cx.notify();
+        });
+        // Alt+F4 on the focused popup dismisses it; the HWND must survive.
+        window.on_window_should_close(cx, |_, _| {
+            crate::ui::popup::hide();
+            false
+        });
+        self._subscriptions = vec![appearance];
+        #[cfg(not(windows))]
+        {
+            // Wayland gives clients no global pointer or keyboard input:
+            // losing focus is the outside click, and Escape arrives here.
+            let activation = cx.observe_window_activation(window, |this, window, _| {
+                if window.is_window_active() {
+                    this.host.was_active = true;
+                } else if std::mem::take(&mut this.host.was_active)
+                    && this.host.phase == Phase::Open
+                    && !this.ui.settings.popup_floating
+                    && !crate::ui::popup::is_pinned()
+                    && !crate::ui::settings_window::is_open()
+                {
+                    crate::ui::popup::dismiss_on_focus_loss();
+                }
+            });
+            let escape = cx.observe_keystrokes(|_, event, _, _| {
+                if event.keystroke.key == "escape"
+                    && crate::ui::popup::is_visible()
+                    && !crate::ui::popup::is_pinned()
+                {
+                    crate::ui::popup::hide();
+                }
+            });
+            self._subscriptions.extend([activation, escape]);
+        }
+    }
+
+    pub(crate) fn detached(
+        state: Arc<AppState>,
+        default_font: SharedString,
+        system_dark: bool,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let ui = UiState::initial(&state);
+        let accent = crate::ui::theme::accent_ramp(ui.settings.accent_color);
+        let palette = Palette::from_settings(
+            &ui.settings,
+            system_dark,
+            accent,
+            crate::ui::popup::background_material(),
+            &default_font,
+        );
+        let clock = cx.spawn(async move |this: WeakEntity<Self>, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_secs(20))
+                    .await;
+                // Relative timestamps and reset countdowns age while open.
+                let alive = this
+                    .update(cx, |this, cx| {
+                        if this.host.visible() {
+                            cx.notify();
+                        }
+                    })
+                    .is_ok();
+                if !alive {
+                    break;
+                }
+            }
+        });
+        Self {
+            limits: Rc::new(state.current_limits()),
+            forced_resets: Rc::new(state.current_forced_resets()),
+            provider_statuses: Rc::new(state.current_provider_statuses()),
+            state,
+            ui: Rc::new(ui),
+            palette,
+            accent,
+            default_font,
+            preview_generation: theme::preview_generation(),
+            palette_key: None,
+            fx: Fx::default(),
+            hover: HashSet::new(),
+            host: Host::new(),
+            pager: PagerState::default(),
+            pager_started: Instant::now(),
+            overview_metric: OverviewMetric::default(),
+            overview_range: OverviewRange::default(),
+            overview_breakdown: BreakdownMode::default(),
+            usage_excluded: Default::default(),
+            chart_hover: None,
+            open_reset_card: None,
+            reset_confirm: None,
+            reset_busy: HashSet::new(),
+            reset_status: HashMap::new(),
+            keys: Default::default(),
+            kit: crate::ui::gui::kit::Kit::with_caret("fluent-chevron-down"),
+            kit_fonts: crate::ui::gui::theme::Fonts::resolve(cx),
+            tab_scroll: 0.0,
+            snapshots: HashMap::new(),
+            usage_filtered: None,
+            usage_chart_cache: None,
+            usage_plot: None,
+            charts: HashMap::new(),
+            tip: None,
+            language: crate::i18n::current_language(),
+            pages: HashMap::new(),
+            widget_bounds: Rc::new(RefCell::new(WidgetLayout::default())),
+            usage_spinner_started: None,
+            home_editing: false,
+            widget_drag: None,
+            widget_drop: None,
+            tab_drag: None,
+            tab_drop: None,
+            refresh_started: None,
+            profile_layout: String::new(),
+            profile_fade_started: None,
+            profile_height: 0.0,
+            profile_scroll: gpui::ScrollHandle::new(),
+            profile_members: Vec::new(),
+            profile_selected: None,
+            account_bars: HashMap::new(),
+            body_presence: Vec::new(),
+            capsule_origin: Point::default(),
+            capsule_size: (0.0, 0.0),
+            _subscriptions: Vec::new(),
+            _clock: Some(clock),
+            scrollbar_timer: None,
+        }
+    }
+
+    // ----- external updates -------------------------------------------------
+
+    /// `window` is `None` while Linux has no popup window open; the palette
+    /// is then rebuilt by the next show.
+    pub(crate) fn apply_ui(
+        &mut self,
+        ui: UiState,
+        window: Option<&Window>,
+        cx: &mut Context<Self>,
+    ) {
+        let accent_changed = ui.settings.accent_color != self.ui.settings.accent_color;
+        #[cfg(not(windows))]
+        let pinned_changed = ui.settings.popup_pinned != self.ui.settings.popup_pinned;
+        let same_account = |provider| {
+            ui.settings
+                .instance(provider)
+                .zip(self.ui.settings.instance(provider))
+                .is_some_and(|(new, old)| new.enabled && new.runtime_key() == old.runtime_key())
+        };
+        self.reset_status
+            .retain(|provider, _| same_account(*provider));
+        if self
+            .reset_confirm
+            .is_some_and(|provider| !same_account(provider))
+        {
+            self.reset_confirm = None;
+        }
+        // Rate-limit data lives only in AppState; re-read it with every
+        // published UiState so the popup renders the tray's exact snapshot.
+        self.limits = Rc::new(self.state.current_limits());
+        self.forced_resets = Rc::new(self.state.current_forced_resets());
+        self.provider_statuses = Rc::new(self.state.current_provider_statuses());
+        self.ui = Rc::new(ui);
+        if accent_changed {
+            self.accent = crate::ui::theme::accent_ramp(self.ui.settings.accent_color);
+        }
+        if let Some(window) = window {
+            #[cfg(not(windows))]
+            if pinned_changed {
+                window.set_always_on_top(self.ui.settings.popup_pinned);
+            }
+            self.refresh_palette(window);
+        }
+        if self.ui.refreshing && self.refresh_started.is_none() {
+            self.refresh_started = Some(Instant::now());
+        } else if !self.ui.refreshing {
+            self.refresh_started = None;
+        }
+        self.sync_pager_with_settings();
+        if self.host.visible() {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn refresh_palette(&mut self, window: &Window) {
+        self.preview_generation = theme::preview_generation();
+        // Looked up on every refresh: reinstalling a theme replaces its entry.
+        let key = PaletteKey {
+            settings: Arc::clone(&self.ui.settings),
+            vscode: theme::popup_design(
+                self.ui.settings.popup_theme,
+                self.ui.settings.popup_vscode_theme.as_deref(),
+            )
+            .1,
+            system_dark: system_dark(window),
+            accent: self.accent,
+            material: crate::ui::popup::background_material(),
+            preview_generation: self.preview_generation,
+        };
+        if self.palette_key.as_ref() == Some(&key) {
+            return;
+        }
+        let palette = Palette::from_settings(
+            &key.settings,
+            key.system_dark,
+            key.accent,
+            key.material,
+            &self.default_font,
+        );
+        self.palette_key = Some(key);
+        #[cfg(windows)]
+        if (self.palette.material != palette.material
+            || self.palette.backdrop_luminosity() != palette.backdrop_luminosity())
+            && let Some(backdrop) = &mut self.host.backdrop
+        {
+            backdrop.set_appearance(palette.material, palette.backdrop_luminosity());
+        }
+        self.palette = palette;
+    }
+
+    /// The popup's design for another surface (the notification host) with
+    /// its own system appearance, on an opaque background.
+    #[cfg(windows)]
+    pub(super) fn palette_for(&self, system_dark: bool) -> Palette {
+        Palette::from_settings(
+            &self.ui.settings,
+            system_dark,
+            crate::ui::theme::accent_ramp(self.ui.settings.accent_color),
+            crate::settings::PopupBackgroundMaterial::Solid,
+            &self.default_font,
+        )
+    }
+
+    /// Screen x of the visible popup capsule's left edge, in pixels.
+    #[cfg(windows)]
+    pub(super) fn capsule_screen_left(&self) -> Option<i32> {
+        // The launch prewarm renders with an empty region: nothing to avoid.
+        let shown = self.host.visible() && self.host.phase != Phase::Prewarm;
+        let hwnd = self.host.hwnd.filter(|_| shown)?;
+        let rect = super::win32::window_rect(hwnd);
+        Some(rect.left + (f32::from(self.capsule_origin.x) * self.host.scale).round() as i32)
+    }
+
+    /// Gap between stacked cards; glides when the popup theme changes it.
+    pub(super) fn card_gap(&mut self) -> f32 {
+        self.fx
+            .value(fx::key("card-gap"), self.palette.card_gap, fx::NORMAL)
+    }
+
+    pub(crate) fn appearance_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.refresh_palette(window);
+        cx.notify();
+    }
+
+    /// Opens a page. An instance inside a grouped tab opens its group with
+    /// that instance selected in the switcher.
+    pub(crate) fn select_view(&mut self, view: PopupView, cx: &mut Context<Self>) {
+        let view = match view {
+            PopupView::Provider(provider) => {
+                let Some(tab) = model::tab_for_provider(&self.ui, provider) else {
+                    return;
+                };
+                if let PopupView::Group(driver) = tab {
+                    self.select_group_member(driver, provider, cx);
+                }
+                tab
+            }
+            other => other,
+        };
+        if self.view_available(view) {
+            self.navigate(view, cx);
+        }
+    }
+
+    /// The tab showing `provider`: its own, or its driver's group switched
+    /// to it.
+    fn provider_view(&mut self, provider: ProviderId, cx: &mut Context<Self>) -> Option<PopupView> {
+        let tab = model::tab_for_provider(&self.ui, provider)?;
+        if let PopupView::Group(driver) = tab {
+            self.select_group_member(driver, provider, cx);
+        }
+        Some(tab)
+    }
+
+    /// Home when it shows `provider`, otherwise the tab that does, otherwise
+    /// Home anyway.
+    pub(crate) fn nearest_view(
+        &mut self,
+        provider: ProviderId,
+        cx: &mut Context<Self>,
+    ) -> Option<PopupView> {
+        let on_home = model::visible_home_widgets(&self.ui, false)
+            .iter()
+            .any(|widget| model::home_widget_provider(&self.ui, widget) == Some(provider));
+        if on_home {
+            return Some(PopupView::Home);
+        }
+        self.provider_view(provider, cx).or(Some(PopupView::Home))
+    }
+
+    fn view_available(&self, view: PopupView) -> bool {
+        match view {
+            PopupView::Home => true,
+            PopupView::Usage => self.ui.settings.usage_stats_enabled,
+            other => model::provider_tabs(&self.ui).contains(&other),
+        }
+    }
+
+    /// Persists the instance shown by a grouped tab's switcher.
+    pub(super) fn select_group_member(
+        &mut self,
+        driver: ProviderKind,
+        provider: ProviderId,
+        cx: &mut Context<Self>,
+    ) {
+        if model::selected_group_member(&self.ui, driver) == Some(provider) {
+            return;
+        }
+        self.persist(cx, move |settings| {
+            settings
+                .grouped_tab_selection
+                .insert(driver.id().to_owned(), provider.id().to_owned());
+        });
+    }
+
+    fn sync_pager_with_settings(&mut self) {
+        let order = model::provider_tabs(&self.ui);
+        self.pager = reduce_pager(self.pager.clone(), PagerAction::SetProviderOrder(order));
+        if !self.view_available(self.pager.current) {
+            self.pager = reduce_pager(self.pager.clone(), PagerAction::Select(PopupView::Home));
+            self.pager_started = Instant::now();
+            if !self.fx.enabled() {
+                self.finish_pager_animation();
+            }
+        }
+    }
+
+    /// Home edit mode reveals the widget grips; entering it opens Home.
+    pub(crate) fn set_home_editing(&mut self, editing: bool, cx: &mut Context<Self>) {
+        if editing {
+            self.navigate(PopupView::Home, cx);
+        }
+        self.home_editing = editing;
+        cx.notify();
+    }
+
+    pub(super) fn navigate(&mut self, view: PopupView, cx: &mut Context<Self>) {
+        if view != PopupView::Home {
+            self.home_editing = false;
+        }
+        let before = self.pager.animation_id;
+        self.pager = reduce_pager(self.pager.clone(), PagerAction::Select(view));
+        if self.pager.animation_id != before {
+            self.pager_started = Instant::now();
+            self.on_page_entered(self.pager.current);
+            if !crate::ui::theme::animations_enabled() {
+                self.finish_pager_animation();
+            }
+        }
+        self.tip = None;
+        cx.notify();
+    }
+
+    fn on_page_entered(&mut self, view: PopupView) {
+        let metrics = self.pages.entry(view).or_default();
+        metrics.scroll_target = 0.0;
+        metrics.overflowing = false;
+        metrics.reveal_until = None;
+        self.fx.snap(fx::key(("scroll", view_key(view))), 0.0);
+        self.fx
+            .snap(fx::key(("scroll-shade-top", view_key(view))), 0.0);
+        self.chart_hover = None;
+    }
+
+    fn finish_pager_animation(&mut self) {
+        while self.pager.outgoing.is_some() {
+            let id = self.pager.animation_id;
+            self.pager = reduce_pager(self.pager.clone(), PagerAction::AnimationFinished(id));
+            if self.pager.outgoing.is_some() {
+                self.pager_started = Instant::now();
+                self.on_page_entered(self.pager.current);
+                if crate::ui::theme::animations_enabled() {
+                    break;
+                }
+            }
+        }
+    }
+
+    // ----- lifecycle --------------------------------------------------------
+
+    #[cfg(windows)]
+    pub(crate) fn attach_native_host(&mut self, hwnd: windows_sys::Win32::Foundation::HWND) {
+        self.host.hwnd = Some(hwnd);
+        self.host.backdrop = match super::backdrop::Backdrop::new(
+            hwnd,
+            self.palette.material,
+            self.palette.backdrop_luminosity(),
+        ) {
+            Ok(backdrop) => Some(backdrop),
+            Err(error) => {
+                // Keep plain transparency if this system cannot host a clipped
+                // backdrop. Never fall back to blur across the whole HWND.
+                eprintln!("could not create capsule backdrop: {error:#}");
+                None
+            }
+        };
+    }
+
+    /// Prepares geometry for a show; the caller performs the native show
+    /// outside of this update so GPUI can paint the first frame.
+    #[cfg(windows)]
+    pub(crate) fn begin_show(
+        &mut self,
+        anchor: Option<(i32, i32)>,
+        beside: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<super::ShowPlan> {
+        let hwnd = self.host.hwnd?;
+        self.open_requested_view(cx);
+        let was_hidden = matches!(self.host.phase, Phase::Hidden | Phase::Prewarm);
+        let anchor = anchor.unwrap_or_else(|| {
+            let rect = super::win32::window_rect(hwnd);
+            (rect.right - 1, rect.bottom - 1)
+        });
+        self.prepare_show_header();
+        let rect = self.prepare_geometry(Some(anchor), beside);
+        self.remember_floating_origin(rect, cx);
+        self.start_show(window, cx);
+        Some(super::ShowPlan {
+            hwnd,
+            rect,
+            first_show: was_hidden,
+        })
+    }
+
+    /// Linux: prepares a show into a freshly opened window on `monitor`.
+    /// The window is the capsule, so there is no technical host geometry and
+    /// the compositor animates the window's appearance.
+    #[cfg(not(windows))]
+    pub(crate) fn begin_show(
+        &mut self,
+        monitor: super::Monitor,
+        placement: super::Placement,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_requested_view(cx);
+        self.prepare_show_header();
+        self.host.monitor = Some(monitor);
+        self.host.placement = placement;
+        self.host.scale = window.scale_factor();
+        self.host.was_active = window.is_window_active();
+        self.start_show(window, cx);
+    }
+
+    /// Linux: selects the requested page on `monitor` and returns the
+    /// capsule size the new window opens at.
+    #[cfg(not(windows))]
+    pub(crate) fn prepare_linux_open(
+        &mut self,
+        monitor: super::Monitor,
+        cx: &mut Context<Self>,
+    ) -> (f32, f32) {
+        self.host.monitor = Some(monitor);
+        self.host.scale = monitor.scale() as f32;
+        self.open_requested_view(cx);
+        self.prepare_show_header();
+        let width = self.target_width(self.pager.current);
+        let height = self
+            .target_height(self.pager.current)
+            .min(self.host.max_height());
+        (width, height)
+    }
+
+    /// A fresh open starts directly on the page a caller asked for.
+    fn open_requested_view(&mut self, cx: &mut Context<Self>) {
+        if let Some(view) = take_popup_view_request() {
+            let view = match view {
+                PendingPopupView::Home => Some(PopupView::Home),
+                PendingPopupView::Provider(provider) => self.provider_view(provider, cx),
+                PendingPopupView::Nearest(provider) => self.nearest_view(provider, cx),
+            };
+            if let Some(view) = view
+                && self.view_available(view)
+                && view != self.pager.current
+            {
+                self.pager = reduce_pager(self.pager.clone(), PagerAction::Select(view));
+                self.finish_pager_animation_now();
+                self.on_page_entered(self.pager.current);
+            }
+        }
+    }
+
+    fn prepare_show_header(&mut self) {
+        if !matches!(self.host.phase, Phase::Open | Phase::Opening(_)) {
+            self.host.header_height = if self.ui.compact_bar_visible() {
+                super::footer::FLOATING_HEADER_HEIGHT
+            } else {
+                0.0
+            };
+        }
+    }
+
+    /// Refreshes data and starts the open motion once geometry is known.
+    fn start_show(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let already_visible = matches!(self.host.phase, Phase::Open | Phase::Opening(_));
+        let was_hidden = matches!(self.host.phase, Phase::Hidden | Phase::Prewarm);
+        // The system accent can change while the popup is hidden.
+        self.accent = crate::ui::theme::accent_ramp(self.ui.settings.accent_color);
+        self.refresh_palette(window);
+        self.limits = Rc::new(self.state.current_limits());
+        self.forced_resets = Rc::new(self.state.current_forced_resets());
+        self.provider_statuses = Rc::new(self.state.current_provider_statuses());
+        if !already_visible {
+            let closing_offset = match self.host.phase {
+                Phase::Closing(started, from) => Some(closing_offset(
+                    started,
+                    from,
+                    self.capsule_size.0,
+                    self.host.margin(),
+                )),
+                _ => None,
+            };
+            let target_height = self.target_height(self.pager.current);
+            self.host.height.snap(f64::from(target_height));
+            let target_width = self.target_width(self.pager.current);
+            self.host.width.snap(f64::from(target_width));
+            self.host.open_hold_frames = 0;
+            self.host.phase = if crate::ui::theme::animations_enabled() && SLIDES_IN {
+                if closing_offset.is_none() {
+                    self.host.open_hold_frames = if self.host.opened_once {
+                        OPEN_HOLD_FRAMES
+                    } else {
+                        FIRST_OPEN_HOLD_FRAMES
+                    };
+                }
+                // Reopening mid-close continues from the current position.
+                let start = closing_offset.unwrap_or(target_width + self.host.margin());
+                let full = target_width + self.host.margin();
+                let progress_offset = 1.0 - (start / full).clamp(0.0, 1.0);
+                Phase::Opening(
+                    Instant::now()
+                        - Duration::from_secs_f32(
+                            OPEN_ANIMATION.as_secs_f32() * progress_offset * 0.5,
+                        ),
+                )
+            } else {
+                Phase::Open
+            };
+            // The first frame after a cold start (swap-chain growth, glyph
+            // and icon rasterization) can outlast the whole slide. Count the
+            // wait until that frame as a hitch so the entrance still plays.
+            self.host.slide_frame = Some(Instant::now());
+            self.host.last_region = None;
+            self.tip = None;
+            self.hover.clear();
+            self.keys.mark_stale();
+            // Every open flashes the scrollbar again on overflowing pages.
+            for metrics in self.pages.values_mut() {
+                metrics.overflowing = false;
+                metrics.reveal_until = None;
+            }
+            if was_hidden {
+                self.host.opened_once = true;
+            }
+        }
+        crate::ui::popup::set_lifecycle(true, false);
+        cx.notify();
+    }
+
+    /// Prepares an invisible launch-time render at full host size, so the
+    /// first real open does not pay for swap-chain growth, composition setup,
+    /// glyph/icon rasterization or the first usage aggregation mid-slide.
+    #[cfg(windows)]
+    pub(crate) fn begin_prewarm(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<super::ShowPlan> {
+        let hwnd = self.host.hwnd?;
+        if self.host.phase != Phase::Hidden {
+            return None;
+        }
+        // The primary monitor owns the taskbar tray in the common setup.
+        let monitor = super::win32::monitor_for_point(0, 0);
+        self.host.monitor = Some(monitor);
+        self.host.scale = monitor.scale() as f32;
+        self.host.placement = super::Placement::default();
+        self.refresh_palette(window);
+        self.limits = Rc::new(self.state.current_limits());
+        self.forced_resets = Rc::new(self.state.current_forced_resets());
+        self.provider_statuses = Rc::new(self.state.current_provider_statuses());
+        let target_height = self.target_height(self.pager.current);
+        self.host.height.snap(f64::from(target_height));
+        let target_width = self.target_width(self.pager.current);
+        self.host.width.snap(f64::from(target_width));
+        self.host.phase = Phase::Prewarm;
+        self.host.prewarm_frames = 0;
+        self.host.last_region = None;
+        cx.notify();
+        Some(super::ShowPlan {
+            hwnd,
+            rect: super::host_rect(monitor, self.host.placement),
+            first_show: true,
+        })
+    }
+
+    /// The prewarm rendered enough frames and its usage snapshots landed, or
+    /// a real open already took over.
+    #[cfg(windows)]
+    pub(crate) fn prewarm_settled(&self) -> bool {
+        self.host.phase != Phase::Prewarm
+            || (self.host.prewarm_frames >= PREWARM_FRAMES + PREWARM_EXPOSED_FRAMES
+                && self.snapshots.values().all(|cache| cache.pending.is_none()))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn end_prewarm(&mut self, cx: &mut Context<Self>) {
+        if self.host.phase == Phase::Prewarm {
+            self.finish_hide(cx);
+            cx.notify();
+        }
+    }
+
+    fn finish_pager_animation_now(&mut self) {
+        while self.pager.outgoing.is_some() {
+            let id = self.pager.animation_id;
+            self.pager = reduce_pager(self.pager.clone(), PagerAction::AnimationFinished(id));
+        }
+    }
+
+    pub(crate) fn begin_hide(&mut self, cx: &mut Context<Self>) {
+        self.host.resizing_height = false;
+        self.host.reopen_after_hide = false;
+        #[cfg(windows)]
+        {
+            super::win32::set_drag_header(None);
+            super::win32::set_resize_area(None);
+        }
+        match self.host.phase {
+            Phase::Hidden | Phase::Prewarm | Phase::Closing(..) => {}
+            _ => {
+                let from = self.host.offset;
+                if crate::ui::theme::animations_enabled() && SLIDES_IN {
+                    self.host.phase = Phase::Closing(Instant::now(), from);
+                    crate::ui::popup::set_lifecycle(true, true);
+                } else {
+                    self.finish_hide(cx);
+                }
+                self.tip = None;
+                cx.notify();
+            }
+        }
+    }
+
+    #[cfg_attr(not(windows), allow(unused_variables))]
+    fn finish_hide(&mut self, cx: &mut Context<Self>) {
+        let reopen = std::mem::take(&mut self.host.reopen_after_hide);
+        self.host.phase = Phase::Hidden;
+        #[cfg(windows)]
+        if let Some(backdrop) = &mut self.host.backdrop {
+            backdrop.hide();
+        }
+        self.host.offset = 0.0;
+        self.keys.on_hidden();
+        self.reset_confirm = None;
+        self.reset_status.clear();
+        self.kit.menus.close_silently();
+        self.hover.clear();
+        self.tip = None;
+        self.home_editing = false;
+        self.widget_drag = None;
+        self.tab_drag = None;
+        // Keep only interaction choices, tiny page measurements and the last
+        // committed usage snapshots while hidden. The snapshots are small and
+        // let the next open paint the previous totals (stale-while-revalidate)
+        // instead of a "Loading" placeholder that shifts the layout. Cancel
+        // outstanding loads; a reopen recomputes against fresh data.
+        self.snapshots.retain(|_, cache| cache.key.is_some());
+        for cache in self.snapshots.values_mut() {
+            cache.pending = None;
+            cache.task = None;
+        }
+        self.usage_filtered = None;
+        self.usage_chart_cache = None;
+        self.usage_plot = None;
+        for chart in self.charts.values_mut() {
+            chart.release_data();
+        }
+        self.fx = Fx::default();
+        self.chart_hover = None;
+        self.usage_spinner_started = None;
+        crate::ui::popup::set_lifecycle(false, false);
+        crate::ui::popup::publish_surface_bounds(0, 0, 0, 0);
+        #[cfg(windows)]
+        if let Some(hwnd) = self.host.hwnd {
+            // ShowWindow re-enters GPUI; run it after this frame.
+            cx.spawn(async move |this, cx| {
+                // A tray click may reopen between the last closing frame
+                // and this task. Never park an already-reopened popup.
+                let hidden = this
+                    .update(cx, |root, _| !root.host.visible())
+                    .unwrap_or(false);
+                if hidden {
+                    super::win32::set_region(hwnd, None, 0);
+                    super::win32::hide(hwnd);
+                    super::win32::park_hidden(hwnd);
+                }
+            })
+            .detach();
+        }
+        self.host.last_region = None;
+        if reopen {
+            send_command(PopupCommand::Show {
+                anchor: None,
+                beside: false,
+            });
+        }
+    }
+
+    // ----- geometry ---------------------------------------------------------
+
+    /// Re-anchor an open panel through its normal exit/entrance motion.
+    /// Explicit Hide commands cancel the queued reopen in begin_hide.
+    #[cfg(windows)]
+    pub(super) fn animate_reposition(&mut self, cx: &mut Context<Self>) -> bool {
+        // Resizing a floating window preserves its live HWND origin.
+        if self.ui.settings.popup_floating
+            && self.host.floating_rect.is_some()
+            && self.ui.settings.popup_position.is_some()
+        {
+            return false;
+        }
+        if self.host.reopen_after_hide {
+            return true;
+        }
+        if crate::ui::theme::animations_enabled()
+            && !crate::ui::popup::is_reveal_pinned()
+            && matches!(self.host.phase, Phase::Open | Phase::Opening(_))
+        {
+            self.begin_hide(cx);
+            self.host.reopen_after_hide = true;
+            true
+        } else {
+            false
+        }
+    }
+
+    #[cfg(windows)]
+    pub(super) fn prepare_geometry(
+        &mut self,
+        anchor: Option<(i32, i32)>,
+        beside: bool,
+    ) -> super::win32::Rect {
+        let preserve_corner = anchor.is_some()
+            && matches!(self.host.phase, Phase::Open | Phase::Opening(_))
+            && self.host.floating_rect.is_none();
+        let origin = self.host.hwnd.map(super::win32::window_rect);
+        let anchor = anchor.unwrap_or_else(|| {
+            origin.map_or((0, 0), |r| {
+                // A full-height technical host can extend off-screen. Pick
+                // its anchored edge, not its transparent opposite edge.
+                (
+                    r.right - 1,
+                    if self.host.placement.top {
+                        r.top + 1
+                    } else {
+                        r.bottom - 1
+                    },
+                )
+            })
+        });
+        let (monitor, rect) = if self.ui.settings.popup_floating {
+            let live_origin = origin.filter(|_| {
+                self.host.floating_rect.is_some()
+                    && self.ui.settings.popup_position.is_some()
+                    && matches!(
+                        self.host.phase,
+                        Phase::Open | Phase::Opening(_) | Phase::Closing(..)
+                    )
+            });
+            let (monitor, x, y) = live_origin
+                .map(|rect| {
+                    let x = rect.left + crate::ui::popup::EDGE_MARGIN_PX;
+                    (super::win32::monitor_for_point(x, rect.top), x, rect.top)
+                })
+                .or_else(|| {
+                    self.ui
+                        .settings
+                        .popup_position
+                        .as_ref()
+                        .map(super::win32::restore_position)
+                })
+                .unwrap_or_else(|| {
+                    let monitor = super::win32::monitor_for_point(anchor.0, anchor.1);
+                    if self.ui.settings.popup_placement != crate::settings::PopupPlacement::Auto {
+                        let (x, y) = self.fixed_floating_origin(monitor);
+                        return (monitor, x, y);
+                    }
+                    let rect = super::host_rect(
+                        monitor,
+                        super::Placement {
+                            left: false,
+                            top: true,
+                            center: false,
+                        },
+                    );
+                    (
+                        monitor,
+                        rect.left + crate::ui::popup::EDGE_MARGIN_PX,
+                        rect.top,
+                    )
+                });
+            self.host.placement = super::Placement {
+                left: true,
+                top: true,
+                center: false,
+            };
+            let rect = super::floating_host_rect(monitor, x, y, self.ui.settings.popup_two_columns);
+            self.host.floating_rect = Some(rect);
+            (monitor, rect)
+        } else {
+            let monitor = if preserve_corner {
+                self.host
+                    .monitor
+                    .unwrap_or_else(|| super::win32::monitor_for_point(anchor.0, anchor.1))
+            } else {
+                super::win32::monitor_for_point(anchor.0, anchor.1)
+            };
+            if !preserve_corner {
+                self.host.placement = super::Placement::fixed(self.ui.settings.popup_placement)
+                    .unwrap_or_else(|| super::Placement::for_anchor(monitor, anchor, beside));
+            }
+            self.host.floating_rect = None;
+            (monitor, super::host_rect(monitor, self.host.placement))
+        };
+        self.host.monitor = Some(monitor);
+        self.host.scale = monitor.scale() as f32;
+        rect
+    }
+
+    /// Where a floating panel opens in the configured spot of `monitor`.
+    #[cfg(windows)]
+    fn fixed_floating_origin(&self, monitor: super::Monitor) -> (i32, i32) {
+        let pixels = |dip: f32| (f64::from(dip) * monitor.scale()).round() as i32;
+        let work = monitor.work;
+        self.ui.settings.popup_placement.origin(
+            (work.left, work.top, work.right, work.bottom),
+            crate::ui::popup::EDGE_MARGIN_PX,
+            (
+                pixels(self.target_width(self.pager.current)),
+                pixels(self.target_height(self.pager.current)),
+            ),
+        )
+    }
+
+    #[cfg(windows)]
+    pub(super) fn save_floating_position(&mut self, cx: &mut Context<Self>) {
+        if !self.ui.settings.popup_floating {
+            return;
+        }
+        let Some(hwnd) = self.host.hwnd else {
+            return;
+        };
+        let rect = super::win32::window_rect(hwnd);
+        self.persist_floating_origin(rect, cx);
+    }
+
+    #[cfg(windows)]
+    pub(super) fn remember_floating_origin(
+        &mut self,
+        rect: super::win32::Rect,
+        cx: &mut Context<Self>,
+    ) {
+        // A fixed spot is recomputed per open, for the panel's height then;
+        // only a drag replaces it.
+        if self.ui.settings.popup_floating
+            && self.ui.settings.popup_position.is_none()
+            && self.ui.settings.popup_placement == crate::settings::PopupPlacement::Auto
+        {
+            self.persist_floating_origin(rect, cx);
+        }
+    }
+
+    #[cfg(windows)]
+    fn persist_floating_origin(&mut self, rect: super::win32::Rect, cx: &mut Context<Self>) {
+        // Floating capsules always start at the host's left margin and top.
+        let position =
+            super::win32::save_position(rect.left + crate::ui::popup::EDGE_MARGIN_PX, rect.top);
+        self.persist(cx, move |settings| {
+            settings.popup_position = Some(position.clone())
+        });
+    }
+
+    /// What Home widgets and provider pages tell the card plan.
+    pub(super) fn card_options<'a>(
+        &self,
+        ui: &'a UiState,
+        statuses: &'a [crate::providers::status::ProviderStatus],
+        provider: ProviderId,
+        surface: PopupSurface,
+        drag_handle: bool,
+    ) -> CardOptions<'a> {
+        CardOptions {
+            keep_reset_card: self.reset_busy.contains(&provider)
+                || self.reset_status.contains_key(&provider),
+            popup_visibility: &ui.settings.popup_visibility,
+            surface,
+            show_provider_tabs: self.show_provider_tabs(),
+            include_usage_stats: ui.usage_stats_provider_enabled(provider),
+            show_account_name: ui.settings.show_account_name,
+            drag_handle,
+            provider_error: ui.provider_error(provider),
+            provider_status: statuses
+                .iter()
+                .find(|status| status.kind == provider.kind()),
+            now: Utc::now(),
+        }
+    }
+
+    pub(super) fn two_columns(&self) -> bool {
+        self.ui.settings.popup_two_columns
+            && (self.ui.settings.popup_floating || self.host.wide_available())
+    }
+
+    /// GPUI's view cache keys include bounds/mask/text, but not inherited
+    /// opacity. Repaint during page/profile/drag fades; cache stable frames.
+    pub(super) fn cache_graph_paint(&self) -> bool {
+        self.pager.outgoing.is_none()
+            && self.profile_fade_started.is_none()
+            && self.widget_drag.is_none()
+            && self.widget_bounds.borrow().widgets.keys().all(|widget| {
+                self.fx
+                    .is_at_target(fx::key(("widget-dim", widget.id())), 0.0)
+            })
+    }
+
+    pub(super) fn page_width(&self, view: PopupView) -> f32 {
+        if view.uses_two_columns(self.two_columns()) {
+            crate::ui::popup::POPUP_WIDE_WIDTH as f32
+        } else {
+            crate::ui::popup::POPUP_WIDTH as f32
+        }
+    }
+
+    pub(super) fn card_inner_width(&self, surface: PopupSurface) -> f32 {
+        let home = surface == PopupSurface::HomeTab;
+        let width = if home {
+            self.page_width(PopupView::Home)
+        } else {
+            crate::ui::popup::POPUP_WIDTH as f32
+        };
+        let content = width - CHROME_INSET * 2.0 - PAGE_PADDING * 2.0;
+        let column = if home && self.two_columns() {
+            (content - super::home::COLUMN_GAP) / 2.0
+        } else {
+            content
+        };
+        // Card border and the 12 DIP padding on each side.
+        (column - 26.0).max(0.0)
+    }
+
+    fn target_width(&self, view: PopupView) -> f32 {
+        self.page_width(view)
+    }
+
+    pub(super) fn footer_height(&self) -> f32 {
+        crate::ui::popup::bottom_bar_size().footer_height_dip() as f32
+    }
+
+    /// The instance switcher shows on a grouped tab in switcher mode.
+    pub(super) fn show_profile_strip(&self) -> bool {
+        matches!(self.pager.current, PopupView::Group(_))
+            && self.ui.settings.popup_tab_mode == PopupTabMode::GroupedSwitcher
+    }
+
+    pub(super) fn chrome_height(&self) -> f32 {
+        self.footer_height() + self.profile_height + self.host.header_height + CHROME_INSET * 2.0
+    }
+
+    fn target_profile_strip_height(&self) -> f32 {
+        let PopupView::Group(driver) = self.pager.current else {
+            return 0.0;
+        };
+        if !self.show_profile_strip() {
+            return 0.0;
+        }
+        // Keep the account page usable; large grids scroll within the strip.
+        profile_grid_height(self.ui.enabled_instances_of(driver).len())
+            .min((self.host.max_height() * 0.5).max(profile_grid_height(1)))
+    }
+
+    fn target_height(&self, view: PopupView) -> f32 {
+        let (minimum, maximum) = self.resize_height_bounds(view);
+        if self.host.resizing_height {
+            return (self.host.height.position as f32).clamp(minimum, maximum);
+        }
+        if let Some(height) = self.ui.settings.popup_height_dip {
+            return (height as f32).clamp(minimum, maximum);
+        }
+        maximum
+    }
+
+    fn resize_height_bounds(&self, view: PopupView) -> (f32, f32) {
+        let chrome = self.footer_height()
+            + self.target_profile_strip_height()
+            + self.host.header_height
+            + CHROME_INSET * 2.0;
+        let content = self
+            .pages
+            .get(&view)
+            .map(|metrics| metrics.content_height.get())
+            .filter(|height| *height > 1.0)
+            .unwrap_or(INITIAL_HEIGHT - chrome);
+        popup_height_bounds(content, chrome, self.host.max_height())
+    }
+
+    #[cfg(windows)]
+    pub(super) fn resize_height(
+        &mut self,
+        height_dip: f32,
+        finished: bool,
+        cx: &mut Context<Self>,
+    ) {
+        if self.host.phase != Phase::Open || !height_dip.is_finite() {
+            return;
+        }
+        let (minimum, maximum) = self.resize_height_bounds(self.pager.current);
+        let height = height_dip.clamp(minimum, maximum);
+        let saved = height.round() as u32;
+        self.host.resizing_height = !finished;
+        // Direct manipulation follows the pointer without spring lag.
+        self.host.height.snap(f64::from(height));
+        self.host.last_region = None;
+        if finished {
+            self.persist(cx, move |settings| settings.popup_height_dip = Some(saved));
+        } else {
+            // The drag height lives in `host.height` until the drop persists
+            // it; touching the snapshot here would make the final edit a no-op.
+            cx.notify();
+        }
+    }
+
+    /// Advance window motion for this frame. Returns `(width, height, offset)`.
+    fn step_motion(&mut self, now: Instant, cx: &mut Context<Self>) -> (f32, f32, f32) {
+        if let Phase::Opening(started) = self.host.phase {
+            if self.host.open_hold_frames > 0 {
+                // Stay fully beyond the edge until DWM shows real frames.
+                self.host.open_hold_frames -= 1;
+                self.host.phase = Phase::Opening(now);
+            } else if let Some(last) = self.host.slide_frame {
+                // Advance the slide by at most one long frame per frame: a
+                // stalled first paint must not skip the entrance.
+                let stall = now
+                    .saturating_duration_since(last)
+                    .saturating_sub(SLIDE_MAX_FRAME_STEP);
+                if !stall.is_zero() {
+                    self.host.phase = Phase::Opening(started + stall);
+                }
+            }
+            self.host.slide_frame = Some(now);
+        } else {
+            self.host.slide_frame = None;
+        }
+        let target_h = self.target_height(self.pager.current);
+        let target_w = self.target_width(self.pager.current);
+        let animate = crate::ui::theme::animations_enabled()
+            && !self.host.resizing_height
+            && self.host.visible()
+            && self.host.phase != Phase::Prewarm;
+        let opening_early = matches!(self.host.phase, Phase::Opening(started)
+            if now.saturating_duration_since(started).as_secs_f32() < OPEN_ANIMATION.as_secs_f32() * 0.35);
+        if animate && !opening_early {
+            self.host.height.retarget(f64::from(target_h));
+            self.host.width.retarget(f64::from(target_w));
+        } else {
+            // Hidden pixels never need a glide: the first frames of the open
+            // slide are still beyond the monitor edge.
+            self.host.height.snap(f64::from(target_h));
+            self.host.width.snap(f64::from(target_w));
+        }
+        let height = self.host.height.step(now) as f32;
+        let width = self.host.width.step(now) as f32;
+        if !self.host.height.settled || !self.host.width.settled {
+            self.fx.mark_animating();
+        }
+        let travel = width + self.host.margin();
+        let offset = match self.host.phase {
+            Phase::Prewarm if self.host.prewarm_exposed() => travel - 1.0,
+            Phase::Hidden | Phase::Prewarm | Phase::Open => 0.0,
+            Phase::Opening(started) => {
+                let progress = now.saturating_duration_since(started).as_secs_f64()
+                    / OPEN_ANIMATION.as_secs_f64();
+                if progress >= 1.0 {
+                    self.host.phase = Phase::Open;
+                    #[cfg(windows)]
+                    if let Some(hwnd) = self.host.hwnd {
+                        cx.spawn(async move |_, _| super::win32::activate(hwnd))
+                            .detach();
+                    }
+                    crate::ui::popup::arm_outside_click_grace();
+                    0.0
+                } else {
+                    self.fx.mark_animating();
+                    (1.0 - crate::ui::popup::ease_entrance(progress)) as f32 * travel
+                }
+            }
+            Phase::Closing(started, from) => {
+                let offset = closing_offset(started, from, width, self.host.margin());
+                if offset >= travel - 0.5 {
+                    self.finish_hide(cx);
+                    travel
+                } else {
+                    self.fx.mark_animating();
+                    offset
+                }
+            }
+        };
+        self.host.offset = offset;
+        (width, height, offset)
+    }
+
+    /// Clip the HWND to `clip`, keep the backdrop on the capsule and
+    /// publish the capsule's screen bounds.
+    fn apply_region(
+        &mut self,
+        window: &Window,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        clip: (f32, f32, f32, f32),
+    ) {
+        #[cfg(windows)]
+        {
+            let Some(hwnd) = self.host.hwnd else {
+                return;
+            };
+            if !self.host.visible() {
+                return;
+            }
+            let scale = window.scale_factor();
+            if let Some(backdrop) = &mut self.host.backdrop {
+                backdrop.update(
+                    x * scale,
+                    y * scale,
+                    width * scale,
+                    height * scale,
+                    crate::ui::popup::corner_radius_dip() as f32 * scale,
+                );
+            }
+            let viewport = window.viewport_size();
+            let window_w = (f32::from(viewport.width) * scale).round() as i32;
+            let window_h = (f32::from(viewport.height) * scale).round() as i32;
+            if self.host.phase == Phase::Prewarm {
+                // Render everything, show at most the capsule's edge pixel at
+                // the screen edge, publish no hit bounds.
+                let region = if self.host.prewarm_exposed() {
+                    let y = (((y + height * 0.5) * scale).round() as i32).clamp(0, window_h - 1);
+                    (window_w - 1, y, window_w, y + 1, 0)
+                } else {
+                    (0, 0, 0, 0, 0)
+                };
+                if self.host.last_region != Some(region) {
+                    self.host.last_region = Some(region);
+                    let (left, top, right, bottom, _) = region;
+                    super::win32::set_region(
+                        hwnd,
+                        Some(super::win32::Rect {
+                            left,
+                            top,
+                            right,
+                            bottom,
+                        }),
+                        0,
+                    );
+                }
+                return;
+            }
+            let pixels = |x: f32, y: f32, width: f32, height: f32| {
+                let left = ((x * scale).round() as i32).clamp(0, window_w);
+                let right = (((x + width) * scale).round() as i32).clamp(left, window_w);
+                let top = ((y * scale).round() as i32).clamp(0, window_h);
+                let bottom = (((y + height) * scale).round() as i32).clamp(top, window_h);
+                (left, top, right, bottom)
+            };
+            let surface = pixels(x, y, width, height);
+            let (minimum, maximum) = self.resize_height_bounds(self.pager.current);
+            super::win32::set_resize_area((self.host.phase == Phase::Open).then_some(
+                super::win32::ResizeArea {
+                    surface: super::win32::Rect {
+                        left: surface.0,
+                        top: surface.1,
+                        right: surface.2,
+                        bottom: surface.3,
+                    },
+                    top_anchored: self.host.placement.top,
+                    floating: self.ui.settings.popup_floating,
+                    scale,
+                    minimum,
+                    maximum,
+                },
+            ));
+            super::win32::set_drag_header(
+                (self.ui.settings.popup_floating && self.host.phase == Phase::Open).then(|| {
+                    let (left, top, right, bottom) = pixels(
+                        x + CHROME_INSET,
+                        y + CHROME_INSET,
+                        (width - CHROME_INSET * 2.0 - super::footer::FLOATING_HEADER_ACTIONS_WIDTH)
+                            .max(0.0),
+                        self.host.header_height,
+                    );
+                    super::win32::Rect {
+                        left,
+                        top,
+                        right,
+                        bottom,
+                    }
+                }),
+            );
+            let (left, top, right, bottom) = pixels(clip.0, clip.1, clip.2, clip.3);
+            let radius = (crate::ui::popup::corner_radius_dip() as f32 * scale).round() as i32;
+            let region = (left, top, right, bottom, radius);
+            let region_changed = self.host.last_region != Some(region);
+            if region_changed {
+                self.host.last_region = Some(region);
+                super::win32::set_region(
+                    hwnd,
+                    (right > left && bottom > top).then_some(super::win32::Rect {
+                        left,
+                        top,
+                        right,
+                        bottom,
+                    }),
+                    radius,
+                );
+            }
+            // The clip can stay put while the capsule resizes inside it;
+            // outside clicks still go by the visible capsule.
+            if self.ui.settings.popup_floating
+                || region_changed
+                || self.host.last_surface != Some(surface)
+            {
+                self.host.last_surface = Some(surface);
+                let (left, top, right, bottom) = surface;
+                let origin = super::win32::window_rect(hwnd);
+                crate::ui::popup::publish_surface_bounds(
+                    origin.left + left,
+                    origin.top + top,
+                    origin.left + right,
+                    origin.top + bottom,
+                );
+            }
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = (window, x, y, width, height, clip);
+        }
+    }
+
+    /// The HWND clip for this frame. `SetWindowRgn` makes DWM recompose the
+    /// window synchronously, too slow to repeat on every frame of a shell
+    /// resize (Home <-> Usage swings the height across most of the screen).
+    /// While the size springs run, clip once to the union of the current
+    /// and final capsule; the capsule paints its own rounded edge and the
+    /// rest of the clip stays transparent.
+    fn region_bounds(
+        &self,
+        capsule: (f32, f32, f32, f32),
+        viewport: (f32, f32),
+        offset: f32,
+    ) -> (f32, f32, f32, f32) {
+        let settled = self.host.width.settled && self.host.height.settled;
+        if self.host.phase != Phase::Open || settled {
+            return capsule;
+        }
+        let (x, y, width, height) = capsule;
+        let target_w = self.host.width.target as f32;
+        let target_h = (self.host.height.target as f32).min(viewport.1);
+        let (target_x, target_y) = self.capsule_position(viewport, (target_w, target_h), offset);
+        let left = x.min(target_x);
+        let top = y.min(target_y);
+        let right = (x + width).max(target_x + target_w);
+        let bottom = (y + height).max(target_y + target_h);
+        (left, top, right - left, bottom - top)
+    }
+
+    /// Top-left of a capsule of `size` in the host window, `offset` DIPs
+    /// along its slide toward the screen edge of the placement's side.
+    fn capsule_position(&self, viewport: (f32, f32), size: (f32, f32), offset: f32) -> (f32, f32) {
+        let margin = self.host.margin();
+        if self.host.placement.center {
+            // No side edge is near: slide through the top or bottom edge.
+            let travel = self.center_slide(size, offset);
+            let x = ((viewport.0 - size.0) / 2.0).max(0.0);
+            let y = if self.host.placement.top {
+                -travel
+            } else {
+                (viewport.1 - size.1).max(0.0) + travel
+            };
+            return (x, y);
+        }
+        let x = if self.host.placement.left {
+            margin - offset
+        } else {
+            viewport.0 - margin - size.0 + offset
+        };
+        let y = if self.host.placement.top {
+            0.0
+        } else {
+            (viewport.1 - size.1).max(0.0)
+        };
+        (x, y)
+    }
+
+    /// The horizontal slide `offset`, in the vertical travel of a centered
+    /// capsule: fully slid out either way when the capsule just left the host.
+    fn center_slide(&self, size: (f32, f32), offset: f32) -> f32 {
+        offset * size.1 / (size.0 + self.host.margin()).max(1.0)
+    }
+
+    // ----- hover / tooltip helpers -------------------------------------------
+
+    pub(super) fn hovered(&self, id: u64) -> bool {
+        self.hover.contains(&id)
+    }
+
+    pub(super) fn set_hover(&mut self, id: u64, hovered: bool) -> bool {
+        if hovered {
+            self.hover.insert(id)
+        } else {
+            self.hover.remove(&id)
+        }
+    }
+
+    /// Hover listener that records state, animates, and shows a tooltip.
+    pub(super) fn hover_listener(
+        &self,
+        id: u64,
+        tooltip: Option<SharedString>,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&bool, &mut Window, &mut App) + 'static {
+        cx.listener(move |this, hovered: &bool, window, cx| {
+            let changed = this.set_hover(id, *hovered);
+            if let Some(text) = tooltip.as_ref() {
+                if *hovered {
+                    this.show_tip(id, TipContent::Text(text.clone()), window, cx);
+                } else if this.tip.as_ref().is_some_and(|tip| tip.owner == id) {
+                    this.tip = None;
+                    cx.notify();
+                }
+            }
+            if changed {
+                cx.notify();
+            }
+        })
+    }
+
+    pub(super) fn show_tip(
+        &mut self,
+        owner: u64,
+        content: TipContent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let delayed = matches!(content, TipContent::Text(_));
+        self.tip = Some(TipRequest {
+            owner,
+            content,
+            anchor: window.mouse_position(),
+            since: Instant::now(),
+            delayed,
+        });
+        if delayed {
+            cx.spawn(async move |this, cx| {
+                cx.background_executor()
+                    .timer(super::tooltip::TOOLTIP_DELAY)
+                    .await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
+        cx.notify();
+    }
+
+    // ----- actions ------------------------------------------------------------
+
+    pub(super) fn use_reset(&mut self, provider: ProviderId, cx: &mut Context<Self>) {
+        let Some(instance) = self
+            .ui
+            .settings
+            .instance(provider)
+            .filter(|i| i.enabled)
+            .cloned()
+        else {
+            return;
+        };
+        if !self.reset_busy.insert(provider) {
+            return;
+        }
+        self.reset_confirm = None;
+        let revision = instance.credentials_revision;
+        let runtime_key = instance.runtime_key();
+        let events = self.state.worker_events_tx.clone();
+        cx.spawn(async move |this, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { crate::providers::drivers::consume_reset(&instance) })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.reset_busy.remove(&provider);
+                // A credential edit/removal while the request ran must not
+                // attach the previous account's result to the new profile.
+                if this
+                    .ui
+                    .settings
+                    .instance(provider)
+                    .is_some_and(|i| i.runtime_key() == runtime_key && i.enabled)
+                {
+                    if let Ok((crate::quota::banked_reset::Outcome::Reset, _)) = &result {
+                        this.state.record_banked_reset_use(provider);
+                    }
+                    if let Ok((_, Ok(limits))) = &result {
+                        let _ = events.send(crate::app::event::AppEvent::limits(
+                            provider,
+                            revision,
+                            limits.clone(),
+                        ));
+                    }
+                    let message = match result {
+                        Ok((crate::quota::banked_reset::Outcome::Reset, Err(_))) => {
+                            crate::quota::banked_reset::Status::RefreshFailed
+                        }
+                        Ok((outcome, _)) => crate::quota::banked_reset::Status::Outcome(outcome),
+                        Err(error) => crate::quota::banked_reset::Status::from_error(error),
+                    };
+                    this.reset_status
+                        .insert(provider, (message, Instant::now()));
+                    cx.spawn(async move |this, cx| {
+                        cx.background_executor().timer(RESET_STATUS_TTL).await;
+                        let _ = this.update(cx, |_, cx| cx.notify());
+                    })
+                    .detach();
+                    // Include sibling instances sharing the account. Normal
+                    // worker publication updates tray, Home and provider tabs.
+                    this.refresh(cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
+        self.keys.mark_stale();
+        if self.state.refresh_all() {
+            let mut ui = (*self.ui).clone();
+            ui.refreshing = true;
+            self.ui = Rc::new(ui);
+            if self.refresh_started.is_none() {
+                self.refresh_started = Some(Instant::now());
+            }
+            cx.notify();
+        }
+    }
+
+    pub(super) fn toggle_user_pin(&mut self, cx: &mut Context<Self>) {
+        let pinned = !self.ui.settings.popup_pinned;
+        self.persist(cx, move |settings| settings.popup_pinned = pinned);
+    }
+
+    pub(super) fn toggle_two_columns(&mut self, cx: &mut Context<Self>) {
+        let enabled = !self.ui.settings.popup_two_columns;
+        self.persist(cx, move |settings| settings.popup_two_columns = enabled);
+        // The optimistic snapshot already contains the new value when the
+        // settings broadcast returns. Expand the technical host now so Home
+        // and Usage are not clipped. When shrinking, keep the larger host
+        // until the normal lifecycle resizes it so the width spring can finish.
+        if enabled {
+            send_command(PopupCommand::Reposition);
+        }
+    }
+
+    pub(super) fn open_settings(&mut self) {
+        crate::ui::settings_window::open();
+    }
+
+    pub(super) fn install_update(&mut self) {
+        // Failures are reported on the update card.
+        std::thread::spawn(|| {
+            let _ = crate::update::apply_pending_update();
+        });
+    }
+
+    /// Applies a popup-owned settings change at once, then persists it on
+    /// the serial settings writer, off the render thread. Process-wide
+    /// values such as the pin take effect before the write round-trips.
+    pub(super) fn persist(&mut self, cx: &mut Context<Self>, edit: impl FnOnce(&mut Settings)) {
+        let ui = Rc::make_mut(&mut self.ui);
+        let before = ui.edit_settings(edit);
+        crate::settings::runtime::apply_presentation_changes(&before, &ui.settings);
+        cx.notify();
+    }
+
+    // ----- snapshots ------------------------------------------------------------
+
+    /// Stale-while-revalidate usage aggregation on the background executor.
+    pub(super) fn snapshot(
+        &mut self,
+        slot: SnapshotSlot,
+        key: String,
+        enabled: Vec<ProviderId>,
+        query: impl FnOnce(&ProviderLimits, &[ProviderId]) -> OverviewSnapshot + Send + 'static,
+        cx: &mut Context<Self>,
+    ) -> Arc<OverviewSnapshot> {
+        let cache = self.snapshots.entry(slot).or_default();
+        if cache.key.as_deref() == Some(key.as_str()) {
+            return Arc::clone(&cache.value);
+        }
+        // First load also belongs on the background executor: aggregating
+        // local usage can read the database and must not stall the open slide.
+        if cache.pending.as_deref() != Some(key.as_str()) {
+            cache.pending = Some(key.clone());
+            let limits = (*self.limits).clone();
+            let task_key = key.clone();
+            cache.task = Some(cx.spawn(async move |this, cx| {
+                let value = cx
+                    .background_executor()
+                    .spawn(async move { query(&limits, &enabled) })
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    let cache = this.snapshots.entry(slot).or_default();
+                    if cache.pending.as_deref() == Some(task_key.as_str()) {
+                        cache.value = Arc::new(value);
+                        cache.key = Some(task_key);
+                        cache.pending = None;
+                        cx.notify();
+                    }
+                });
+            }));
+        }
+        Arc::clone(&cache.value)
+    }
+
+    // ----- pages ----------------------------------------------------------------
+
+    pub(super) fn page_metrics(&mut self, view: PopupView) -> PageMetrics {
+        self.pages.entry(view).or_default().clone()
+    }
+
+    pub(super) fn scroll_page(
+        &mut self,
+        view: PopupView,
+        event: &ScrollWheelEvent,
+        viewport_height: f32,
+        cx: &mut Context<Self>,
+    ) {
+        let delta = f32::from(event.delta.pixel_delta(px(20.0)).y);
+        let metrics = self.pages.entry(view).or_default();
+        let max = (metrics.content_height.get() - viewport_height).max(0.0);
+        let next = (metrics.scroll_target - delta * 2.0).clamp(0.0, max);
+        if (next - metrics.scroll_target).abs() > 0.1 {
+            metrics.scroll_target = next;
+            self.reveal_scrollbar(view, SCROLLBAR_LINGER, cx);
+            cx.notify();
+        }
+    }
+
+    /// Keeps the overlay scrollbar visible for `duration`, then lets it fade.
+    fn reveal_scrollbar(&mut self, view: PopupView, duration: Duration, cx: &mut Context<Self>) {
+        let until = Instant::now() + duration;
+        let metrics = self.pages.entry(view).or_default();
+        if metrics.reveal_until.is_some_and(|at| at >= until) {
+            return;
+        }
+        metrics.reveal_until = Some(until);
+        self.scrollbar_timer = Some(cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(duration).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        }));
+    }
+}
+
+pub(super) fn view_key(view: PopupView) -> String {
+    view.key()
+}
+
+fn closing_offset(started: Instant, from: f32, width: f32, margin: f32) -> f32 {
+    let travel = width + margin;
+    let progress = started.elapsed().as_secs_f64() / CLOSE_ANIMATION.as_secs_f64();
+    let eased = crate::ui::popup::ease_exit(progress) as f32;
+    from + (travel - from) * eased
+}
+
+// ----- render -------------------------------------------------------------------
+
+impl Render for PopupRoot {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let language = crate::i18n::current_language();
+        if self.language != language {
+            self.language = language;
+            // Tooltips retain formatted chart text while hovered. Rebuild on
+            // the next pointer event rather than retaining the old language.
+            self.tip = None;
+        }
+        if !self.host.visible() {
+            return div().id("popup-root").size_full();
+        }
+        // Settings previews a theme by swapping a shared slot, then
+        // refreshing every window.
+        if self.preview_generation != theme::preview_generation() {
+            self.refresh_palette(window);
+        }
+        let now = Instant::now();
+        self.sync_key_pin();
+        self.fx.begin_frame(crate::ui::theme::animations_enabled());
+        self.profile_height = self.fx.value(
+            fx::key("profile-grid-height"),
+            self.target_profile_strip_height(),
+            fx::FAST,
+        );
+        let kit_theme = crate::ui::gui::theme::Theme::new(
+            self.palette.dark,
+            self.accent,
+            crate::ui::gui::theme::Fonts {
+                text: self.palette.font_family.clone(),
+                ..self.kit_fonts.clone()
+            },
+        );
+        self.kit.begin_frame(kit_theme, window);
+        if !cx.has_active_drag() {
+            self.widget_drag = None;
+            self.widget_drop = None;
+            self.tab_drag = None;
+            self.tab_drop = None;
+        }
+        // Complete or advance page transitions.
+        if self.pager.outgoing.is_some() {
+            if !self.fx.enabled()
+                || now.saturating_duration_since(self.pager_started) >= PAGER_ANIMATION_DURATION
+            {
+                let id = self.pager.animation_id;
+                self.pager = reduce_pager(self.pager.clone(), PagerAction::AnimationFinished(id));
+                if self.pager.animation_id != id {
+                    self.pager_started = now;
+                    self.on_page_entered(self.pager.current);
+                }
+            } else {
+                self.fx.mark_animating();
+            }
+        }
+
+        let palette = self.palette.clone();
+        let ui = Rc::clone(&self.ui);
+        let limits = Rc::clone(&self.limits);
+
+        // Switcher changes with a different card layout fade the page in so
+        // the remeasured height is not seen as cards jumping.
+        let profile_layout = match self.pager.current {
+            PopupView::Group(driver) if self.show_profile_strip() => {
+                model::selected_group_member(&ui, driver).map_or_else(String::new, |member| {
+                    format!(
+                        "{}|{}",
+                        member.id(),
+                        instance_layout_key(
+                            limits.get(member),
+                            ui.has_provider_error(member),
+                            ui.settings.show_used_percentage,
+                            ui.settings.show_usage_pace,
+                        )
+                    )
+                })
+            }
+            _ => String::new(),
+        };
+        if profile_layout != self.profile_layout {
+            if !self.profile_layout.is_empty() && !profile_layout.is_empty() {
+                self.profile_fade_started = Some(now);
+            }
+            self.profile_layout = profile_layout;
+        }
+
+        self.host.header_height = self.fx.value(
+            fx::key("floating-header-height"),
+            if self.ui.compact_bar_visible() {
+                super::footer::FLOATING_HEADER_HEIGHT
+            } else {
+                0.0
+            },
+            fx::NORMAL,
+        );
+        let (capsule_w, capsule_h, offset) = self.step_motion(now, cx);
+        // Closing can finish inside step_motion. Submit an empty last frame,
+        // so GPUI also drops scene listeners holding chart/snapshot Arcs.
+        if !self.host.visible() {
+            return div().id("popup-root").size_full();
+        }
+        // Linux: the window is the capsule. Follow its size springs, so page
+        // and layout changes still glide; the compositor draws nothing else.
+        #[cfg(not(windows))]
+        let capsule_h = {
+            let capsule_h = capsule_h.min(self.host.max_height());
+            let wanted = gpui::size(px(capsule_w.round()), px(capsule_h.round()));
+            if window.viewport_size() != wanted {
+                window.resize(wanted);
+            }
+            capsule_h
+        };
+        let viewport = window.viewport_size();
+        let viewport_w = f32::from(viewport.width);
+        let viewport_h = f32::from(viewport.height);
+        // A top/side taskbar can leave less work area than 80% of the monitor.
+        #[cfg(windows)]
+        let capsule_h = capsule_h.min(viewport_h);
+        let (capsule_x, capsule_y) =
+            self.capsule_position((viewport_w, viewport_h), (capsule_w, capsule_h), offset);
+        self.capsule_origin = point(px(capsule_x), px(capsule_y));
+        self.capsule_size = (capsule_w, capsule_h);
+        let clip = self.region_bounds(
+            (capsule_x, capsule_y, capsule_w, capsule_h),
+            (viewport_w, viewport_h),
+            offset,
+        );
+        self.apply_region(window, capsule_x, capsule_y, capsule_w, capsule_h, clip);
+
+        let radius = crate::ui::popup::corner_radius_dip() as f32;
+        let body_viewport_h = (capsule_h - self.chrome_height()).max(0.0);
+
+        // Pages: the outgoing page slides out while the current slides in.
+        let mut pages: Vec<AnyElement> = Vec::with_capacity(2);
+        let slide_width = self
+            .pager
+            .outgoing
+            .map_or(crate::ui::popup::POPUP_WIDTH, |from| {
+                pager_slide_width(from, self.pager.current, self.two_columns())
+            }) as f32;
+        let transition = self.pager.outgoing.map(|_| {
+            let progress = now
+                .saturating_duration_since(self.pager_started)
+                .as_secs_f64()
+                / PAGER_ANIMATION_DURATION.as_secs_f64();
+            fx::fluent(progress) as f32
+        });
+        if let (Some(outgoing), Some(progress)) = (self.pager.outgoing, transition) {
+            let end = self.pager.direction.outgoing_offset(slide_width as i32);
+            let element = self.render_page(
+                outgoing,
+                end * progress,
+                1.0 - progress,
+                body_viewport_h,
+                false,
+                window,
+                cx,
+            );
+            pages.push(element);
+        }
+        let current = self.pager.current;
+        let (current_x, current_opacity) = match transition {
+            Some(progress) => {
+                let start = self.pager.direction.incoming_offset(slide_width as i32);
+                (start * (1.0 - progress), progress)
+            }
+            None => {
+                let fade = self
+                    .profile_fade_started
+                    .map(|started| {
+                        let t = now.saturating_duration_since(started).as_secs_f64()
+                            / PAGER_ANIMATION_DURATION.as_secs_f64();
+                        if t >= 1.0 {
+                            self.profile_fade_started = None;
+                            1.0
+                        } else {
+                            self.fx.mark_animating();
+                            fx::fluent(t) as f32
+                        }
+                    })
+                    .unwrap_or(1.0);
+                (0.0, fade)
+            }
+        };
+        pages.push(self.render_page(
+            current,
+            current_x,
+            current_opacity,
+            body_viewport_h,
+            true,
+            window,
+            cx,
+        ));
+
+        // A popup by a top taskbar mirrors vertically: the chrome sits on the
+        // capsule's top edge, by the taskbar, and the pages hang below it.
+        let chrome_on_top = self.host.placement.top;
+        let (shell_top, shell_bottom) = if chrome_on_top {
+            (self.chrome_height() - CHROME_INSET, CHROME_INSET)
+        } else {
+            (CHROME_INSET, self.chrome_height() - CHROME_INSET)
+        };
+        let shell = div()
+            .id("popup-page-viewport")
+            .absolute()
+            .top(px(shell_top))
+            .left(px(CHROME_INSET))
+            .right(px(CHROME_INSET))
+            .bottom(px(shell_bottom))
+            .overflow_hidden()
+            .children(pages);
+
+        // Anchor persistent chrome to the FIXED technical host, not to the
+        // animated capsule's top/height or a flex page layout. Otherwise
+        // rounding top and height separately can move the footer by a pixel
+        // as the height spring progresses. Only horizontal open/width motion
+        // is shared with the capsule; the footer's vertical bounds stay fixed.
+        let chrome_width = (capsule_w - CHROME_INSET * 2.0).max(0.0);
+        // The chrome stands on the host edge by the taskbar: the bottom edge
+        // normally, the top edge (where the capsule hangs from) by a top bar.
+        let chrome_slide = if self.host.placement.center {
+            self.center_slide((capsule_w, capsule_h), offset)
+        } else {
+            0.0
+        };
+        let chrome_y = move |element: gpui::Stateful<gpui::Div>, offset: f32| {
+            if chrome_on_top {
+                element.top(px(capsule_y + CHROME_INSET + offset))
+            } else {
+                element.bottom(px(CHROME_INSET + offset - chrome_slide))
+            }
+        };
+        let left_side = self.host.placement.left;
+        let chrome_x = |element: gpui::Stateful<gpui::Div>| {
+            if left_side {
+                element.left(px(capsule_x + CHROME_INSET))
+            } else {
+                element.right(px(viewport_w - capsule_x - capsule_w + CHROME_INSET))
+            }
+        };
+        let footer = chrome_y(
+            chrome_x(div().id("popup-pinned-footer")),
+            self.host.header_height,
+        )
+        .absolute()
+        .w(px(chrome_width))
+        .h(px(self.footer_height()))
+        .child(self.render_footer(capsule_w, window, cx));
+        let mut chrome = vec![footer.into_any_element()];
+        if self.host.header_height > 0.0 {
+            chrome.push(
+                chrome_y(chrome_x(div().id("floating-drag-header")), 0.0)
+                    .absolute()
+                    .w(px(chrome_width))
+                    .h(px(self.host.header_height))
+                    .overflow_hidden()
+                    .child(self.render_floating_header(cx))
+                    .into_any_element(),
+            );
+        }
+        if self.profile_height > 0.001 {
+            chrome.push(
+                chrome_y(
+                    chrome_x(div().id("popup-pinned-profiles")),
+                    self.footer_height() + self.host.header_height,
+                )
+                .absolute()
+                .w(px(chrome_width))
+                .h(px(self.profile_height))
+                .overflow_hidden()
+                .child(self.render_profile_strip(window, cx))
+                .into_any_element(),
+            );
+        }
+
+        #[cfg(windows)]
+        let frosted = self
+            .host
+            .backdrop
+            .as_ref()
+            .is_some_and(|backdrop| backdrop.supports(palette.material));
+        #[cfg(not(windows))]
+        let frosted = false;
+        let capsule = div()
+            .id("popup-capsule")
+            .absolute()
+            .left(px(capsule_x))
+            .top(px(capsule_y))
+            .w(px(capsule_w))
+            .h(px(capsule_h))
+            .rounded(px(radius))
+            .overflow_hidden()
+            .font_family(palette.font_family.clone())
+            .text_color(palette.text_primary)
+            .text_size(px(14.0))
+            .line_height(px(20.0))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                if !*hovered {
+                    // Leaving the capsule must not strand any hover state.
+                    this.hover.clear();
+                    this.tip = None;
+                    this.chart_hover = None;
+                    cx.notify();
+                }
+            }))
+            // A rounded composition visual below GPUI supplies blur only
+            // inside the capsule. This tint leaves that backdrop visible.
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(radius))
+                    .bg(palette.capsule_background(frosted)),
+            )
+            .child(shell)
+            // A hairline keeps the capsule edge crisp against any wallpaper.
+            .children(palette.window_border().then(|| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .rounded(px(radius))
+                    .border_1()
+                    .border_color(if palette.dark {
+                        rgba8(255, 255, 255, 0x14)
+                    } else {
+                        rgba8(0, 0, 0, 0x12)
+                    })
+            }));
+        // Paint tooltips after pages, pinned chrome and any other deferred UI.
+        // Their coordinates are window-relative; render_tip still clamps them
+        // to the capsule so the native region cannot cut off the bubble.
+        let tip = self
+            .render_tip(capsule_w, capsule_h, window, cx)
+            .map(|tip| gpui::deferred(tip).with_priority(usize::MAX));
+
+        if self.host.phase == Phase::Prewarm {
+            self.host.prewarm_frames = self.host.prewarm_frames.saturating_add(1);
+            if self.host.prewarm_frames <= PREWARM_FRAMES + PREWARM_EXPOSED_FRAMES {
+                window.request_animation_frame();
+            }
+        }
+        if self.fx.is_animating() || (ui.refreshing && self.host.visible()) {
+            window.request_animation_frame();
+        }
+        self.kit.end_frame(window);
+
+        div()
+            .id("popup-root")
+            .size_full()
+            .relative()
+            .font_weight(FontWeight::NORMAL)
+            .font_family(palette.font_family.clone())
+            .text_color(palette.text_primary)
+            .text_size(px(14.0))
+            .line_height(px(20.0))
+            .child(capsule)
+            .children(chrome)
+            .children(tip)
+    }
+}
+
+impl PopupRoot {
+    /// One scrolling page. `measure` marks the page whose natural height
+    /// drives the capsule height.
+    #[allow(clippy::too_many_arguments)]
+    fn render_page(
+        &mut self,
+        view: PopupView,
+        offset_x: f32,
+        opacity: f32,
+        viewport_height: f32,
+        measure: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let body = self.build_body(view, window, cx);
+        let gap = self.card_gap();
+        let presence = std::mem::take(&mut self.body_presence);
+        let metrics = self.page_metrics(view);
+        let max_scroll = (metrics.content_height.get() - viewport_height).max(0.0);
+        let target = metrics.scroll_target.min(max_scroll);
+        if target != metrics.scroll_target {
+            self.pages.entry(view).or_default().scroll_target = target;
+        }
+        let scroll = self
+            .fx
+            .value(fx::key(("scroll", view_key(view))), target, SCROLL_GLIDE)
+            .clamp(0.0, max_scroll.max(0.0));
+        let page_width = self.page_width(view) - CHROME_INSET * 2.0;
+        let cell = Rc::clone(&metrics.content_height);
+        let mut content = div()
+            .w(px(page_width))
+            .flex()
+            .flex_col()
+            .gap(px(gap))
+            .p(px(PAGE_PADDING))
+            .children(body.into_iter().enumerate().map(|(index, body)| {
+                let item = div().flex_none().child(body);
+                // A growing item also grows its gap: the negative margin
+                // cancels the gap while the item is still collapsed.
+                match presence.iter().find(|(at, _)| *at == index) {
+                    Some((_, shown)) => item.mb(px(-gap * (1.0 - shown))),
+                    None => item,
+                }
+            }))
+            .into_any_element();
+        // Like GPUI's list elements, lay out the subtree as an independent
+        // root. The animated viewport supplies ONLY its width, never height.
+        // This breaks the Taffy containing-block -> content -> shell loop.
+        let content = canvas(
+            move |bounds, window, cx| {
+                let measured = content.layout_as_root(
+                    gpui::size(
+                        AvailableSpace::Definite(px(page_width)),
+                        AvailableSpace::MaxContent,
+                    ),
+                    window,
+                    cx,
+                );
+                let height =
+                    measured_page_height(f32::from(measured.height), window.scale_factor());
+                if cell.get() != height {
+                    cell.set(height);
+                    window.request_animation_frame();
+                }
+                content.prepaint_at(bounds.origin - point(px(0.0), px(scroll)), window, cx);
+                content
+            },
+            |_, mut content, window, cx| content.paint(window, cx),
+        )
+        .size_full();
+        let mut page = div()
+            .id(ElementId::Name(
+                format!("popup-page-{}", view_key(view)).into(),
+            ))
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .left(px(offset_x))
+            .w(px(page_width))
+            .overflow_hidden()
+            .opacity(opacity)
+            .child(content);
+        if measure {
+            page =
+                page.on_scroll_wheel(cx.listener(move |this, event: &ScrollWheelEvent, _, cx| {
+                    this.scroll_page(view, event, viewport_height, cx);
+                }));
+            // A growing shell can temporarily be shorter than its content.
+            // Only show a scrollbar when the final shell cannot fit the page.
+            let final_viewport = (self.target_height(view) - self.chrome_height()).max(0.0);
+            let overflowing = metrics.content_height.get() - final_viewport
+                > 1.0 / window.scale_factor()
+                && max_scroll > 0.5;
+            let page_state = self.pages.entry(view).or_default();
+            let newly_overflowing = overflowing && !page_state.overflowing;
+            page_state.overflowing = overflowing;
+            if newly_overflowing {
+                self.reveal_scrollbar(view, SCROLLBAR_FLASH, cx);
+            }
+            page = page.children(self.render_scroll_shades(
+                view,
+                overflowing && scroll > 0.5,
+                overflowing && max_scroll - scroll > 0.5,
+            ));
+            if overflowing {
+                page = page
+                    .child(self.render_scrollbar(view, scroll, max_scroll, viewport_height))
+                    .child(self.render_scrollbar_zone(view, cx));
+            }
+        }
+        page.into_any_element()
+    }
+
+    fn render_scrollbar(
+        &mut self,
+        view: PopupView,
+        scroll: f32,
+        max_scroll: f32,
+        viewport_height: f32,
+    ) -> Div {
+        let content = viewport_height + max_scroll;
+        let track = (viewport_height - 8.0).max(16.0);
+        let thumb = (track * viewport_height / content).clamp(24.0, track);
+        let top = 4.0 + (track - thumb) * (scroll / max_scroll.max(1.0));
+        let metrics = self.pages.get(&view);
+        let scrolling = (scroll - metrics.map_or(0.0, |m| m.scroll_target)).abs() > 0.5;
+        let revealed = metrics
+            .and_then(|m| m.reveal_until)
+            .is_some_and(|until| Instant::now() < until);
+        let shown =
+            scrolling || revealed || self.hovered(fx::key(("scrollbar-zone", view_key(view))));
+        // Hidden at rest; appears quickly and fades out more gently.
+        let visible = self.fx.value(
+            fx::key(("scrollbar", view_key(view))),
+            if shown { 1.0 } else { 0.0 },
+            if shown { fx::FAST } else { fx::NORMAL },
+        );
+        div()
+            .absolute()
+            .right(px(3.0))
+            .top(px(top))
+            .w(px(3.0))
+            .h(px(thumb))
+            .rounded(px(1.5))
+            .bg(self.palette.text_tertiary.opacity(0.7 * visible))
+    }
+
+    /// Invisible strip along the right edge; pointing at it shows the
+    /// scrollbar without revealing it for every pointer move over the page.
+    fn render_scrollbar_zone(&self, view: PopupView, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .id(ElementId::Name(
+                format!("popup-scrollbar-zone-{}", view_key(view)).into(),
+            ))
+            .absolute()
+            .top_0()
+            .bottom_0()
+            .right_0()
+            .w(px(SCROLLBAR_HOVER_ZONE))
+            .on_hover(self.hover_listener(fx::key(("scrollbar-zone", view_key(view))), None, cx))
+    }
+
+    /// Soft shadows at the viewport edges while content continues beyond
+    /// them. Shadows blend with every backdrop material, unlike a tint fade.
+    fn render_scroll_shades(&mut self, view: PopupView, above: bool, below: bool) -> Vec<Div> {
+        let top = self.fx.toggle(
+            fx::key(("scroll-shade-top", view_key(view))),
+            above,
+            fx::FAST,
+        );
+        let bottom = self.fx.toggle(
+            fx::key(("scroll-shade-bottom", view_key(view))),
+            below,
+            fx::FAST,
+        );
+        let strength = if self.palette.dark { 0.32 } else { 0.10 };
+        let shade = |alpha: f32| gpui::hsla(0.0, 0.0, 0.0, alpha);
+        let mut shades = Vec::new();
+        if top > 0.001 {
+            shades.push(
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(SCROLL_SHADE_HEIGHT))
+                    .bg(gpui::linear_gradient(
+                        180.0,
+                        gpui::linear_color_stop(shade(strength * top), 0.0),
+                        gpui::linear_color_stop(shade(0.0), 1.0),
+                    )),
+            );
+        }
+        if bottom > 0.001 {
+            shades.push(
+                div()
+                    .absolute()
+                    .bottom_0()
+                    .left_0()
+                    .right_0()
+                    .h(px(SCROLL_SHADE_HEIGHT))
+                    .bg(gpui::linear_gradient(
+                        180.0,
+                        gpui::linear_color_stop(shade(0.0), 0.0),
+                        gpui::linear_color_stop(shade(strength * bottom), 1.0),
+                    )),
+            );
+        }
+        shades
+    }
+
+    /// Body sections for one page.
+    fn build_body(
+        &mut self,
+        view: PopupView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let ui = Rc::clone(&self.ui);
+        let palette = self.palette.clone();
+        let mut body = Vec::new();
+        if let Some(error) = ui.error.as_deref() {
+            body.push(
+                components::info_bar(
+                    crate::i18n::tr("something-went-wrong"),
+                    crate::i18n::localize_error(error),
+                    Severity::Error,
+                    &palette,
+                )
+                .into_any_element(),
+            );
+        }
+        // One account's page shows its error; pages with several accounts
+        // show only bars that need a new sign-in, since their headings
+        // already mark other errors. Usage reads local logs, so provider
+        // errors don't apply to it.
+        let (accounts, every_error) = match view {
+            PopupView::Usage => (Vec::new(), false),
+            PopupView::Home => (ui.settings.enabled_providers(), false),
+            other => match self.page_provider(other) {
+                Some(provider) => (vec![provider], true),
+                None => (tab_members(&ui.settings.instances, other), false),
+            },
+        };
+        self.body_presence.clear();
+        for provider in accounts {
+            if let Some((bar, shown)) = self.account_bar(view, provider, every_error, cx) {
+                if shown < 1.0 {
+                    self.body_presence.push((body.len(), shown));
+                }
+                body.push(bar);
+            }
+        }
+        match view {
+            PopupView::Home => body.extend(self.render_home(window, cx)),
+            PopupView::Usage => body.push(self.render_usage_page(window, cx)),
+            other => body.extend(self.render_provider_page(other, window, cx)),
+        }
+        if !model::any_provider_enabled(&ui) {
+            body.push(
+                components::info_bar(
+                    crate::i18n::tr("no-providers-enabled"),
+                    crate::i18n::tr("turn-one-on-in-settings-providers"),
+                    Severity::Informational,
+                    &palette,
+                )
+                .into_any_element(),
+            );
+        }
+        body
+    }
+
+    pub(super) fn enabled_spend(&self) -> Vec<ProviderId> {
+        model::spend_providers(&self.ui)
+    }
+
+    pub(super) fn show_provider_tabs(&self) -> bool {
+        model::show_provider_tabs(&self.ui)
+    }
+
+    /// The single instance a page is about: the instance tab itself, or the
+    /// switcher's selection on a grouped tab. Stacked groups have none.
+    pub(super) fn page_provider(&self, view: PopupView) -> Option<ProviderId> {
+        match view {
+            PopupView::Provider(provider) => Some(provider),
+            PopupView::Group(driver)
+                if self.ui.settings.popup_tab_mode == PopupTabMode::GroupedSwitcher =>
+            {
+                model::selected_group_member(&self.ui, driver)
+            }
+            _ => None,
+        }
+    }
+
+    /// The bar for one account: its error, or a warning that its login is
+    /// about to end. Login problems carry a button that signs the account in
+    /// again into its own folder. `every_error` also shows other errors.
+    ///
+    /// Bars grow in and collapse out at their measured height; a cleared bar
+    /// keeps its last text while it collapses. Returns how shown it is.
+    fn account_bar(
+        &mut self,
+        view: PopupView,
+        provider: ProviderId,
+        every_error: bool,
+        cx: &mut Context<Self>,
+    ) -> Option<(AnyElement, f32)> {
+        let current = self.account_bar_spec(provider, every_error);
+        // Track every account every frame, so a bar that appears later
+        // animates in instead of starting fully shown.
+        let shown = self.fx.toggle(
+            fx::key(("account-bar", view_key(view), provider.id())),
+            current.is_some(),
+            fx::NORMAL,
+        );
+        let key = (view, provider);
+        let bar = match current {
+            Some(spec) => {
+                let bar = self.account_bars.entry(key).or_default();
+                bar.spec = Some(spec);
+                bar
+            }
+            None if shown > 0.001 => self.account_bars.get_mut(&key)?,
+            None => {
+                self.account_bars.remove(&key);
+                return None;
+            }
+        };
+        let spec = bar.spec.clone()?;
+        let measured = Rc::clone(&bar.height);
+        let palette = self.palette.clone();
+        let action = spec.action.then(|| self.sign_in_button(provider, cx));
+        let content = components::info_bar_with_action(
+            spec.title,
+            spec.message,
+            spec.severity,
+            &palette,
+            action,
+        );
+        let height = measured.get();
+        let probe = canvas(
+            move |bounds, window, _| {
+                let natural = f32::from(bounds.size.height);
+                if measured.get() != natural {
+                    measured.set(natural);
+                    window.request_animation_frame();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full();
+        let mut element = div()
+            .overflow_hidden()
+            .opacity(shown)
+            .child(div().relative().flex_shrink_0().child(content).child(probe));
+        if shown < 1.0 {
+            element = element.h(px(height * shown));
+        }
+        Some((element.into_any_element(), shown))
+    }
+
+    /// What the account's bar should say now, if anything.
+    fn account_bar_spec(&self, provider: ProviderId, every_error: bool) -> Option<AccountBarSpec> {
+        let ui = &self.ui;
+        let error = ui.provider_error(provider);
+        let notice = ui.settings.instance(provider).and_then(|instance| {
+            model::login_notice(instance, error, self.limits.get(provider), Utc::now())
+        });
+        let name = provider.qualified_name();
+        let (title, message, severity) = match (notice, error) {
+            (Some(LoginNotice::Expiring { days_left }), _) => (
+                crate::i18n::format(
+                    "name-login-expires-in-days-left",
+                    &[
+                        ("name", name.to_string()),
+                        ("days_left", days_left.to_string()),
+                    ],
+                ),
+                crate::i18n::tr("sign-in-again-to-keep-limits-updating").to_owned(),
+                Severity::Caution,
+            ),
+            (Some(LoginNotice::SignInNeeded), Some(error)) => (
+                crate::i18n::format("name-error", &[("name", name.to_string())]),
+                crate::i18n::localize_error(error),
+                Severity::Error,
+            ),
+            (None, Some(error)) if every_error => (
+                crate::i18n::format("name-error", &[("name", name.to_string())]),
+                crate::i18n::localize_error(error),
+                Severity::Error,
+            ),
+            _ => return None,
+        };
+        Some(AccountBarSpec {
+            title,
+            message,
+            severity,
+            action: notice.is_some(),
+        })
+    }
+
+    fn sign_in_button(&mut self, provider: ProviderId, cx: &mut Context<Self>) -> AnyElement {
+        let palette = self.palette.clone();
+        let hover_id = fx::key(("sign-in-again", provider.id()));
+        let hovered = self.hovered(hover_id);
+        let hover = self
+            .fx
+            .toggle(fx::key(("sign-in-again-fx", hover_id)), hovered, fx::FASTER);
+        div()
+            .id(eid(format!("sign-in-again-{}", provider.id())))
+            .h(px(28.0))
+            .px(px(12.0))
+            .flex()
+            .items_center()
+            .rounded(px(4.0))
+            // WinUI accent buttons fade to 90% on hover.
+            .bg(palette.accent.opacity(1.0 - 0.1 * hover))
+            .on_hover(self.hover_listener(hover_id, None, cx))
+            .on_click(move |_: &gpui::ClickEvent, _, _| {
+                crate::ui::settings_window::open_sign_in(provider);
+            })
+            .child(components::body_strong(
+                crate::i18n::tr("sign-in-again"),
+                palette.text_on_accent,
+            ))
+            .into_any_element()
+    }
+
+    /// Provider tab content: one instance, or every instance of a stacked
+    /// group with a badge + name header per instance.
+    fn render_provider_page(
+        &mut self,
+        view: PopupView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let gap = self.card_gap();
+        let members = match self.page_provider(view) {
+            Some(provider) => vec![provider],
+            None => tab_members(&self.ui.settings.instances, view),
+        };
+        let stacked = members.len() > 1;
+        let ui = Rc::clone(&self.ui);
+        let limits = Rc::clone(&self.limits);
+        let forced_resets = Rc::clone(&self.forced_resets);
+        let provider_statuses = Rc::clone(&self.provider_statuses);
+        let mut sections = Vec::with_capacity(members.len());
+        for (index, provider) in members.into_iter().enumerate() {
+            // A stacked page has no page-wide bar for one instance; each
+            // section's heading carries its own error marker.
+            let options = self.card_options(
+                &ui,
+                &provider_statuses,
+                provider,
+                PopupSurface::ProviderTab,
+                false,
+            );
+            let openrouter = provider.kind() == ProviderKind::OpenRouter;
+            // A New key or reveal page replaces this account's section.
+            if openrouter && let Some(page) = self.render_key_page(provider, window, cx) {
+                sections.push(
+                    div()
+                        .id(eid(format!("provider-key-page-{}", provider.id())))
+                        .child(page)
+                        .into_any_element(),
+                );
+                continue;
+            }
+            let cards = provider_cards(
+                provider,
+                index == 0,
+                stacked,
+                limits.get(provider),
+                &forced_resets,
+                &options,
+            );
+            let mut children = self.render_cards(&cards, PopupSurface::ProviderTab, window, cx);
+            // Before the first quota sample there is no account strip to
+            // carry the key list, so it follows the heading on its own.
+            if openrouter
+                && !cards.iter().any(model::Card::has_key_list)
+                && let Some(account) = self.openrouter_account(provider)
+                && let Some(keys) = self.render_keys_section(provider, &account.id, window, cx)
+            {
+                children.push(keys);
+            }
+            sections.push(
+                div()
+                    .id(eid(format!("provider-section-{}", provider.id())))
+                    .flex()
+                    .flex_col()
+                    .gap(px(gap))
+                    .children(children)
+                    .into_any_element(),
+            );
+        }
+        sections
+    }
+
+    pub(super) fn card_style(&self) -> CardStyle {
+        CardStyle {
+            show_used_percentage: self.ui.settings.show_used_percentage,
+            show_usage_values: self.ui.settings.show_usage_values,
+            show_usage_pace: self.ui.settings.show_usage_pace,
+            compact: true,
+        }
+    }
+
+    /// Instance switcher pinned above the footer for a grouped tab.
+    fn render_profile_strip(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Div {
+        let PopupView::Group(driver) = self.pager.current else {
+            return div();
+        };
+        let members = self.ui.enabled_instances_of(driver);
+        let selected_id = model::selected_group_member(&self.ui, driver);
+        let membership_changed = self.profile_members != members;
+        if membership_changed {
+            self.profile_members = members.clone();
+            self.profile_scroll.set_offset(point(px(0.0), px(0.0)));
+        }
+        if membership_changed || self.profile_selected != selected_id {
+            self.profile_selected = selected_id;
+            if let Some(index) = members
+                .iter()
+                .position(|member| Some(*member) == selected_id)
+            {
+                self.profile_scroll.scroll_to_item(index / PROFILE_COLUMNS);
+            }
+        }
+        let mut grid = div()
+            .id("profile-grid-scroll")
+            .h_full()
+            .w_full()
+            .overflow_y_scroll()
+            .track_scroll(&self.profile_scroll)
+            .flex()
+            .flex_col()
+            .gap(px(PROFILE_ROW_GAP));
+        for (row, selected) in profile_rows(&members, selected_id) {
+            let key = fx::key((
+                "profiles",
+                driver.id(),
+                row.iter().map(|member| member.id()).collect::<Vec<_>>(),
+            ));
+            grid = grid.child(self.profile_row_control(key, row, selected, driver, window, cx));
+        }
+        // The tight edge faces the footer, above or below the strip.
+        let (pad_top, pad_bottom) = if self.host.placement.top {
+            (10.0, 2.0)
+        } else {
+            (2.0, 10.0)
+        };
+        div()
+            .flex_none()
+            .h(px(self.profile_height))
+            .px(px(16.0))
+            .pt(px(pad_top))
+            .pb(px(pad_bottom))
+            .child(grid)
+    }
+}
+
+/// Element id helper.
+pub(super) fn eid(value: impl Into<String>) -> ElementId {
+    ElementId::Name(SharedString::from(value.into()))
+}
+
+#[cfg(test)]
+mod geometry_tests {
+    use super::*;
+
+    #[test]
+    fn resize_height_is_limited_by_content_and_screen_without_forcing_empty_space() {
+        assert_eq!(popup_height_bounds(300.0, 60.0, 1080.0), (160.0, 360.0));
+        assert_eq!(popup_height_bounds(2000.0, 100.0, 1080.0), (164.0, 1080.0));
+        assert_eq!(popup_height_bounds(20.0, 80.0, 1080.0), (100.0, 100.0));
+        assert_eq!(popup_height_bounds(2000.0, 100.0, 120.0), (120.0, 120.0));
+    }
+
+    #[test]
+    fn profile_rows_fill_each_row_and_select_only_the_matching_stable_id() {
+        for count in [0_usize, 1, 2, 3, 4, 5, 6, 7, 8, 9, 1_000] {
+            let members = (0..count).collect::<Vec<_>>();
+            let selected = count.checked_sub(1);
+            let rows = profile_rows(&members, selected);
+            assert_eq!(rows.len(), count.div_ceil(4));
+            assert_eq!(
+                rows.iter()
+                    .flat_map(|(row, _)| row)
+                    .copied()
+                    .collect::<Vec<_>>(),
+                members
+            );
+            for (row, active) in &rows {
+                assert!((1..=4).contains(&row.len()));
+                if let Some(index) = active {
+                    assert_eq!(Some(row[*index]), selected);
+                }
+            }
+            assert_eq!(
+                rows.iter().filter(|(_, active)| active.is_some()).count(),
+                usize::from(count > 0)
+            );
+        }
+        let rows = profile_rows(&[5, 4, 3, 2, 1], Some(1));
+        assert_eq!(rows[0].1, None);
+        assert_eq!(rows[1], (vec![1], Some(0)));
+        assert_eq!(profile_grid_height(4), 46.0);
+        assert_eq!(profile_grid_height(5), 86.0);
+        assert_eq!(profile_grid_height(9), 126.0);
+    }
+
+    #[test]
+    fn page_height_rounds_up_to_physical_pixels_without_layout_noise() {
+        assert_eq!(measured_page_height(87.4, 1.5), 88.0);
+        assert_eq!(
+            measured_page_height(169.001, 1.0),
+            measured_page_height(169.0, 1.0)
+        );
+        assert_eq!(measured_page_height(0.0, 1.0), PAGE_PADDING * 2.0);
+        for (scale, expected) in [(1.0, 169.0), (1.25, 169.6), (1.5, 169.33333), (2.0, 169.0)] {
+            assert_eq!(measured_page_height(169.0, scale), expected);
+        }
+    }
+
+    #[test]
+    fn repeated_page_measurements_leave_the_shell_spring_settled() {
+        let started = Instant::now();
+        let mut spring = Spring::at(300.0);
+        let target = measured_page_height(169.0, 1.0) + 62.0;
+        for frame in 0..180 {
+            let measured = measured_page_height(169.0 + (frame % 2) as f32 * 0.001, 1.0) + 62.0;
+            spring.retarget(f64::from(measured));
+            spring.step(started + Duration::from_millis(frame * 16));
+            if frame >= 120 {
+                assert!(spring.settled);
+                assert_eq!(spring.position, f64::from(target));
+                assert_eq!(spring.velocity, 0.0);
+            }
+        }
+    }
+}

@@ -1,7 +1,7 @@
 // Codex Minibar top-bar indicator.
 //
 // A thin client of the app's session D-Bus service
-// (io.github.vertopolkalf.CodexMinibar1, see src/linux/dbus.rs): it shows the
+// (io.github.vertopolkalf.CodexMinibar1, see src/platform/linux/dbus.rs): it shows the
 // tray's default quotas of each enabled provider as the app writes them, in
 // the app's language and remaining/used preference, and updates on the
 // service's Changed signal. The indicator hides while the app is not running.

@@ -2,7 +2,7 @@
 
 Remotion compositions that rebuild the popup, notifications and Usage tab in
 React for patch notes and the launch video. Colors, sizes, timings, icons and
-sounds come from the app (`src/popup_window/ui/theme.rs`, `toast.rs`,
+sounds come from the app (`src/ui/popup_window/ui/theme.rs`, `toast.rs`,
 `components.rs`, `assets/`); strings come from `locales/*/app.ftl`. All
 account names and numbers are placeholders from `src/data.ts`.
 

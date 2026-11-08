@@ -1,0 +1,505 @@
+//! LiteLLM-backed API-equivalent token pricing.
+//!
+//! The catalog is cached locally so usage scans keep working offline. A model
+//! without a complete rate entry remains unpriced instead of borrowing a rate
+//! from an unrelated model.
+
+#[cfg(not(test))]
+use std::sync::Mutex;
+use std::time::Duration as StdDuration;
+use std::{
+    collections::HashMap,
+    sync::{
+        OnceLock, RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
+
+#[cfg(not(test))]
+use anyhow::bail;
+use anyhow::{Context, Result};
+#[cfg(not(test))]
+use chrono::Duration;
+use chrono::{DateTime, Utc};
+use serde_json::Value;
+
+use crate::{providers::registry::ProviderKind, store, usage::TokenUsage};
+
+#[cfg(not(test))]
+const LITELLM_RATES_URL: &str =
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const RATES_SOURCE: &str = "litellm";
+#[cfg(not(test))]
+const RATES_TTL: Duration = Duration::hours(24);
+
+/// First retry after a failed download; doubles per consecutive failure.
+const RETRY_BASE: StdDuration = StdDuration::from_secs(15 * 60);
+/// Upper bound of the failure backoff.
+const RETRY_MAX: StdDuration = StdDuration::from_secs(4 * 60 * 60);
+
+static CATALOG: OnceLock<RwLock<Option<PricingCatalog>>> = OnceLock::new();
+/// Bumped whenever a different catalog is installed. Repricing compares it
+/// with the generation it last healed, so it only reruns for a new catalog.
+static CATALOG_GENERATION: AtomicU64 = AtomicU64::new(0);
+#[cfg(not(test))]
+static REFRESH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+/// `(consecutive failures, no attempt before)` of the catalog download.
+#[cfg(not(test))]
+static REFRESH_BACKOFF: Mutex<(u32, Option<std::time::Instant>)> = Mutex::new((0, None));
+
+/// Delay before the next download attempt after `failures` consecutive
+/// failures: 15 min, 30 min, 1 h, 2 h, then 4 h.
+fn retry_delay(failures: u32) -> StdDuration {
+    let shift = failures.saturating_sub(1).min(16);
+    RETRY_BASE
+        .checked_mul(1u32 << shift)
+        .unwrap_or(RETRY_MAX)
+        .min(RETRY_MAX)
+}
+
+/// Identifies the installed catalog; `0` while none is loaded.
+// Only the non-test worker loop reprices.
+#[cfg_attr(test, allow(dead_code))]
+pub(crate) fn catalog_generation() -> u64 {
+    CATALOG_GENERATION.load(Ordering::Acquire)
+}
+
+fn install_catalog(catalog: PricingCatalog) {
+    *catalog_slot()
+        .write()
+        .expect("pricing catalog lock poisoned") = Some(catalog);
+    CATALOG_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
+
+#[derive(Clone, Debug)]
+struct PricingCatalog {
+    // Only the non-test refresh path checks staleness.
+    #[cfg_attr(test, allow(dead_code))]
+    fetched_at: DateTime<Utc>,
+    rates: HashMap<String, ModelRate>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ModelRate {
+    input_per_token: f64,
+    output_per_token: f64,
+    cache_read_per_token: f64,
+    cache_creation_per_token: f64,
+}
+
+fn catalog_slot() -> &'static RwLock<Option<PricingCatalog>> {
+    CATALOG.get_or_init(|| RwLock::new(None))
+}
+
+/// Hydrates the last successful rate table before the UI is created.
+pub fn initialize() -> Result<()> {
+    let Some((fetched_at_raw, payload)) =
+        store::with_store(|store| store.load_pricing_catalog(RATES_SOURCE))?
+    else {
+        return Ok(());
+    };
+    let fetched_at = DateTime::parse_from_rfc3339(&fetched_at_raw)
+        .context("parse cached LiteLLM pricing timestamp")?
+        .with_timezone(&Utc);
+    let document: Value =
+        serde_json::from_str(&payload).context("parse cached LiteLLM pricing document")?;
+    let rates = parse_rate_table(&document);
+    if !rates.is_empty() {
+        install_catalog(PricingCatalog { fetched_at, rates });
+    }
+    Ok(())
+}
+
+/// Refreshes the shared table at most once per day. Network access is kept out
+/// of tests; a missing table then produces explicit unpriced usage.
+///
+/// Returns `Ok(true)` when a new catalog was installed. A failed download backs
+/// off (15 min doubling up to 4 h) so an offline machine does not retry a slow
+/// request on every usage refresh, and a worker that finds another provider's
+/// download in flight skips instead of queueing behind it.
+#[cfg(not(test))]
+pub(crate) fn refresh_if_stale() -> Result<bool> {
+    let Ok(_refresh_guard) = REFRESH_LOCK.get_or_init(|| Mutex::new(())).try_lock() else {
+        return Ok(false);
+    };
+    let stale = catalog_slot()
+        .read()
+        .expect("pricing catalog lock poisoned")
+        .as_ref()
+        .is_none_or(|catalog| Utc::now() - catalog.fetched_at >= RATES_TTL);
+    if !stale {
+        return Ok(false);
+    }
+    if REFRESH_BACKOFF
+        .lock()
+        .expect("pricing backoff lock poisoned")
+        .1
+        .is_some_and(|not_before| std::time::Instant::now() < not_before)
+    {
+        return Ok(false);
+    }
+
+    let result = download_catalog();
+    let mut backoff = REFRESH_BACKOFF
+        .lock()
+        .expect("pricing backoff lock poisoned");
+    match &result {
+        Ok(()) => *backoff = (0, None),
+        Err(_) => {
+            let failures = backoff.0.saturating_add(1);
+            *backoff = (
+                failures,
+                Some(std::time::Instant::now() + retry_delay(failures)),
+            );
+        }
+    }
+    result.map(|()| true)
+}
+
+#[cfg(not(test))]
+fn download_catalog() -> Result<()> {
+    let agent = crate::platform::net::native_tls_agent()
+        .timeout(StdDuration::from_secs(10))
+        .build();
+    let payload = agent
+        .get(LITELLM_RATES_URL)
+        .set("Accept", "application/json")
+        .call()
+        .context("request LiteLLM pricing table")?
+        .into_string()
+        .context("read LiteLLM pricing table")?;
+    let document: Value = serde_json::from_str(&payload).context("parse LiteLLM pricing table")?;
+    let rates = parse_rate_table(&document);
+    if rates.is_empty() {
+        bail!("LiteLLM pricing table contains no complete model rates");
+    }
+    let fetched_at = Utc::now();
+    store::with_store(|store| store.save_pricing_catalog(RATES_SOURCE, fetched_at, &payload))?;
+    install_catalog(PricingCatalog { fetched_at, rates });
+    Ok(())
+}
+
+/// Token counts of one request. `input` is every prompt token, including the
+/// `cache_read` and `cache_creation` subsets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RequestTokens {
+    pub input: u64,
+    pub cache_read: u64,
+    pub cache_creation: u64,
+    pub output: u64,
+}
+
+impl RequestTokens {
+    fn uncached_input(self) -> u64 {
+        self.input
+            .saturating_sub(self.cache_read)
+            .saturating_sub(self.cache_creation)
+    }
+}
+
+/// `(cost, cache savings)` of a request at the installed catalog's API rates;
+/// `None` while the model has no rate.
+pub(crate) fn price(
+    provider: ProviderKind,
+    model: &str,
+    tokens: RequestTokens,
+) -> Option<(u64, u64)> {
+    let catalog = catalog_slot()
+        .read()
+        .expect("pricing catalog lock poisoned");
+    price_with(catalog.as_ref()?, provider, model, tokens)
+}
+
+/// One request's usage. A cost the provider reported wins over the catalog
+/// estimate; cache savings always come from the catalog.
+pub(crate) fn request_usage(
+    provider: ProviderKind,
+    model: Option<&str>,
+    tokens: RequestTokens,
+    reported_cost_microusd: Option<u64>,
+) -> TokenUsage {
+    let priced = model.and_then(|model| price(provider, model, tokens));
+    let cost = reported_cost_microusd.or(priced.map(|(cost, _)| cost));
+    TokenUsage {
+        input_tokens: tokens.input,
+        cached_input_tokens: tokens.cache_read,
+        output_tokens: tokens.output,
+        requests: 1,
+        estimated_cost_microusd: cost.unwrap_or_default(),
+        priced_requests: u64::from(cost.is_some()),
+        cache_savings_microusd: priced.map_or(0, |(_, savings)| savings),
+    }
+}
+
+fn price_with(
+    catalog: &PricingCatalog,
+    provider: ProviderKind,
+    model: &str,
+    tokens: RequestTokens,
+) -> Option<(u64, u64)> {
+    let model = model.trim();
+    if model.is_empty() {
+        return None;
+    }
+    let rate = lookup_rate(catalog, provider, model)?;
+    let cost_usd = tokens.uncached_input() as f64 * rate.input_per_token
+        + tokens.cache_read as f64 * rate.cache_read_per_token
+        + tokens.cache_creation as f64 * rate.cache_creation_per_token
+        + tokens.output as f64 * rate.output_per_token;
+    let savings_usd = tokens.cache_read as f64 * (rate.input_per_token - rate.cache_read_per_token);
+    Some((
+        crate::format::money::from_usd(cost_usd),
+        crate::format::money::from_usd(savings_usd),
+    ))
+}
+
+fn parse_rate_table(document: &Value) -> HashMap<String, ModelRate> {
+    let mut table = HashMap::new();
+    let Some(entries) = document.as_object() else {
+        return table;
+    };
+    for (name, value) in entries {
+        let Some(entry) = value.as_object() else {
+            continue;
+        };
+        let Some(input) = finite_number(entry.get("input_cost_per_token")) else {
+            continue;
+        };
+        let Some(output) = finite_number(entry.get("output_cost_per_token")) else {
+            continue;
+        };
+        let key = name.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            continue;
+        }
+        table.insert(
+            key,
+            ModelRate {
+                input_per_token: input,
+                output_per_token: output,
+                cache_read_per_token: finite_number(entry.get("cache_read_input_token_cost"))
+                    .unwrap_or(input),
+                cache_creation_per_token: finite_number(
+                    entry.get("cache_creation_input_token_cost"),
+                )
+                .unwrap_or(input),
+            },
+        );
+    }
+
+    let mut aliases: HashMap<String, Option<ModelRate>> = HashMap::new();
+    for (key, rate) in &table {
+        let alias = bare_model_name(key);
+        if alias == *key || table.contains_key(alias) {
+            continue;
+        }
+        match aliases.get(alias) {
+            None => {
+                aliases.insert(alias.to_owned(), Some(*rate));
+            }
+            Some(Some(existing)) if existing == rate => {}
+            Some(_) => {
+                aliases.insert(alias.to_owned(), None);
+            }
+        }
+    }
+    for (alias, rate) in aliases {
+        if let Some(rate) = rate {
+            table.insert(alias, rate);
+        }
+    }
+    table
+}
+
+fn finite_number(value: Option<&Value>) -> Option<f64> {
+    value
+        .and_then(Value::as_f64)
+        .filter(|value| value.is_finite() && *value >= 0.0)
+}
+
+fn lookup_rate(
+    catalog: &PricingCatalog,
+    provider: ProviderKind,
+    raw_model: &str,
+) -> Option<ModelRate> {
+    let mut key = raw_model.to_ascii_lowercase();
+    if provider == ProviderKind::Cursor {
+        // Cursor's Auto and Composer lanes are billed against the same
+        // underlying model bucket as Grok 4.5. LiteLLM intentionally has no
+        // public Cursor-specific entries for these UI labels.
+        if matches!(key.as_str(), "auto" | "composer-2.5") {
+            key = "grok-4.5".into();
+        }
+    }
+    if is_unpriceable_model(&key) {
+        return None;
+    }
+    if let Some(rate) = catalog.rates.get(&key).copied() {
+        return Some(rate);
+    }
+    let candidates = crate::providers::registry::descriptor(provider)
+        .pricing_prefixes
+        .iter()
+        .map(|prefix| format!("{prefix}/{key}"));
+    let mut resolved = None;
+    for candidate in candidates {
+        let Some(rate) = catalog.rates.get(&candidate).copied() else {
+            continue;
+        };
+        if resolved.is_some_and(|existing| existing != rate) {
+            return None;
+        }
+        resolved = Some(rate);
+    }
+    resolved
+}
+
+fn bare_model_name(key: &str) -> &str {
+    key.rsplit('/').next().unwrap_or(key)
+}
+
+fn is_unpriceable_model(model: &str) -> bool {
+    matches!(
+        bare_model_name(model),
+        "<synthetic>" | "synthetic" | "opus" | "sonnet" | "haiku" | "fable"
+    )
+}
+
+/// Test-only pricer over a private catalog, so repricing tests never touch
+/// the process-wide catalog other tests rely on being empty.
+#[cfg(test)]
+pub(crate) fn test_pricer(
+    document: &Value,
+) -> impl Fn(ProviderKind, &str, RequestTokens) -> Option<(u64, u64)> + use<> {
+    let catalog = PricingCatalog {
+        fetched_at: Utc::now(),
+        rates: parse_rate_table(document),
+    };
+    move |provider, model, tokens| price_with(&catalog, provider, model, tokens)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn retry_delay_doubles_up_to_the_cap() {
+        let minutes = |failures| retry_delay(failures).as_secs() / 60;
+        assert_eq!(minutes(1), 15);
+        assert_eq!(minutes(2), 30);
+        assert_eq!(minutes(3), 60);
+        assert_eq!(minutes(5), 240);
+        assert_eq!(minutes(40), 240);
+    }
+
+    /// Cost of `(cache creation, uncached input, cache read, output)` tokens.
+    fn cost(
+        catalog: &PricingCatalog,
+        provider: ProviderKind,
+        model: &str,
+        cache_creation: u64,
+        uncached: u64,
+        cache_read: u64,
+        output: u64,
+    ) -> Option<u64> {
+        let tokens = RequestTokens {
+            input: uncached + cache_read + cache_creation,
+            cache_read,
+            cache_creation,
+            output,
+        };
+        price_with(catalog, provider, model, tokens).map(|(cost, _)| cost)
+    }
+
+    fn catalog(document: Value) -> PricingCatalog {
+        PricingCatalog {
+            fetched_at: Utc::now(),
+            rates: parse_rate_table(&document),
+        }
+    }
+
+    #[test]
+    fn prices_token_categories_and_does_not_charge_reasoning_twice() {
+        let catalog = catalog(json!({
+            "gpt-6-astra": {
+                "input_cost_per_token": 0.00001,
+                "output_cost_per_token": 0.00005,
+                "cache_read_input_token_cost": 0.000001,
+                "cache_creation_input_token_cost": 0.0000125
+            }
+        }));
+        assert_eq!(
+            cost(
+                &catalog,
+                ProviderKind::Codex,
+                "gpt-6-astra",
+                100,
+                200,
+                300,
+                400,
+            ),
+            Some(23_550)
+        );
+    }
+
+    #[test]
+    fn keeps_unknown_and_ambiguous_models_unpriced() {
+        let catalog = catalog(json!({
+            "openai/example": {
+                "input_cost_per_token": 0.000001,
+                "output_cost_per_token": 0.000002
+            },
+            "anthropic/example": {
+                "input_cost_per_token": 0.000003,
+                "output_cost_per_token": 0.000004
+            }
+        }));
+        assert_eq!(
+            cost(&catalog, ProviderKind::Codex, "missing", 0, 1, 0, 1),
+            None
+        );
+        assert_eq!(
+            cost(&catalog, ProviderKind::Cursor, "example", 0, 1, 0, 1),
+            None
+        );
+    }
+
+    #[test]
+    fn cursor_reuses_the_same_anthropic_rate_for_a_bare_model_name() {
+        let catalog = catalog(json!({
+            "anthropic/claude-opus-5": {
+                "input_cost_per_token": 0.000005,
+                "output_cost_per_token": 0.000025
+            }
+        }));
+        assert_eq!(
+            cost(
+                &catalog,
+                ProviderKind::Cursor,
+                "claude-opus-5",
+                0,
+                1_000,
+                0,
+                100,
+            ),
+            Some(7_500)
+        );
+    }
+
+    #[test]
+    fn cursor_maps_auto_and_composer_to_grok_rate() {
+        let catalog = catalog(json!({
+            "xai/grok-4.5": {
+                "input_cost_per_token": 0.000002,
+                "output_cost_per_token": 0.000006
+            }
+        }));
+        for model in ["auto", "composer-2.5"] {
+            assert_eq!(
+                cost(&catalog, ProviderKind::Cursor, model, 0, 1_000, 0, 100),
+                Some(2_600)
+            );
+        }
+    }
+}

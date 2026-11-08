@@ -1,0 +1,1390 @@
+use std::collections::HashSet;
+
+use chrono::TimeZone;
+
+use super::model::*;
+use super::*;
+use crate::providers::worker::RequestKind;
+use crate::quota::limits::OpenRouterAccountSnapshot;
+use crate::settings::choice::Choice;
+use crate::settings::{PopupSurface, PopupVisibility};
+
+fn id(kind: ProviderKind) -> ProviderId {
+    ProviderId::primary(kind)
+}
+
+/// The popup state the bridge would publish for `settings`.
+fn ui_from(settings: &Settings) -> UiState {
+    UiState::new(settings.clone())
+}
+
+fn plan_limits(plan_type: &str) -> RateLimits {
+    RateLimits {
+        plan_type: Some(plan_type.into()),
+        primary: LimitWindow {
+            used_percent: Some(20),
+            ..Default::default()
+        },
+        secondary: LimitWindow {
+            used_percent: Some(40),
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn test_cards<'a>(
+    provider: ProviderKind,
+    is_first: bool,
+    limits: &'a RateLimits,
+    visibility: &PopupVisibility,
+    surface: PopupSurface,
+    show_provider_tabs: bool,
+    include_usage_stats: bool,
+    show_account_name: bool,
+) -> Vec<Card<'a>> {
+    provider_cards(
+        provider.into(),
+        is_first,
+        false,
+        limits,
+        &[],
+        &CardOptions {
+            keep_reset_card: false,
+            popup_visibility: visibility,
+            surface,
+            show_provider_tabs,
+            include_usage_stats,
+            show_account_name,
+            drag_handle: false,
+            provider_error: None,
+            provider_status: None,
+            now: Utc::now(),
+        },
+    )
+}
+
+fn all_visible() -> PopupVisibility {
+    PopupVisibility::build_defaults()
+}
+
+fn visibility_with(brick_id: &str, all_tab: bool, provider_tab: bool) -> PopupVisibility {
+    let mut visibility = PopupVisibility::build_defaults();
+    visibility.set_brick(brick_id, all_tab, provider_tab);
+    visibility
+}
+
+/// Every card, including the ones nested inside groups.
+fn flat<'a>(cards: &'a [Card<'a>]) -> impl Iterator<Item = &'a Card<'a>> {
+    cards
+        .iter()
+        .flat_map(|card| std::iter::once(card).chain(card.nested().iter()))
+}
+
+fn has_usage_statistics(cards: &[Card<'_>]) -> bool {
+    flat(cards).any(Card::is_usage_statistics)
+}
+
+fn has_banked_resets(cards: &[Card<'_>]) -> bool {
+    flat(cards).any(|card| matches!(card, Card::BankedResets { .. }))
+}
+
+fn assert_unique_section_keys(sections: &[PopupSection]) {
+    let keys: HashSet<_> = sections.iter().map(|section| section.key()).collect();
+    assert_eq!(
+        keys.len(),
+        sections.len(),
+        "popup sections must not duplicate"
+    );
+}
+
+#[test]
+fn last_activation_uses_window_start() {
+    let primary = LimitWindow {
+        used_percent: Some(1),
+        resets_at: Some(chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 7, 10, 16, 8, 0).unwrap()),
+        duration_minutes: Some(300),
+    };
+    assert_eq!(
+        window_started_at(&primary),
+        Some(chrono::TimeZone::with_ymd_and_hms(&Utc, 2026, 7, 10, 11, 8, 0).unwrap())
+    );
+    assert_eq!(
+        format_last_activation(&RateLimits::default(), None),
+        "Never"
+    );
+}
+
+#[test]
+fn expired_at_includes_date_only_when_not_today() {
+    let today = Local::now().date_naive();
+    let today_at = Local
+        .from_local_datetime(&today.and_hms_opt(7, 8, 0).unwrap())
+        .single()
+        .unwrap();
+    let yesterday_at = today_at - ChronoDuration::days(1);
+    let time_format = TimeFormat::current();
+
+    assert_eq!(
+        format_expired_at(today_at.with_timezone(&Utc)),
+        format!("expired at {}", time_format.format_hm(today_at))
+    );
+    assert_eq!(
+        format_expired_at(yesterday_at.with_timezone(&Utc)),
+        format!(
+            "expired at {} {}",
+            time_format.format_hm(yesterday_at),
+            yesterday_at.format("%d.%m")
+        )
+    );
+}
+
+#[test]
+fn unavailable_sample_has_clear_copy() {
+    assert_eq!(
+        format_last_updated(DateTime::default(), 0),
+        "Waiting for first update"
+    );
+    assert_eq!(format_reset_in(None), "Unavailable");
+}
+
+#[test]
+fn spend_donut_segments_cover_the_ring_with_gaps() {
+    let segments = ui::donut_segments(
+        &[
+            (id(ProviderKind::Cursor), 2_000_000),
+            (id(ProviderKind::Claude), 1_000_000),
+            (id(ProviderKind::Codex), 500_000),
+        ],
+        3_500_000,
+    );
+    assert_eq!(segments.len(), 3);
+    assert_eq!(segments[0].0, Some(id(ProviderKind::Cursor)));
+    // Each slice keeps half of a 2° gap on both ends.
+    assert!((segments[0].1 - -89.0).abs() < 1e-3);
+    let sweep: f32 = segments.iter().map(|(_, start, end)| end - start).sum();
+    assert!((sweep - (360.0 - 6.0)).abs() < 1e-2);
+    assert_eq!(ui::donut_segments(&[], 0), vec![(None, -90.0, 270.0)]);
+    assert_eq!(
+        ui::donut_segments(&[(id(ProviderKind::Codex), 5)], 5),
+        vec![(Some(id(ProviderKind::Codex)), -90.0, 270.0)]
+    );
+}
+
+#[test]
+fn usage_statistics_section_respects_its_live_toggle() {
+    let limits = RateLimits {
+        usage: crate::usage::UsageStatistics {
+            history: crate::usage::TokenUsage {
+                requests: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    assert!(
+        popup_sections(ProviderKind::OpenCodeZen, &limits, false)
+            .contains(&PopupSection::UsageStatistics)
+    );
+    let excluded_from_home = all_visible();
+    let home_cards = test_cards(
+        ProviderKind::OpenCodeZen,
+        true,
+        &limits,
+        &excluded_from_home,
+        PopupSurface::HomeTab,
+        true,
+        false,
+        false,
+    );
+    assert!(!has_usage_statistics(&home_cards));
+
+    let provider_page_cards = test_cards(
+        ProviderKind::OpenCodeZen,
+        true,
+        &limits,
+        &excluded_from_home,
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        false,
+    );
+    assert!(has_usage_statistics(&provider_page_cards));
+
+    let mut hidden_usage = all_visible();
+    hidden_usage.set_brick("opencode.usage", false, false);
+    let cards = test_cards(
+        ProviderKind::OpenCodeZen,
+        true,
+        &limits,
+        &hidden_usage,
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        false,
+    );
+    assert!(!has_usage_statistics(&cards));
+}
+
+#[test]
+fn total_spend_counts_enabled_instances_with_usage_statistics() {
+    let mut settings = Settings::default();
+    settings.set_enabled(id(ProviderKind::Codex), true);
+    settings.set_enabled(id(ProviderKind::Claude), true);
+    let ui = ui_from(&settings);
+    assert_eq!(spend_providers(&ui).len(), 2);
+    assert!(show_total_spend(&ui));
+    settings.set_usage_stats_provider_enabled(id(ProviderKind::Codex), false);
+    let ui = ui_from(&settings);
+    assert_eq!(spend_providers(&ui), vec![id(ProviderKind::Claude)]);
+    assert!(!show_total_spend(&ui));
+    // A second Claude instance counts on its own.
+    let work = settings.add_instance(ProviderInstance::new(ProviderKind::Claude, "Work"));
+    let ui = ui_from(&settings);
+    assert_eq!(spend_providers(&ui), vec![id(ProviderKind::Claude), work]);
+}
+
+#[test]
+fn exhausted_limit_is_compact_in_both_percentage_modes() {
+    let exhausted = LimitWindow {
+        used_percent: Some(100),
+        ..Default::default()
+    };
+
+    let (used_label, used_progress, _, used_compact) =
+        limit_card_presentation(&exhausted, true, false);
+    assert_eq!(used_label, "100% used");
+    assert_eq!(used_progress, 100.0);
+    assert!(used_compact);
+
+    let (left_label, left_progress, _, left_compact) =
+        limit_card_presentation(&exhausted, false, false);
+    assert_eq!(left_label, "0% left");
+    assert_eq!(left_progress, 0.0);
+    assert!(left_compact);
+
+    let fresh = LimitWindow {
+        used_percent: Some(0),
+        ..Default::default()
+    };
+    let (_, _, _, fresh_compact) = limit_card_presentation(&fresh, false, false);
+    assert!(!fresh_compact);
+}
+
+#[test]
+fn popup_visibility_hides_codex_resets_on_all_but_shows_on_provider_tab() {
+    let mut limits = plan_limits("plus");
+    limits.reset_credits = Some(crate::quota::limits::RateLimitResetCreditsSummary {
+        available_count: 1,
+        ..Default::default()
+    });
+    let visibility = visibility_with("codex.resets", false, true);
+    let all_cards = test_cards(
+        ProviderKind::Codex,
+        true,
+        &limits,
+        &visibility,
+        PopupSurface::HomeTab,
+        true,
+        true,
+        false,
+    );
+    let tab_cards = test_cards(
+        ProviderKind::Codex,
+        true,
+        &limits,
+        &visibility,
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        false,
+    );
+    assert!(!has_banked_resets(&all_cards));
+    assert!(has_banked_resets(&tab_cards));
+}
+
+#[test]
+fn reset_card_keeps_instance_identity_and_last_credit_result_surface() {
+    let mut limits = plan_limits("plus");
+    limits.reset_credits = Some(Default::default());
+    for kind in [ProviderKind::Codex, ProviderKind::Claude] {
+        for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
+            let visibility = all_visible();
+            let cards = provider_cards(
+                id(kind),
+                true,
+                false,
+                &limits,
+                &[],
+                &CardOptions {
+                    popup_visibility: &visibility,
+                    surface,
+                    show_provider_tabs: true,
+                    include_usage_stats: true,
+                    show_account_name: false,
+                    drag_handle: false,
+                    provider_error: None,
+                    provider_status: None,
+                    keep_reset_card: true,
+                    now: Utc::now(),
+                },
+            );
+            assert!(cards.iter().any(
+                |card| matches!(card, Card::BankedResets { provider, .. } if *provider == id(kind))
+            ));
+        }
+    }
+}
+
+#[test]
+fn popup_visibility_union_applies_when_provider_tabs_are_hidden() {
+    let visibility = visibility_with("codex.usage", false, true);
+    assert!(visibility.is_visible("codex.usage", PopupSurface::HomeTab, false));
+}
+
+#[test]
+fn show_on_home_off_drops_only_that_instance_from_home() {
+    let mut settings = Settings::default();
+    settings.set_enabled(id(ProviderKind::Codex), true);
+    settings.set_enabled(id(ProviderKind::Cursor), true);
+    settings
+        .instance_mut(id(ProviderKind::Codex))
+        .unwrap()
+        .show_on_home = false;
+    let ui = ui_from(&settings);
+    let widgets = visible_home_widgets(&ui, false);
+    assert!(!widgets.contains(&HomeWidgetId::provider(id(ProviderKind::Codex))));
+    assert!(widgets.contains(&HomeWidgetId::provider(id(ProviderKind::Cursor))));
+    // Its tab stays.
+    assert!(provider_tabs(&ui).contains(&PopupView::Provider(id(ProviderKind::Codex))));
+    let limits = plan_limits("plus");
+    let tab_cards = test_cards(
+        ProviderKind::Codex,
+        true,
+        &limits,
+        &ui.settings.popup_visibility,
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        false,
+    );
+    assert!(!tab_cards.is_empty());
+}
+
+#[test]
+fn format_reset_in_future_duration() {
+    assert_eq!(
+        format_reset_in(Some(
+            Utc::now() + ChronoDuration::days(2) + ChronoDuration::minutes(1),
+        )),
+        "2d"
+    );
+}
+
+#[test]
+fn free_to_plus_replaces_monthly_with_session_and_weekly_sections() {
+    let free = popup_sections(ProviderKind::Codex, &plan_limits("free"), false);
+    assert_eq!(free, vec![PopupSection::Monthly]);
+    assert_unique_section_keys(&free);
+
+    let plus = popup_sections(ProviderKind::Codex, &plan_limits("plus"), false);
+    assert_eq!(plus, vec![PopupSection::FiveHour, PopupSection::Weekly,]);
+    assert_unique_section_keys(&plus);
+}
+
+#[test]
+fn disabled_five_hour_session_is_omitted_from_popup() {
+    let mut limits = plan_limits("plus");
+    limits.primary = LimitWindow::default();
+
+    let sections = popup_sections(ProviderKind::Codex, &limits, false);
+    assert_eq!(sections, vec![PopupSection::Weekly]);
+    assert_unique_section_keys(&sections);
+}
+
+#[test]
+fn zen_without_quota_windows_does_not_render_placeholder_limit_cards() {
+    let limits = RateLimits {
+        plan_type: Some("Zen · 2 models".into()),
+        usage: crate::usage::UsageStatistics {
+            history: crate::usage::TokenUsage {
+                requests: 1,
+                estimated_cost_microusd: 1_250_000,
+                priced_requests: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert_eq!(
+        popup_sections(ProviderKind::OpenCodeZen, &limits, false),
+        vec![PopupSection::UsageStatistics]
+    );
+}
+
+#[test]
+fn plan_names_use_sentence_case() {
+    assert_eq!(capitalize_plan_name("PLUS"), "Plus");
+    assert_eq!(capitalize_plan_name("  pro  "), "Pro");
+}
+
+#[test]
+fn credits_only_render_for_a_real_balance_or_unlimited_access() {
+    let mut limits = plan_limits("plus");
+    limits.credits.has_credits = true;
+    limits.credits.balance = Some("undefined".into());
+    assert_eq!(credits_display_value(ProviderKind::Codex, &limits), None);
+    assert!(!popup_sections(ProviderKind::Codex, &limits, false).contains(&PopupSection::Credits));
+
+    limits.credits.balance = Some("$12.50".into());
+    assert_eq!(
+        credits_display_value(ProviderKind::Codex, &limits).as_deref(),
+        Some("$12.50")
+    );
+    assert!(popup_sections(ProviderKind::Codex, &limits, false).contains(&PopupSection::Credits));
+
+    limits.credits = Default::default();
+    limits.credits.unlimited = true;
+    assert_eq!(
+        credits_display_value(ProviderKind::Codex, &limits).as_deref(),
+        Some("Unlimited")
+    );
+}
+
+#[test]
+fn codex_credits_display_whole_grouped_counts_without_changing_the_balance() {
+    for (balance, expected) in [
+        ("53556.3441260001", "53,556"),
+        (" 53556.8 ", "53,557"),
+        ("999.5", "1,000"),
+        ("1000000", "1,000,000"),
+        ("0", "0"),
+        ("0.4", "0"),
+    ] {
+        let mut limits = plan_limits("plus");
+        limits.credits.has_credits = true;
+        limits.credits.balance = Some(balance.into());
+        assert_eq!(
+            credits_display_value(ProviderKind::Codex, &limits).as_deref(),
+            Some(expected)
+        );
+        assert_eq!(limits.credits.balance.as_deref(), Some(balance));
+        assert_eq!(
+            credits_display_value(ProviderKind::CommandCode, &limits).as_deref(),
+            Some(balance.trim())
+        );
+        for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
+            let cards = test_cards(
+                ProviderKind::Codex,
+                true,
+                &limits,
+                &all_visible(),
+                surface,
+                true,
+                true,
+                true,
+            );
+            assert!(
+                cards
+                    .iter()
+                    .any(|card| matches!(card, Card::Credits { value } if value == expected))
+            );
+        }
+    }
+}
+
+#[test]
+fn provider_cards_include_each_additional_limit() {
+    let mut limits = plan_limits("plus");
+    limits
+        .additional_limits
+        .push(crate::quota::limits::AdditionalLimit {
+            id: "seven_day_fable".into(),
+            title: "Fable".into(),
+            window: LimitWindow {
+                used_percent: Some(42),
+                ..Default::default()
+            },
+        });
+
+    let cards = test_cards(
+        ProviderKind::Claude,
+        true,
+        &limits,
+        &all_visible(),
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        false,
+    );
+    assert_eq!(
+        cards
+            .iter()
+            .filter_map(Card::limit_title)
+            .collect::<Vec<_>>(),
+        vec!["5H SESSION", "WEEKLY", "FABLE"]
+    );
+    assert!(!cards.iter().any(Card::is_usage_statistics));
+}
+
+#[test]
+fn sections_keep_banked_resets_singleton() {
+    let mut limits = plan_limits("plus");
+    limits.reset_credits = Some(crate::quota::limits::RateLimitResetCreditsSummary {
+        available_count: 1,
+        ..Default::default()
+    });
+
+    let sections = popup_sections(ProviderKind::Codex, &limits, true);
+    assert_eq!(
+        sections,
+        vec![
+            PopupSection::Error,
+            PopupSection::FiveHour,
+            PopupSection::Weekly,
+            PopupSection::BankedResets,
+        ]
+    );
+    assert_unique_section_keys(&sections);
+}
+
+#[test]
+fn provider_error_survives_until_that_provider_succeeds() {
+    let mut ui = UiState::default();
+
+    ui.set_provider_error(id(ProviderKind::Claude), "first failure");
+    assert_eq!(
+        ui.provider_error(id(ProviderKind::Claude)),
+        Some("first failure")
+    );
+    assert!(!ui.has_provider_error(id(ProviderKind::Codex)));
+
+    ui.set_provider_error(id(ProviderKind::Claude), "updated failure");
+    assert_eq!(
+        ui.provider_error(id(ProviderKind::Claude)),
+        Some("updated failure")
+    );
+
+    ui.clear_provider_error(id(ProviderKind::Claude));
+    assert_eq!(ui.provider_error(id(ProviderKind::Claude)), None);
+}
+
+#[test]
+fn repeated_network_failures_become_one_readable_provider_error() {
+    let raw = "OpenRouter quota refresh failed: TEST: request https://openrouter.ai/api/v1/key: Connection Failed: Connect error: A connection attempt failed because the connected party did not properly respond (os error 10060); ".repeat(3);
+    let mut ui = UiState::default();
+    ui.set_provider_error(id(ProviderKind::OpenRouter), raw.clone());
+    assert_eq!(
+        ui.provider_error(id(ProviderKind::OpenRouter)),
+        Some("The request timed out. Try refreshing again.")
+    );
+    ui.clear_provider_error(id(ProviderKind::OpenRouter));
+    ui.set_usage_error(id(ProviderKind::OpenRouter), raw);
+    assert_eq!(
+        ui.provider_error(id(ProviderKind::OpenRouter)),
+        Some("The request timed out. Try refreshing again.")
+    );
+}
+
+#[test]
+fn provider_errors_explain_http_failures_and_deduplicate_server_errors() {
+    for (raw, expected) in [
+        (
+            "request failed: status code 401",
+            "Authentication failed. Sign in again or update the provider key.",
+        ),
+        (
+            "HTTP 429; HTTP 429; rate limited",
+            "Too many requests. Wait a few minutes before refreshing again.",
+        ),
+        (
+            "directory: HTTP 500; credits: HTTP 503; HTTP 500",
+            "The provider is temporarily unavailable. Try again later.",
+        ),
+        (
+            "Network Error: connection forcibly closed by remote host (os error 10054)",
+            "The provider closed the connection. Try refreshing again.",
+        ),
+        (
+            "parse OpenRouter analytics: invalid JSON response",
+            "The provider returned an unexpected response. Try refreshing again.",
+        ),
+        (
+            "codex stderr: unexpected status 403 Forbidden: <html>the full response</html>",
+            "Access denied by the provider (HTTP 403).",
+        ),
+        (
+            "Codex app-server response timed out",
+            "The request timed out. Try refreshing again.",
+        ),
+        // A number that merely contains 403 is not an HTTP status.
+        ("model 4030 is unavailable", "model 4030 is unavailable"),
+    ] {
+        assert_eq!(UiState::error_for_ui(raw), expected);
+    }
+    assert_eq!(
+        UiState::error_for_ui("API key: HTTP 401; credits: timed out; directory: timed out"),
+        "The request timed out. Try refreshing again.\nAuthentication failed. Sign in again or update the provider key."
+    );
+}
+
+#[test]
+fn unknown_technical_dumps_stay_in_log_but_short_domain_errors_remain_visible() {
+    assert_eq!(
+        UiState::error_for_ui(&"unrecognized diagnostic context; ".repeat(20)),
+        "The request failed. See Log for details."
+    );
+    assert_eq!(
+        UiState::error_for_ui("Could not load https://provider.example/internal-request"),
+        "The request failed. See Log for details."
+    );
+    assert_eq!(
+        UiState::error_for_ui("This account no longer exists."),
+        "This account no longer exists."
+    );
+}
+
+#[test]
+fn usage_error_uses_provider_error_presentation_without_overwriting_quota_error() {
+    let mut ui = UiState::default();
+
+    ui.set_usage_error(
+        id(ProviderKind::OpenRouter),
+        "OpenRouter analytics request failed: TLS certificate error",
+    );
+    assert_eq!(
+        ui.provider_error(id(ProviderKind::OpenRouter)),
+        Some("The secure connection could not be verified. See Log for details.")
+    );
+    assert!(ui.has_provider_error(id(ProviderKind::OpenRouter)));
+
+    ui.set_provider_error(id(ProviderKind::OpenRouter), "quota request failed");
+    assert_eq!(
+        ui.provider_error(id(ProviderKind::OpenRouter)),
+        Some("quota request failed")
+    );
+
+    ui.clear_provider_error(id(ProviderKind::OpenRouter));
+    assert_eq!(
+        ui.provider_error(id(ProviderKind::OpenRouter)),
+        Some("The secure connection could not be verified. See Log for details.")
+    );
+
+    ui.clear_usage_error(id(ProviderKind::OpenRouter));
+    assert_eq!(ui.provider_error(id(ProviderKind::OpenRouter)), None);
+}
+
+#[test]
+fn refresh_indicator_waits_for_both_limit_and_usage_requests() {
+    let mut ui = UiState::default();
+
+    ui.request_started(id(ProviderKind::Codex), RequestKind::Limits);
+    ui.request_started(id(ProviderKind::Codex), RequestKind::Usage);
+    assert!(ui.refreshing);
+
+    ui.request_finished(id(ProviderKind::Codex), RequestKind::Limits);
+    assert!(ui.refreshing);
+
+    ui.request_finished(id(ProviderKind::Codex), RequestKind::Usage);
+    assert!(!ui.refreshing);
+}
+
+#[test]
+fn pager_queues_only_the_latest_destination() {
+    let state = PagerState {
+        provider_order: [
+            ProviderKind::Codex,
+            ProviderKind::Claude,
+            ProviderKind::Cursor,
+        ]
+        .map(|provider| PopupView::Provider(id(provider)))
+        .to_vec(),
+        ..PagerState::default()
+    };
+    let state = reduce_pager(
+        state,
+        PagerAction::Select(PopupView::Provider(id(ProviderKind::Codex))),
+    );
+    assert_eq!(state.outgoing, Some(PopupView::Home));
+    assert_eq!(state.current, PopupView::Provider(id(ProviderKind::Codex)));
+    assert_eq!(state.direction, PagerDirection::Forward);
+
+    let animation_id = state.animation_id;
+    let state = reduce_pager(
+        state,
+        PagerAction::Select(PopupView::Provider(id(ProviderKind::Claude))),
+    );
+    let state = reduce_pager(
+        state,
+        PagerAction::Select(PopupView::Provider(id(ProviderKind::Cursor))),
+    );
+    assert_eq!(
+        state.pending,
+        Some(PopupView::Provider(id(ProviderKind::Cursor)))
+    );
+
+    let state = reduce_pager(state, PagerAction::AnimationFinished(animation_id));
+    assert_eq!(
+        state.outgoing,
+        Some(PopupView::Provider(id(ProviderKind::Codex)))
+    );
+    assert_eq!(state.current, PopupView::Provider(id(ProviderKind::Cursor)));
+    assert_eq!(state.pending, None);
+    assert_eq!(state.direction, PagerDirection::Forward);
+}
+
+#[test]
+fn pager_uses_reverse_motion_for_an_earlier_tab() {
+    let state = PagerState {
+        current: PopupView::Provider(id(ProviderKind::Cursor)),
+        ..PagerState::default()
+    };
+    let state = reduce_pager(state, PagerAction::Select(PopupView::Home));
+    assert_eq!(
+        state.outgoing,
+        Some(PopupView::Provider(id(ProviderKind::Cursor)))
+    );
+    assert_eq!(state.current, PopupView::Home);
+    assert_eq!(state.direction, PagerDirection::Backward);
+    assert!(state.direction.outgoing_offset(popup::POPUP_WIDTH) > 0.0);
+    assert!(state.direction.incoming_offset(popup::POPUP_WIDTH) < 0.0);
+}
+
+#[test]
+fn stale_pager_completion_cannot_end_a_newer_transition() {
+    let state = reduce_pager(
+        PagerState::default(),
+        PagerAction::Select(PopupView::Provider(id(ProviderKind::Codex))),
+    );
+    let unchanged = reduce_pager(
+        state.clone(),
+        PagerAction::AnimationFinished(state.animation_id.wrapping_sub(1)),
+    );
+    assert_eq!(unchanged, state);
+}
+
+#[test]
+fn openrouter_places_each_chart_inside_its_own_account_on_both_surfaces() {
+    let date = Local::now().date_naive();
+    let mut limits = RateLimits::default();
+    for (id, requests) in [("first", 2), ("second", 7)] {
+        limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
+            id: id.into(),
+            name: id.into(),
+            ..Default::default()
+        });
+        let mut stats = crate::usage::statistics_from_daily(
+            &[crate::usage::DailyTokenUsage {
+                date,
+                usage: crate::usage::TokenUsage {
+                    requests,
+                    ..Default::default()
+                },
+            }],
+            30,
+        );
+        stats.account_id = Some(id.into());
+        limits.usage.accounts.insert(id.into(), stats);
+    }
+    {
+        for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
+            for spending in [true, false] {
+                let mut visibility = all_visible();
+                visibility.set_brick("openrouter.spending", spending, spending);
+                visibility.set_brick("openrouter.usage", true, true);
+                let cards = test_cards(
+                    ProviderKind::OpenRouter,
+                    true,
+                    &limits,
+                    &visibility,
+                    surface,
+                    true,
+                    true,
+                    false,
+                );
+                // No combined chart outside the account strips.
+                assert!(!cards.iter().any(Card::is_usage_statistics));
+                let charts_per_account = cards
+                    .iter()
+                    .filter(|card| !card.nested().is_empty())
+                    .map(|account| {
+                        account
+                            .nested()
+                            .iter()
+                            .filter_map(|card| match card {
+                                Card::UsageStatistics { statistics, .. } => {
+                                    statistics.account_id.as_deref()
+                                }
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .collect::<Vec<_>>();
+                assert_eq!(charts_per_account, vec![vec!["first"], vec!["second"]]);
+            }
+        }
+    }
+}
+
+#[test]
+fn openrouter_provider_tab_lists_keys_instead_of_spending_cards() {
+    let mut limits = RateLimits::default();
+    limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
+        id: "account".into(),
+        name: "account".into(),
+        api_keys: vec![crate::quota::limits::OpenRouterApiKeySnapshot {
+            id: "key".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let spending_cards = |cards: &[Card<'_>]| {
+        cards
+            .iter()
+            .flat_map(Card::nested)
+            .filter(|card| matches!(card, Card::Spending { .. }))
+            .count()
+    };
+    for spending in [true, false] {
+        let mut visibility = all_visible();
+        visibility.set_brick("openrouter.spending", spending, spending);
+        let cards = test_cards(
+            ProviderKind::OpenRouter,
+            true,
+            &limits,
+            &visibility,
+            PopupSurface::ProviderTab,
+            true,
+            false,
+            false,
+        );
+        // The list leads the account strip and stays with spending hidden.
+        let account = cards.iter().find(|card| card.has_key_list()).unwrap();
+        assert!(matches!(
+            account.nested().first(),
+            Some(Card::OpenRouterKeys {
+                account: "account",
+                ..
+            })
+        ));
+        assert_eq!(spending_cards(&cards), 0);
+    }
+    let home = test_cards(
+        ProviderKind::OpenRouter,
+        true,
+        &limits,
+        &all_visible(),
+        PopupSurface::HomeTab,
+        true,
+        false,
+        false,
+    );
+    assert!(!home.iter().any(Card::has_key_list));
+    assert_eq!(spending_cards(&home), 1);
+}
+
+#[test]
+fn duplicate_account_names_keep_separate_heading_identities() {
+    let limits = RateLimits {
+        openrouter_accounts: ["account-a", "account-b"]
+            .into_iter()
+            .map(|id| OpenRouterAccountSnapshot {
+                id: id.into(),
+                name: "Production".into(),
+                ..Default::default()
+            })
+            .collect(),
+        ..Default::default()
+    };
+    for surface in [PopupSurface::HomeTab, PopupSurface::ProviderTab] {
+        let cards = test_cards(
+            ProviderKind::OpenRouter,
+            true,
+            &limits,
+            &all_visible(),
+            surface,
+            true,
+            false,
+            true,
+        );
+        let headings = cards
+            .iter()
+            .flat_map(Card::nested)
+            .filter_map(|card| match card {
+                Card::AccountHeading { id, name, .. } => Some((*id, *name)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            headings,
+            vec![("account-a", "Production"), ("account-b", "Production")]
+        );
+    }
+}
+
+#[test]
+fn two_columns_only_widen_home_and_usage_for_every_provider() {
+    for enabled in [false, true] {
+        assert_eq!(PopupView::Home.uses_two_columns(enabled), enabled);
+        assert_eq!(PopupView::Usage.uses_two_columns(enabled), enabled);
+        for provider in ProviderKind::ALL {
+            assert!(!PopupView::Provider(provider.into()).uses_two_columns(enabled));
+            assert!(!PopupView::Group(provider).uses_two_columns(enabled));
+        }
+    }
+}
+
+#[test]
+fn pager_slides_clear_both_pages_for_every_compact_and_wide_view_pair() {
+    let views = std::iter::once(PopupView::Home)
+        .chain(std::iter::once(PopupView::Usage))
+        .chain(
+            ProviderKind::ALL
+                .into_iter()
+                .map(|provider| PopupView::Provider(provider.into())),
+        )
+        .chain(ProviderKind::ALL.into_iter().map(PopupView::Group))
+        .collect::<Vec<_>>();
+    for two_columns in [false, true] {
+        for &from in &views {
+            for &to in &views {
+                let width_for = |view: PopupView| {
+                    if view.uses_two_columns(two_columns) {
+                        popup::POPUP_WIDE_WIDTH
+                    } else {
+                        popup::POPUP_WIDTH
+                    }
+                };
+                let width = pager_slide_width(from, to, two_columns);
+                for direction in [PagerDirection::Forward, PagerDirection::Backward] {
+                    let incoming = direction.incoming_offset(width);
+                    let outgoing = direction.outgoing_offset(width);
+                    assert_eq!(incoming, -outgoing);
+                    assert!(incoming.abs() >= width_for(to) as f32);
+                    assert!(outgoing.abs() >= width_for(from) as f32);
+                    assert_eq!(
+                        outgoing.is_sign_negative(),
+                        direction == PagerDirection::Forward
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Every primary plus a second Claude and a second Codex instance, placed
+/// right after their drivers' primaries.
+pub(crate) fn instance_fixture() -> Settings {
+    let mut settings = Settings::default();
+    let mut claude = ProviderInstance::new(ProviderKind::Claude, "Work");
+    claude.id = "claude-work".into();
+    settings.add_instance(claude);
+    let mut codex = ProviderInstance::new(ProviderKind::Codex, "Personal");
+    codex.id = "codex-personal".into();
+    settings.add_instance(codex);
+    settings
+}
+
+#[test]
+fn every_enabled_instance_combination_has_matching_tabs() {
+    let base = instance_fixture();
+    let count = base.instances.len();
+    for mask in 0..(1_u32 << count) {
+        let mut settings = base.clone();
+        for (index, instance) in settings.instances.iter_mut().enumerate() {
+            instance.enabled = mask & (1 << index) != 0;
+        }
+        let enabled = settings.enabled_providers();
+        for mode in PopupTabMode::ALL.iter().copied() {
+            settings.popup_tab_mode = mode;
+            let ui = ui_from(&settings);
+            let tabs = provider_tabs(&ui);
+            // Tab identities never repeat, so no slot can reuse another
+            // tab's icon, badge or label.
+            let keys = tabs.iter().map(|tab| tab.key()).collect::<HashSet<_>>();
+            assert_eq!(keys.len(), tabs.len(), "mask={mask} {mode:?}");
+            // Every enabled instance is shown by exactly one tab, and the
+            // tab points at that instance's own snapshot.
+            for provider in &enabled {
+                let showing = tabs.iter().filter(|tab| tab.shows(*provider)).count();
+                assert_eq!(showing, 1, "mask={mask} {mode:?} {provider:?}");
+                let tab = tab_for_provider(&ui, *provider).unwrap();
+                assert!(tab_members(&ui.settings.instances, tab).contains(provider));
+            }
+            let members = tabs
+                .iter()
+                .flat_map(|tab| tab_members(&ui.settings.instances, *tab))
+                .collect::<Vec<_>>();
+            assert_eq!(members.len(), enabled.len());
+            for tab in &tabs {
+                match tab {
+                    PopupView::Provider(provider) => {
+                        assert!(enabled.contains(provider));
+                        if mode.is_grouped() {
+                            assert_eq!(ui.enabled_instances_of(provider.kind()).len(), 1);
+                        }
+                    }
+                    PopupView::Group(driver) => {
+                        assert!(mode.is_grouped());
+                        assert!(ui.enabled_instances_of(*driver).len() > 1);
+                        assert_eq!(
+                            tab_members(&ui.settings.instances, *tab),
+                            ui.enabled_instances_of(*driver)
+                        );
+                    }
+                    PopupView::Home | PopupView::Usage => panic!("not a provider tab"),
+                }
+            }
+            if mode == PopupTabMode::Separate {
+                assert_eq!(
+                    tabs,
+                    enabled
+                        .iter()
+                        .map(|provider| PopupView::Provider(*provider))
+                        .collect::<Vec<_>>()
+                );
+            }
+            assert_eq!(show_provider_tabs(&ui), tabs.len() > 1);
+            // Tabs keep the shared instance order.
+            assert!(
+                tabs.windows(2)
+                    .all(|pair| pair[0].order(&tabs) < pair[1].order(&tabs))
+            );
+        }
+    }
+}
+
+#[test]
+fn grouped_tab_selection_falls_back_to_the_first_enabled_member() {
+    let mut settings = instance_fixture();
+    for instance in &mut settings.instances {
+        instance.enabled = instance.driver == ProviderKind::Claude;
+    }
+    settings.popup_tab_mode = PopupTabMode::GroupedSwitcher;
+    let work = ProviderId::new(ProviderKind::Claude, "claude-work");
+    let ui = ui_from(&settings);
+    assert_eq!(
+        provider_tabs(&ui),
+        vec![PopupView::Group(ProviderKind::Claude)]
+    );
+    assert_eq!(
+        selected_group_member(&ui, ProviderKind::Claude),
+        Some(id(ProviderKind::Claude))
+    );
+    assert_eq!(
+        tab_for_provider(&ui, work),
+        Some(PopupView::Group(ProviderKind::Claude))
+    );
+    settings
+        .grouped_tab_selection
+        .insert("claude".into(), "claude-work".into());
+    assert_eq!(
+        selected_group_member(&ui_from(&settings), ProviderKind::Claude),
+        Some(work)
+    );
+    settings.set_enabled(work, false);
+    let ui = ui_from(&settings);
+    assert_eq!(
+        selected_group_member(&ui, ProviderKind::Claude),
+        Some(id(ProviderKind::Claude))
+    );
+    // One enabled instance is unaffected by grouping.
+    assert_eq!(
+        provider_tabs(&ui),
+        vec![PopupView::Provider(id(ProviderKind::Claude))]
+    );
+}
+
+#[test]
+fn grouped_tabs_reorder_as_blocks_and_keep_disabled_slots() {
+    let mut settings = instance_fixture();
+    for instance in &mut settings.instances {
+        instance.enabled = matches!(instance.driver, ProviderKind::Claude | ProviderKind::Cursor);
+    }
+    settings.popup_tab_mode = PopupTabMode::GroupedStacked;
+    let ui = ui_from(&settings);
+    let tabs = provider_tabs(&ui);
+    let cursor = PopupView::Provider(id(ProviderKind::Cursor));
+    let claude = PopupView::Group(ProviderKind::Claude);
+    assert_eq!(tabs, vec![claude, cursor]);
+    let order = reordered_instance_ids(&ui.settings.instances, &tabs, cursor, claude).unwrap();
+    let mut reordered = settings.clone();
+    reordered.apply_instance_order(&order);
+    let ids = reordered
+        .instances
+        .iter()
+        .map(|instance| instance.id.as_str())
+        .collect::<Vec<_>>();
+    let position = |id: &str| ids.iter().position(|item| *item == id).unwrap();
+    assert!(position("cursor") < position("claude"));
+    assert_eq!(position("claude-work"), position("claude") + 1);
+    // Disabled instances keep their slots.
+    for (index, instance) in settings.instances.iter().enumerate() {
+        if !instance.enabled {
+            assert_eq!(ids[index], instance.id);
+        }
+    }
+    assert_eq!(provider_tabs(&ui_from(&reordered)), vec![cursor, claude]);
+    assert!(reordered_instance_ids(&ui.settings.instances, &tabs, claude, claude).is_none());
+}
+
+#[test]
+fn home_instances_move_independently_and_restore_hidden_positions() {
+    let mut settings = instance_fixture();
+    for instance in &mut settings.instances {
+        instance.enabled = matches!(instance.driver, ProviderKind::Claude | ProviderKind::Cursor);
+    }
+    let primary = HomeWidgetId::provider(id(ProviderKind::Claude));
+    let work = HomeWidgetId("claude-work".into());
+    let cursor = HomeWidgetId::provider(id(ProviderKind::Cursor));
+    let mut ui = ui_from(&settings);
+    assert_ne!(primary, work);
+    let initial = home_widget_order(&ui);
+    let primary_was_right = home_widget_right_column(&ui, false).contains(&primary);
+    let (order, right) = home_widget_drop_layout(&ui, &work, &cursor, Some(1), false).unwrap();
+    assert_eq!(
+        order.iter().position(|w| w == &primary),
+        initial.iter().position(|w| w == &primary)
+    );
+    assert!(right.contains(&work));
+    assert_eq!(right.contains(&primary), primary_was_right);
+    settings.popup_home_order = order;
+    settings.popup_home_right_column = Some(right);
+    let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+    assert_eq!(restored.popup_home_order, settings.popup_home_order);
+    ui = ui_from(&restored);
+    // Hiding an instance from Home keeps its slot.
+    settings
+        .instance_mut(ProviderId::new(ProviderKind::Claude, "claude-work"))
+        .unwrap()
+        .show_on_home = false;
+    ui.set_settings(settings.clone());
+    assert!(!visible_home_widgets(&ui, false).contains(&work));
+    let hidden_slot = home_widget_order(&ui)
+        .iter()
+        .position(|w| w == &work)
+        .unwrap();
+    let (order, _) = home_widget_drop_layout(&ui, &primary, &cursor, None, false).unwrap();
+    assert_eq!(order.iter().position(|w| w == &work), Some(hidden_slot));
+    settings.popup_home_order = order;
+    settings
+        .instance_mut(ProviderId::new(ProviderKind::Claude, "claude-work"))
+        .unwrap()
+        .show_on_home = true;
+    ui.set_settings(settings.clone());
+    assert!(visible_home_widgets(&ui, false).contains(&work));
+    assert!(home_widget_right_column(&ui, false).contains(&work));
+}
+
+#[test]
+fn new_instances_join_home_after_their_driver() {
+    let mut settings = Settings::default();
+    settings.set_enabled(id(ProviderKind::Claude), true);
+    settings.set_enabled(id(ProviderKind::Cursor), true);
+    let ui = ui_from(&settings);
+    settings.popup_home_order = home_widget_order(&ui);
+    let mut work = ProviderInstance::new(ProviderKind::Claude, "Work");
+    work.id = "claude-work".into();
+    settings.add_instance(work);
+    let ui = ui_from(&settings);
+    let order = home_widget_order(&ui);
+    let claude = order
+        .iter()
+        .position(|w| w == &HomeWidgetId::provider(id(ProviderKind::Claude)))
+        .unwrap();
+    assert_eq!(order[claude + 1], HomeWidgetId("claude-work".into()));
+    assert_eq!(visible_home_widgets(&ui, false).len(), 3);
+    assert_eq!(
+        home_widget_right_column(&ui, false),
+        visible_home_widgets(&ui, false)
+            .into_iter()
+            .skip(1)
+            .step_by(2)
+            .collect::<Vec<_>>()
+    );
+    let legacy: Settings = toml::from_str("version = 39\n").unwrap();
+    assert!(legacy.popup_home_order.is_empty());
+    assert!(legacy.popup_home_right_column.is_none());
+}
+
+#[test]
+fn popup_first_frame_excludes_openrouter_usage_without_a_management_key() {
+    let mut settings = Settings::default();
+    settings.set_usage_stats_provider_enabled(id(ProviderKind::Claude), false);
+    // The raw preference may still include OpenRouter. The first render must
+    // use the same effective filter as live updates.
+    assert!(settings.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
+    let initial = ui_from(&settings);
+    assert!(!initial.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
+    assert!(!initial.usage_stats_provider_enabled(id(ProviderKind::Claude)));
+    assert!(initial.usage_stats_provider_enabled(id(ProviderKind::Codex)));
+}
+
+#[test]
+fn cloud_credit_balances_use_dollars_and_expired_or_locked_credits_have_no_progress() {
+    let now = Utc::now();
+    let mut window = LimitWindow {
+        used_percent: Some(1),
+        resets_at: Some(now + ChronoDuration::days(1)),
+        ..Default::default()
+    };
+    let mut credits = crate::quota::limits::CloudSessionCredits {
+        limit_dollars: 100.0,
+        used_dollars: 1.0,
+        remaining_dollars: 99.0,
+        locked: false,
+    };
+    assert_eq!(
+        cloud_session_credits_presentation(&window, Some(&credits), false, now),
+        ("$99.00 of $100.00 left".into(), 99.0, true)
+    );
+    assert_eq!(
+        cloud_session_credits_presentation(&window, Some(&credits), true, now),
+        ("$1.00 of $100.00 used".into(), 1.0, true)
+    );
+    assert_eq!(
+        cloud_session_credits_presentation(&window, None, false, now).0,
+        "99% left"
+    );
+    credits.locked = true;
+    assert_eq!(
+        cloud_session_credits_presentation(&window, Some(&credits), false, now),
+        ("Unavailable".into(), 0.0, false)
+    );
+    window.resets_at = Some(now);
+    assert_eq!(
+        cloud_session_credits_presentation(&window, Some(&credits), false, now),
+        ("Expired".into(), 0.0, false)
+    );
+}
+
+#[test]
+fn login_notices_offer_sign_in_only_where_minibar_can_sign_in() {
+    let now = Utc::now();
+    let claude = ProviderInstance::new(ProviderKind::Claude, "Work");
+    let openrouter = ProviderInstance::new(ProviderKind::OpenRouter, "Keys");
+    let fine = RateLimits::default();
+    let expiring = RateLimits {
+        login_expires_at: Some(now + chrono::Duration::hours(30)),
+        ..RateLimits::default()
+    };
+    let later = RateLimits {
+        login_expires_at: Some(now + chrono::Duration::days(10)),
+        ..RateLimits::default()
+    };
+    let lost = "Claude no longer accepts this login. Use Sign in for this instance in Settings > Providers.";
+
+    assert_eq!(
+        model::login_notice(&claude, Some(lost), &fine, now),
+        Some(model::LoginNotice::SignInNeeded)
+    );
+    assert_eq!(
+        model::login_notice(
+            &claude,
+            Some("The request timed out. Try refreshing again."),
+            &expiring,
+            now
+        ),
+        None
+    );
+    assert_eq!(
+        model::login_notice(&claude, None, &expiring, now),
+        Some(model::LoginNotice::Expiring { days_left: 2 })
+    );
+    assert_eq!(model::login_notice(&claude, None, &later, now), None);
+    let app = ProviderInstance::primary(ProviderKind::Claude);
+    assert_eq!(model::login_notice(&app, Some(lost), &expiring, now), None);
+    assert_eq!(model::login_notice(&claude, None, &fine, now), None);
+    assert_eq!(
+        model::login_notice(
+            &openrouter,
+            Some("Authentication failed. Sign in again or update the provider key."),
+            &fine,
+            now
+        ),
+        None
+    );
+}
+
+#[test]
+fn announced_reset_rows_track_reception_per_instance() {
+    use crate::quota::reset_detection::{AnnouncedReset, ResetKind, ResetTiming};
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 12, 0, 0).unwrap();
+    let codex = id(ProviderKind::Codex);
+    let other = ProviderId::new(ProviderKind::Codex, "codex-work");
+    let reset = |id: &str, kind, hours: i64| AnnouncedReset {
+        id: id.into(),
+        kind,
+        timing: ResetTiming::Exact,
+        source_url: None,
+        label: None,
+        reset_at: now + ChronoDuration::hours(hours),
+        not_before: None,
+        received: Default::default(),
+    };
+    let mut resets = vec![
+        reset("long-missed", ResetKind::Forced, -72),
+        reset("superseded", ResetKind::Forced, -30),
+        reset("missed-banked", ResetKind::Banked, -20),
+        reset("received", ResetKind::Forced, -2),
+        reset("upcoming", ResetKind::Forced, 3),
+    ];
+    resets[3]
+        .received
+        .insert(codex.id().to_owned(), now - ChronoDuration::minutes(10));
+
+    let phases = |provider| {
+        visible_announced_resets(&resets, provider, now)
+            .into_iter()
+            .map(|row| (row.reset.id.as_str(), row.phase))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        phases(codex),
+        [
+            ("missed-banked", AnnouncedResetPhase::Missed),
+            (
+                "received",
+                AnnouncedResetPhase::Received(now - ChronoDuration::minutes(10))
+            ),
+            ("upcoming", AnnouncedResetPhase::Upcoming),
+        ]
+    );
+    assert_eq!(
+        phases(other),
+        [
+            ("superseded", AnnouncedResetPhase::Missed),
+            ("missed-banked", AnnouncedResetPhase::Missed),
+            ("received", AnnouncedResetPhase::Missed),
+        ]
+    );
+}
+#[test]
+fn action_bar_visibility_setting_only_controls_the_regular_popup() {
+    for floating in [false, true] {
+        for shown in [false, true] {
+            let settings = Settings {
+                popup_floating: floating,
+                show_popup_action_bar: shown,
+                ..Settings::default()
+            };
+            let mut ui = ui_from(&settings);
+            assert_eq!(ui.settings.popup_floating, floating);
+            assert_eq!(ui.compact_bar_visible(), floating || shown);
+            let updated = Settings {
+                popup_floating: !floating,
+                show_popup_action_bar: !shown,
+                ..settings
+            };
+            ui.set_settings(updated);
+            assert_eq!(ui.settings.popup_floating, !floating);
+            assert_eq!(ui.settings.show_popup_action_bar, !shown);
+            assert_eq!(ui.compact_bar_visible(), !floating || !shown);
+        }
+    }
+}

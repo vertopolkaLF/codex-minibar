@@ -1,23 +1,28 @@
+pub mod choice;
+pub mod runtime;
+
 use std::{
     collections::BTreeMap,
     fs,
-    path::{Path, PathBuf},
+    path::Path,
     sync::atomic::{AtomicU8, Ordering},
 };
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local, Timelike};
-use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 
-pub const SETTINGS_VERSION: u32 = 41;
-/// First version where the taskbar widget is shown by default.
-const TASKBAR_DEFAULT_VERSION: u32 = 41;
-
 mod migration;
+pub mod store;
+
+pub use migration::SETTINGS_VERSION;
+pub(crate) use migration::finish_instance_migration;
+use migration::{TASKBAR_DEFAULT_VERSION, heal_legacy_tray_widgets, migrate};
 pub(crate) mod unknown;
 
-pub use crate::instances::{BadgeColor, InstanceSource, ProviderId, ProviderInstance};
+pub use crate::providers::instances::{BadgeColor, InstanceSource, ProviderId, ProviderInstance};
+use crate::providers::registry::ProviderKind;
+pub use crate::settings::choice::Choice;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -29,24 +34,6 @@ pub enum AppTheme {
     Auto,
     Light,
     Dark,
-}
-
-impl AppTheme {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Auto => 0,
-            Self::Light => 1,
-            Self::Dark => 2,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Light,
-            2 => Self::Dark,
-            _ => Self::Auto,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -66,35 +53,20 @@ pub enum AccentColor {
 }
 
 impl AccentColor {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Windows => 0,
-            Self::Blue => 1,
-            Self::Purple => 2,
-            Self::Pink => 3,
-            Self::Red => 4,
-            Self::Orange => 5,
-            Self::Green => 6,
-            Self::Teal => 7,
-            Self::Custom(_) => 8,
-        }
-    }
+    /// The named accents, in picker order.
+    pub const PRESETS: [Self; 8] = [
+        Self::Windows,
+        Self::Blue,
+        Self::Purple,
+        Self::Pink,
+        Self::Red,
+        Self::Orange,
+        Self::Green,
+        Self::Teal,
+    ];
 
     pub const fn custom(rgb: (u8, u8, u8)) -> Self {
         Self::Custom(((rgb.0 as u32) << 16) | ((rgb.1 as u32) << 8) | rgb.2 as u32)
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Blue,
-            2 => Self::Purple,
-            3 => Self::Pink,
-            4 => Self::Red,
-            5 => Self::Orange,
-            6 => Self::Green,
-            7 => Self::Teal,
-            _ => Self::Windows,
-        }
     }
 
     pub const fn rgb(self) -> Option<(u8, u8, u8)> {
@@ -112,8 +84,8 @@ impl AccentColor {
     }
 }
 
-/// Density presets for the popup footer. `Comfortable` preserves the original
-/// footer proportions; `Compact` is the newer, tighter presentation.
+/// Density presets for the popup footer: the roomier `Comfortable` default
+/// or the tighter `Compact`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BottomBarSize {
@@ -122,21 +94,11 @@ pub enum BottomBarSize {
     Compact,
 }
 
+impl Choice for BottomBarSize {
+    const ALL: &'static [Self] = &[Self::Comfortable, Self::Compact];
+}
+
 impl BottomBarSize {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Comfortable => 0,
-            Self::Compact => 1,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Compact,
-            _ => Self::Comfortable,
-        }
-    }
-
     pub const fn footer_height_dip(self) -> i32 {
         match self {
             Self::Comfortable => 61,
@@ -216,8 +178,7 @@ impl BottomBarSize {
     }
 }
 
-/// Discrete popup corner-radius choices. The historical 8 DIP radius is the
-/// default; larger values remain available for the softer modern shell.
+/// Discrete popup corner-radius choices; 8 DIP (`Small`) is the default.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PopupCornerRadius {
@@ -231,28 +192,6 @@ pub enum PopupCornerRadius {
 }
 
 impl PopupCornerRadius {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Zero => 0,
-            Self::Four => 1,
-            Self::Small => 2,
-            Self::Medium => 3,
-            Self::Large => 4,
-            Self::ExtraLarge => 5,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            0 => Self::Zero,
-            1 => Self::Four,
-            3 => Self::Medium,
-            4 => Self::Large,
-            5 => Self::ExtraLarge,
-            _ => Self::Small,
-        }
-    }
-
     pub const fn from_dip(dip: i32) -> Self {
         match dip {
             0 => Self::Zero,
@@ -290,22 +229,8 @@ pub enum PopupBackgroundMaterial {
     Solid,
 }
 
-impl PopupBackgroundMaterial {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Acrylic => 0,
-            Self::Mica => 1,
-            Self::Solid => 2,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Mica,
-            2 => Self::Solid,
-            _ => Self::Acrylic,
-        }
-    }
+impl Choice for PopupBackgroundMaterial {
+    const ALL: &'static [Self] = &[Self::Acrylic, Self::Mica, Self::Solid];
 }
 
 /// Range and default of [`Settings::popup_vscode_contrast`], in percent.
@@ -353,21 +278,11 @@ impl Default for TimeFormat {
     }
 }
 
+impl Choice for TimeFormat {
+    const ALL: &'static [Self] = &[Self::Hour12, Self::Hour24];
+}
+
 impl TimeFormat {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Hour12 => 0,
-            Self::Hour24 => 1,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::Hour24,
-            _ => Self::Hour12,
-        }
-    }
-
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Hour12 => "hour_12",
@@ -376,21 +291,14 @@ impl TimeFormat {
     }
 
     pub fn apply(self) {
-        TIME_FORMAT.store(
-            match self {
-                Self::Hour12 => 0,
-                Self::Hour24 => 1,
-            },
-            Ordering::Relaxed,
-        );
+        TIME_FORMAT.store(self.index() as u8, Ordering::Relaxed);
     }
 
     pub fn current() -> Self {
-        match TIME_FORMAT.load(Ordering::Relaxed) {
-            0 => Self::Hour12,
-            1 => Self::Hour24,
-            _ => Self::from_windows(),
-        }
+        Self::ALL
+            .get(usize::from(TIME_FORMAT.load(Ordering::Relaxed)))
+            .copied()
+            .unwrap_or_else(Self::from_windows)
     }
 
     pub fn from_windows() -> Self {
@@ -474,44 +382,10 @@ fn windows_time_format() -> Option<TimeFormat> {
 
 #[cfg(windows)]
 fn read_international_value(name: &str) -> Option<String> {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegGetValueW,
-            RegOpenKeyExW,
-        },
-    };
-
-    let subkey: Vec<u16> = "Control Panel\\International"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let value_name: Vec<u16> = name.encode_utf16().chain(std::iter::once(0)).collect();
-    let mut key: HKEY = std::ptr::null_mut();
-    let status =
-        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut key) };
-    if status != ERROR_SUCCESS {
-        return None;
-    }
-    let mut data = [0u16; 64];
-    let mut data_size = (std::mem::size_of_val(&data)) as u32;
-    let result = unsafe {
-        RegGetValueW(
-            key,
-            std::ptr::null(),
-            value_name.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            data.as_mut_ptr().cast(),
-            &mut data_size,
-        )
-    };
-    unsafe { RegCloseKey(key) };
-    if result != ERROR_SUCCESS {
-        return None;
-    }
-    let units = (data_size as usize / 2).saturating_sub(1).min(data.len());
-    Some(String::from_utf16_lossy(&data[..units]).trim().to_string())
+    use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
+    let key =
+        crate::platform::win32::RegKey::open(HKEY_CURRENT_USER, r"Control Panel\International")?;
+    Some(key.string(name)?.to_string_lossy().trim().to_string())
 }
 
 /// How often one provider instance reads its quotas. Each instance polls on
@@ -532,9 +406,8 @@ pub enum LimitRefreshInterval {
     Hours5,
 }
 
-impl LimitRefreshInterval {
-    /// Dropdown order.
-    pub const ALL: [Self; 10] = [
+impl Choice for LimitRefreshInterval {
+    const ALL: &'static [Self] = &[
         Self::Seconds30,
         Self::Minute1,
         Self::Minutes2,
@@ -546,15 +419,16 @@ impl LimitRefreshInterval {
         Self::Hours2,
         Self::Hours5,
     ];
+}
 
-    /// Claude answers frequent quota reads with HTTP 429, and OpenRouter
-    /// credits rarely move, so both poll slower than the rest.
-    pub const fn default_for(driver: ProviderKind) -> Self {
-        match driver {
-            ProviderKind::Claude => Self::Minutes2,
-            ProviderKind::OpenRouter => Self::Minutes10,
-            _ => Self::Minute1,
-        }
+impl LimitRefreshInterval {
+    pub fn default_for(driver: ProviderKind) -> Self {
+        let seconds = crate::providers::registry::descriptor(driver).default_refresh_seconds;
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|interval| interval.seconds() == seconds)
+            .unwrap_or(Self::Minute1)
     }
 
     pub const fn seconds(self) -> u64 {
@@ -585,20 +459,6 @@ impl LimitRefreshInterval {
             Self::Hours2 => "msg-2-hours",
             Self::Hours5 => "msg-5-hours",
         }
-    }
-
-    pub fn index(self) -> i32 {
-        Self::ALL
-            .iter()
-            .position(|interval| *interval == self)
-            .map_or(1, |index| index as i32)
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or(Self::Minute1)
     }
 }
 
@@ -644,30 +504,18 @@ impl ResetAnnouncementRefreshInterval {
             Self::Daily => 24 * 60 * 60,
         }
     }
+}
 
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Minutes15 => 0,
-            Self::Minutes30 => 1,
-            Self::Hour1 => 2,
-            Self::Hours3 => 3,
-            Self::Hours6 => 4,
-            Self::Hours12 => 5,
-            Self::Daily => 6,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            0 => Self::Minutes15,
-            1 => Self::Minutes30,
-            3 => Self::Hours3,
-            4 => Self::Hours6,
-            5 => Self::Hours12,
-            6 => Self::Daily,
-            _ => Self::Hour1,
-        }
-    }
+impl Choice for ResetAnnouncementRefreshInterval {
+    const ALL: &'static [Self] = &[
+        Self::Minutes15,
+        Self::Minutes30,
+        Self::Hour1,
+        Self::Hours3,
+        Self::Hours6,
+        Self::Hours12,
+        Self::Daily,
+    ];
 }
 
 /// How long before a banked reset credit expires Minibar spends it on the
@@ -685,9 +533,8 @@ pub enum AutoResetLead {
     Hours24,
 }
 
-impl AutoResetLead {
-    /// Dropdown order.
-    pub const ALL: [Self; 7] = [
+impl Choice for AutoResetLead {
+    const ALL: &'static [Self] = &[
         Self::Minutes5,
         Self::Minutes30,
         Self::Hour1,
@@ -696,7 +543,9 @@ impl AutoResetLead {
         Self::Hours12,
         Self::Hours24,
     ];
+}
 
+impl AutoResetLead {
     pub const fn minutes(self) -> i64 {
         match self {
             Self::Minutes5 => 5,
@@ -720,20 +569,6 @@ impl AutoResetLead {
             Self::Hours24 => "msg-24-hours",
         }
     }
-
-    pub fn index(self) -> i32 {
-        Self::ALL
-            .iter()
-            .position(|lead| *lead == self)
-            .map_or(1, |index| index as i32)
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or_default()
-    }
 }
 
 impl UsageRefreshInterval {
@@ -748,49 +583,18 @@ impl UsageRefreshInterval {
             Self::Minutes60 => 60 * 60,
         }
     }
-
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Minute1 => 0,
-            Self::Minutes5 => 1,
-            Self::Minutes10 => 2,
-            Self::Minutes15 => 3,
-            Self::Minutes30 => 4,
-            Self::Minutes45 => 5,
-            Self::Minutes60 => 6,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            0 => Self::Minute1,
-            2 => Self::Minutes10,
-            3 => Self::Minutes15,
-            4 => Self::Minutes30,
-            5 => Self::Minutes45,
-            6 => Self::Minutes60,
-            _ => Self::Minutes5,
-        }
-    }
 }
 
-#[derive(
-    Clone, Copy, Debug, Default, Hash, PartialEq, Eq, Ord, PartialOrd, Serialize, Deserialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum ProviderKind {
-    #[default]
-    Codex,
-    Claude,
-    Cursor,
-    OpenCodeZen,
-    OpenCodeGo,
-    #[serde(rename = "openrouter")]
-    OpenRouter,
-    Antigravity,
-    Grok,
-    Kiro,
-    CommandCode,
+impl Choice for UsageRefreshInterval {
+    const ALL: &'static [Self] = &[
+        Self::Minute1,
+        Self::Minutes5,
+        Self::Minutes10,
+        Self::Minutes15,
+        Self::Minutes30,
+        Self::Minutes45,
+        Self::Minutes60,
+    ];
 }
 
 /// When the app backs off to leave CPU, GPU and network to a game.
@@ -808,26 +612,17 @@ pub enum GameMode {
     Always,
 }
 
-impl GameMode {
-    pub const ALL: [Self; 3] = [Self::Off, Self::Automatic, Self::Always];
+impl Choice for GameMode {
+    const ALL: &'static [Self] = &[Self::Off, Self::Automatic, Self::Always];
+}
 
+impl GameMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => crate::i18n::tr("game-mode-off"),
             Self::Automatic => crate::i18n::tr("game-mode-automatic"),
             Self::Always => crate::i18n::tr("game-mode-always"),
         }
-    }
-
-    pub fn index(self) -> i32 {
-        Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) as i32
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or_default()
     }
 }
 
@@ -844,9 +639,11 @@ pub enum PopupTabMode {
     GroupedStacked,
 }
 
-impl PopupTabMode {
-    pub const ALL: [Self; 3] = [Self::Separate, Self::GroupedSwitcher, Self::GroupedStacked];
+impl Choice for PopupTabMode {
+    const ALL: &'static [Self] = &[Self::Separate, Self::GroupedSwitcher, Self::GroupedStacked];
+}
 
+impl PopupTabMode {
     pub fn label(self) -> &'static str {
         match self {
             Self::Separate => crate::i18n::tr("separate-tabs"),
@@ -857,17 +654,6 @@ impl PopupTabMode {
 
     pub const fn is_grouped(self) -> bool {
         !matches!(self, Self::Separate)
-    }
-
-    pub fn index(self) -> i32 {
-        Self::ALL.iter().position(|mode| *mode == self).unwrap_or(0) as i32
-    }
-
-    pub fn from_index(index: i32) -> Self {
-        usize::try_from(index)
-            .ok()
-            .and_then(|index| Self::ALL.get(index).copied())
-            .unwrap_or_default()
     }
 }
 
@@ -965,71 +751,6 @@ fn new_id(prefix: &str) -> String {
     format!("{prefix}-{timestamp:x}-{sequence:x}")
 }
 
-impl ProviderKind {
-    pub const ALL: [Self; 10] = [
-        Self::Codex,
-        Self::Claude,
-        Self::Cursor,
-        Self::OpenCodeZen,
-        Self::OpenCodeGo,
-        Self::OpenRouter,
-        Self::Antigravity,
-        Self::Grok,
-        Self::Kiro,
-        Self::CommandCode,
-    ];
-
-    pub const fn id(self) -> &'static str {
-        match self {
-            Self::Codex => "codex",
-            Self::Claude => "claude",
-            Self::Cursor => "cursor",
-            Self::OpenCodeZen => "opencode",
-            Self::OpenCodeGo => "opencode-go",
-            Self::OpenRouter => "openrouter",
-            Self::Antigravity => "antigravity",
-            Self::Grok => "grok",
-            Self::Kiro => "kiro",
-            Self::CommandCode => "command-code",
-        }
-    }
-
-    pub fn from_id(id: &str) -> Option<Self> {
-        match id {
-            "codex" => Some(Self::Codex),
-            "claude" => Some(Self::Claude),
-            "cursor" => Some(Self::Cursor),
-            "opencode" => Some(Self::OpenCodeZen),
-            "opencode-go" => Some(Self::OpenCodeGo),
-            "openrouter" => Some(Self::OpenRouter),
-            "antigravity" => Some(Self::Antigravity),
-            "grok" => Some(Self::Grok),
-            "kiro" => Some(Self::Kiro),
-            "command-code" => Some(Self::CommandCode),
-            _ => None,
-        }
-    }
-
-    pub const fn display_name(self) -> &'static str {
-        match self {
-            Self::Codex => "Codex",
-            Self::Claude => "Claude",
-            Self::Cursor => "Cursor",
-            Self::OpenCodeZen => "OpenCode Zen",
-            Self::OpenCodeGo => "OpenCode Go",
-            Self::OpenRouter => "OpenRouter",
-            Self::Antigravity => "Antigravity",
-            Self::Grok => "Grok",
-            Self::Kiro => "Kiro",
-            Self::CommandCode => "Command Code",
-        }
-    }
-
-    pub fn default_order() -> Vec<Self> {
-        Self::ALL.to_vec()
-    }
-}
-
 /// A weekly local-time rule for starting a provider's 5-hour limit window.
 /// Weekdays use Chrono's Monday = 0 convention and `time_minutes` is the
 /// number of minutes after local midnight. `weekday` is retained solely to
@@ -1068,7 +789,6 @@ impl ScheduledActivation {
         }
     }
 
-    /// Rules bind to one provider instance by id.
     /// The instance this rule binds to, resolved against published settings.
     pub fn provider(&self) -> Option<ProviderId> {
         ProviderId::lookup(&self.provider_id)
@@ -1145,8 +865,7 @@ impl AutoActivationPause {
         }
     }
 
-    /// Pauses bind to one provider instance by id.
-    /// The instance this rule binds to, resolved against published settings.
+    /// The instance this pause binds to, resolved against published settings.
     pub fn provider(&self) -> Option<ProviderId> {
         ProviderId::lookup(&self.provider_id)
     }
@@ -1249,7 +968,10 @@ pub struct PopupVisibility {
 
 impl PopupVisibility {
     pub fn default_brick_visibility(brick_id: &str) -> PopupSurfaceVisibility {
-        if brick_id == "cursor.allModels" {
+        let hidden = crate::providers::registry::provider_for_metric(brick_id)
+            .and_then(|provider| crate::providers::registry::metric(provider, brick_id))
+            .is_some_and(|metric| !metric.visible_by_default);
+        if hidden {
             PopupSurfaceVisibility::both(false)
         } else if brick_id.ends_with(".usage") {
             PopupSurfaceVisibility::split(false, true)
@@ -1261,7 +983,7 @@ impl PopupVisibility {
     pub fn build_defaults() -> Self {
         let mut bricks = BTreeMap::new();
         for provider in ProviderKind::ALL {
-            for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+            for brick_id in crate::providers::registry::catalog_brick_ids(provider) {
                 bricks.insert(brick_id.clone(), Self::default_brick_visibility(&brick_id));
             }
         }
@@ -1348,10 +1070,13 @@ impl PopupVisibility {
         }
     }
 
-    pub fn absorb_discovered_bricks(&mut self, limits: &crate::limits::ProviderLimits) -> bool {
+    pub fn absorb_discovered_bricks(
+        &mut self,
+        limits: &crate::quota::limits::ProviderLimits,
+    ) -> bool {
         let mut changed = false;
         for (provider, snapshot) in limits.iter() {
-            for (brick_id, _) in crate::provider_registry::discovered_additional_brick_labels(
+            for (brick_id, _) in crate::providers::registry::discovered_additional_brick_labels(
                 provider.kind(),
                 snapshot,
             ) {
@@ -1367,8 +1092,8 @@ impl PopupVisibility {
 
     /// Whether any of a driver's cards is shown on Home at all.
     pub fn driver_visible_on_home(&self, provider: ProviderKind) -> bool {
-        let prefix = format!("{}.", crate::provider_registry::descriptor(provider).id);
-        crate::provider_registry::catalog_brick_ids(provider)
+        let prefix = format!("{}.", crate::providers::registry::descriptor(provider).id);
+        crate::providers::registry::catalog_brick_ids(provider)
             .iter()
             .chain(self.bricks.keys().filter(|id| id.starts_with(&prefix)))
             .any(|brick_id| self.visibility_for(brick_id).all_tab)
@@ -1376,8 +1101,8 @@ impl PopupVisibility {
 
     /// Whether any of an instance's cards is shown on Home at all.
     pub fn instance_visible_on_home(&self, instance_id: &str, provider: ProviderKind) -> bool {
-        let prefix = format!("{}.", crate::provider_registry::descriptor(provider).id);
-        crate::provider_registry::catalog_brick_ids(provider)
+        let prefix = format!("{}.", crate::providers::registry::descriptor(provider).id);
+        crate::providers::registry::catalog_brick_ids(provider)
             .iter()
             .chain(self.bricks.keys().filter(|id| id.starts_with(&prefix)))
             .any(|brick_id| self.instance_visibility_for(instance_id, brick_id).all_tab)
@@ -1405,7 +1130,7 @@ impl PopupVisibility {
     pub fn normalize(&mut self) -> bool {
         let mut changed = false;
         for provider in ProviderKind::ALL {
-            for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+            for brick_id in crate::providers::registry::catalog_brick_ids(provider) {
                 if !self.bricks.contains_key(&brick_id) {
                     self.bricks
                         .insert(brick_id.clone(), Self::default_brick_visibility(&brick_id));
@@ -1415,7 +1140,7 @@ impl PopupVisibility {
         }
         let known: std::collections::HashSet<String> = ProviderKind::ALL
             .into_iter()
-            .flat_map(crate::provider_registry::catalog_brick_ids)
+            .flat_map(crate::providers::registry::catalog_brick_ids)
             .collect();
         let stale: Vec<String> = self
             .bricks
@@ -1425,7 +1150,7 @@ impl PopupVisibility {
                     && !ProviderKind::ALL.iter().any(|provider| {
                         id.starts_with(&format!(
                             "{}.",
-                            crate::provider_registry::descriptor(*provider).id
+                            crate::providers::registry::descriptor(*provider).id
                         ))
                     })
             })
@@ -1492,6 +1217,26 @@ pub enum TrayPresentation {
     ResetCountdown,
 }
 
+/// The picker offers the stacked designs; the single-indicator variants are
+/// the same designs.
+impl Choice for TrayPresentation {
+    const ALL: &'static [Self] = &[
+        Self::StackedNumbers,
+        Self::StackedBars,
+        Self::NestedRings,
+        Self::ResetTime,
+        Self::ResetCountdown,
+    ];
+
+    fn index(self) -> usize {
+        let canonical = self.canonical_percentage();
+        Self::ALL
+            .iter()
+            .position(|choice| *choice == canonical)
+            .unwrap_or_default()
+    }
+}
+
 impl TrayPresentation {
     pub const fn is_percentage(self) -> bool {
         matches!(
@@ -1529,20 +1274,8 @@ pub enum TotalSpendPresentation {
     ProgressBar,
 }
 
-impl TotalSpendPresentation {
-    pub const fn index(self) -> i32 {
-        match self {
-            Self::Donut => 0,
-            Self::ProgressBar => 1,
-        }
-    }
-
-    pub const fn from_index(index: i32) -> Self {
-        match index {
-            1 => Self::ProgressBar,
-            _ => Self::Donut,
-        }
-    }
+impl Choice for TotalSpendPresentation {
+    const ALL: &'static [Self] = &[Self::Donut, Self::ProgressBar];
 }
 
 /// How a Home provider widget lays out its quota windows.
@@ -1558,12 +1291,12 @@ pub enum HomeCardLayout {
     Rings,
     /// Compact tiles, two per row, with the progress filling the background.
     Tiles,
-    /// The older cards with a header, a thin bar and a footer.
+    /// Cards with a header, a thin bar and a footer.
     Classic,
 }
 
-impl HomeCardLayout {
-    pub const ALL: [Self; 5] = [
+impl Choice for HomeCardLayout {
+    const ALL: &'static [Self] = &[
         Self::Cards,
         Self::Lines,
         Self::Rings,
@@ -1625,6 +1358,16 @@ pub enum TrayColorMode {
     Provider,
     Accent,
     Monochrome,
+}
+
+impl Choice for TrayColorMode {
+    const ALL: &'static [Self] = &[
+        Self::Status,
+        Self::Fixed,
+        Self::Provider,
+        Self::Accent,
+        Self::Monochrome,
+    ];
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1711,7 +1454,7 @@ impl TrayWidget {
     }
 
     pub fn for_provider(provider: ProviderId) -> Self {
-        let descriptor = crate::provider_registry::descriptor(provider.kind());
+        let descriptor = crate::providers::registry::descriptor(provider.kind());
         if descriptor.default_tray_metrics.is_empty() {
             return Self::app_icon();
         }
@@ -1729,7 +1472,7 @@ impl TrayWidget {
     }
 
     pub fn custom_for_provider(provider: ProviderId) -> Self {
-        let descriptor = crate::provider_registry::descriptor(provider.kind());
+        let descriptor = crate::providers::registry::descriptor(provider.kind());
         if descriptor.default_tray_metrics.is_empty() {
             return Self::app_icon();
         }
@@ -1822,9 +1565,9 @@ pub enum TaskbarWidgetStyle {
     Meters,
 }
 
-impl TaskbarWidgetStyle {
-    /// Picker order: text designs first, then by graphic.
-    pub const ALL: [Self; 6] = [
+/// Picker order: text designs first, then by graphic.
+impl Choice for TaskbarWidgetStyle {
+    const ALL: &'static [Self] = &[
         Self::Glance,
         Self::Rings,
         Self::Nested,
@@ -1832,20 +1575,15 @@ impl TaskbarWidgetStyle {
         Self::Bars,
         Self::Meters,
     ];
+}
 
+impl TaskbarWidgetStyle {
     /// How many indicators fit the taskbar height in this design.
     pub const fn max_indicators(self) -> usize {
         match self {
             Self::Glance => 2,
             Self::Rings | Self::Bars | Self::Nested | Self::Dials | Self::Meters => 3,
         }
-    }
-
-    pub fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|style| *style == self)
-            .unwrap_or_default()
     }
 
     /// Draws progress graphics, which can carry a pace marker.
@@ -1862,10 +1600,6 @@ impl TaskbarWidgetStyle {
     pub const fn has_reset(self) -> bool {
         self.has_labels()
     }
-
-    pub fn from_index(index: usize) -> Self {
-        Self::ALL.get(index).copied().unwrap_or_default()
-    }
 }
 
 /// How a taskbar widget tells when its quotas reset.
@@ -1881,15 +1615,8 @@ pub enum TaskbarResetDisplay {
     Clock,
 }
 
-impl TaskbarResetDisplay {
-    pub const ALL: [Self; 3] = [Self::Off, Self::Countdown, Self::Clock];
-
-    pub fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|display| *display == self)
-            .unwrap_or_default()
-    }
+impl Choice for TaskbarResetDisplay {
+    const ALL: &'static [Self] = &[Self::Off, Self::Countdown, Self::Clock];
 }
 
 /// The popup page a taskbar widget click opens.
@@ -1905,15 +1632,8 @@ pub enum TaskbarClick {
     Home,
 }
 
-impl TaskbarClick {
-    pub const ALL: [Self; 3] = [Self::Nearest, Self::Tab, Self::Home];
-
-    pub fn index(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|click| *click == self)
-            .unwrap_or_default()
-    }
+impl Choice for TaskbarClick {
+    const ALL: &'static [Self] = &[Self::Nearest, Self::Tab, Self::Home];
 }
 
 /// Where the widget strip sits on the taskbar.
@@ -1963,7 +1683,7 @@ pub struct TaskbarWidget {
 impl TaskbarWidget {
     /// The provider preset: its first default tray metrics as a Glance.
     pub fn for_provider(provider: ProviderId) -> Self {
-        let descriptor = crate::provider_registry::descriptor(provider.kind());
+        let descriptor = crate::providers::registry::descriptor(provider.kind());
         let style = TaskbarWidgetStyle::Glance;
         Self {
             id: new_taskbar_widget_id(),
@@ -2283,9 +2003,9 @@ pub struct Settings {
     /// App-level accessibility override. The Windows animation preference is
     /// still honored when this remains enabled.
     pub animations_enabled: bool,
-    /// Popup footer density; the historical, roomier footer is the default.
+    /// Popup footer density.
     pub bottom_bar_size: BottomBarSize,
-    /// Popup outer corner radius in DIPs; 8 DIP preserves the historical look.
+    /// Popup outer corner radius.
     pub popup_corner_radius: PopupCornerRadius,
     /// Material used by the popup's full-window background.
     pub popup_background_material: PopupBackgroundMaterial,
@@ -2366,7 +2086,7 @@ pub struct Settings {
     pub popup_placement: PopupPlacement,
     /// System-wide shortcut that shows or hides the popup. None leaves every
     /// key combination to other applications.
-    pub popup_hotkey: Option<crate::hotkey::Hotkey>,
+    pub popup_hotkey: Option<crate::app::hotkey::Hotkey>,
     pub tray_widgets: Vec<TrayWidget>,
     /// Widgets drawn inside the Windows taskbar.
     pub taskbar: TaskbarSettings,
@@ -2482,7 +2202,7 @@ impl Settings {
         if self.taskbar.widgets.is_empty()
             && let Some(instance) = self.instances.iter().find(|instance| {
                 instance.enabled
-                    && !crate::provider_registry::descriptor(instance.driver)
+                    && !crate::providers::registry::descriptor(instance.driver)
                         .default_tray_metrics
                         .is_empty()
             })
@@ -2495,16 +2215,17 @@ impl Settings {
         changed
     }
 
-    pub fn default_path() -> Result<PathBuf> {
-        if crate::fake::enabled() {
-            return Ok(crate::fake::settings_path());
-        }
-        let dirs = ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-            .context("could not resolve the application config directory")?;
-        Ok(dirs.config_dir().join("settings.toml"))
+    pub fn load_or_create(path: &Path) -> Result<Self> {
+        Self::load_or_create_with(path, |_| false)
     }
 
-    pub fn load_or_create(path: &Path) -> Result<Self> {
+    /// [`Self::load_or_create`] for startup. When the file predates provider
+    /// instances, `finish_instance_migration` runs the side-effecting half of
+    /// that migration once and reports whether it changed the settings.
+    pub fn load_or_create_with(
+        path: &Path,
+        finish_instance_migration: impl FnOnce(&mut Self) -> bool,
+    ) -> Result<Self> {
         if !path.exists() {
             let settings = Self::default();
             settings.save(path)?;
@@ -2517,68 +2238,66 @@ impl Settings {
         if original_version < migration::INSTANCES_VERSION {
             // Instances rewrite provider settings wholesale and older builds
             // cannot read the result. Keep the original next to it.
-            let _ = backup_before_migration(path, original_version);
+            if let Err(error) = backup_before_migration(path, original_version) {
+                crate::platform::logger::info(format!("failed to back up settings: {error:#}"));
+            }
         }
         let (mut settings, dirty) = match Self::decode_raw(&raw) {
             Ok((settings, dirty)) => (settings, dirty),
             Err(error) => {
-                eprintln!(
+                crate::platform::logger::info(format!(
                     "settings at {} could not be decoded ({error:#}); recreating usable defaults",
                     path.display()
-                );
-                let _ = backup_corrupt_settings(path);
+                ));
+                if let Err(error) = backup_corrupt_settings(path) {
+                    crate::platform::logger::info(format!(
+                        "failed to back up corrupt settings: {error:#}"
+                    ));
+                }
                 let mut settings = Self::salvage_raw(&raw).unwrap_or_else(Self::default);
                 settings.version = SETTINGS_VERSION;
                 // An existing install with a broken file should not be forced
                 // back through first-run onboarding.
                 settings.onboarding_completed = true;
                 settings.repair_inplace();
-                let _ = settings.save(path);
+                settings.normalize_all();
+                if let Err(error) = settings.save(path) {
+                    crate::platform::logger::info(format!(
+                        "failed to save recovered settings: {error:#}"
+                    ));
+                }
                 return Ok(settings);
             }
         };
         let moved_credentials = original_version < migration::INSTANCES_VERSION
-            && migration::finish_instance_migration(&mut settings);
+            && finish_instance_migration(&mut settings);
         // Existing installs get the taskbar widget once, so they learn of it.
         let taskbar_introduced =
             original_version < TASKBAR_DEFAULT_VERSION && settings.enable_taskbar_by_default();
         let repaired = settings.repair_inplace();
-        let tray_widgets_normalized = settings.normalize_tray_widgets()
-            | settings.taskbar.normalize()
-            | settings.command_palette.normalize();
-        let popup_visibility_normalized = settings.normalize_popup_visibility();
-        if dirty
-            || moved_credentials
-            || taskbar_introduced
-            || repaired
-            || tray_widgets_normalized
-            || popup_visibility_normalized
-        {
+        let normalized = settings.normalize_all();
+        if dirty || moved_credentials || taskbar_introduced || repaired || normalized {
             settings.save(path)?;
         }
         Ok(settings)
     }
 
-    /// Read-only decode of a user-chosen settings file for Import.
+    /// Read-only decode of a settings file: the live one for a window that
+    /// opens, or a user-chosen one for Import.
     ///
     /// Migrates, repairs and normalizes entirely in memory. It never writes,
     /// backs up, or otherwise touches `path`, and an undecodable file is an
     /// error instead of being replaced by salvaged defaults.
     ///
-    /// `migration::finish_instance_migration` is deliberately NOT run: it
-    /// moves credentials between this machine's secret store and managed
-    /// folders based on the local install's state, not on the imported file,
-    /// so applying it to a foreign file would have side effects unrelated to
-    /// what is being imported. The live install already ran it at startup.
-    pub fn load_from_import(path: &Path) -> Result<Self> {
+    /// The instance migration's credential moves are deliberately NOT run:
+    /// they act on this machine's secret store and managed folders, not on
+    /// the file being read. The live install already ran them at startup.
+    pub fn read(path: &Path) -> Result<Self> {
         let raw = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
         let (mut settings, _dirty) = Self::decode_raw(&raw)
             .with_context(|| format!("{} is not a valid settings file", path.display()))?;
         settings.repair_inplace();
-        settings.normalize_tray_widgets();
-        settings.taskbar.normalize();
-        settings.command_palette.normalize();
-        settings.normalize_popup_visibility();
+        settings.normalize_all();
         Ok(settings)
     }
 
@@ -2589,14 +2308,15 @@ impl Settings {
             .and_then(toml::Value::as_integer)
             .unwrap_or(0);
         let original_version = u32::try_from(original_version).unwrap_or(u32::MAX);
-        // Heal legacy tray widget shapes even when `version` already claims to
-        // be current — a stamped version must never leave us unable to decode.
-        let healed_tray = heal_legacy_tray_widgets(&mut document);
-        let mut dirty = healed_tray;
+        let mut dirty = false;
         if original_version < SETTINGS_VERSION {
             migrate(&mut document, original_version)?;
             dirty = true;
         }
+        // Heal legacy tray widget shapes even when `version` already claims to
+        // be current — a stamped version must never leave us unable to decode.
+        // This runs after migration so version 1's `metric` is read first.
+        dirty |= heal_legacy_tray_widgets(&mut document);
         match document.clone().try_into::<Self>() {
             Ok(settings) => Ok((settings, dirty)),
             Err(error) => {
@@ -2607,10 +2327,10 @@ impl Settings {
                 if !unknown.is_empty()
                     && let Ok(mut settings) = pruned.try_into::<Self>()
                 {
-                    eprintln!(
+                    crate::platform::logger::info(format!(
                         "settings entries this build cannot read were skipped and will be kept ({error}): {}",
                         unknown.describe().join(", ")
-                    );
+                    ));
                     settings.unknown_entries = unknown;
                     return Ok((settings, dirty));
                 }
@@ -2620,9 +2340,9 @@ impl Settings {
                     .as_table_mut()
                     .is_some_and(|root| root.remove("time_format").is_some());
                 if stripped_time_format && let Ok(settings) = document.clone().try_into::<Self>() {
-                    eprintln!(
+                    crate::platform::logger::info(format!(
                         "settings time_format was invalid ({error}); using the Windows clock"
-                    );
+                    ));
                     return Ok((settings, true));
                 }
                 if let Some(root) = document.as_table_mut() {
@@ -2638,9 +2358,9 @@ impl Settings {
                 }
                 match document.try_into::<Self>() {
                     Ok(settings) => {
-                        eprintln!(
+                        crate::platform::logger::info(format!(
                             "settings tray_widgets were invalid ({error}); resetting that section"
-                        );
+                        ));
                         Ok((settings, true))
                     }
                     Err(retry_error) => Err(retry_error).context("decode migrated settings"),
@@ -2681,7 +2401,9 @@ impl Settings {
     /// Clamps out-of-range values instead of rejecting the whole file.
     fn repair_inplace(&mut self) -> bool {
         let mut changed = false;
-        let retention = self.history_retention_days.clamp(1, 365);
+        let retention = self
+            .history_retention_days
+            .clamp(1, crate::platform::local_time::RETENTION_DAYS);
         if retention != self.history_retention_days {
             self.history_retention_days = retention;
             changed = true;
@@ -2731,7 +2453,6 @@ impl Settings {
                 changed = true;
             }
         }
-        changed |= self.normalize_instances();
         if self.version < SETTINGS_VERSION {
             self.version = SETTINGS_VERSION;
             changed = true;
@@ -2769,15 +2490,31 @@ impl Settings {
             .as_file()
             .sync_all()
             .context("flush temporary settings")?;
-        temporary
-            .persist(path)
-            .with_context(|| format!("commit {}", path.display()))?;
+        // Antivirus scanners and the search indexer briefly open a file that
+        // was just written or read without FILE_SHARE_DELETE; replacing it
+        // then fails with access denied until they let go.
+        for attempt in 1.. {
+            match temporary.persist(path) {
+                Ok(_) => break,
+                Err(error)
+                    if error.error.kind() == std::io::ErrorKind::PermissionDenied
+                        && attempt < 10 =>
+                {
+                    temporary = error.file;
+                    std::thread::sleep(std::time::Duration::from_millis(20 * attempt));
+                }
+                Err(error) => {
+                    return Err(error.error).with_context(|| format!("commit {}", path.display()));
+                }
+            }
+        }
         Ok(())
     }
 
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
-            (1..=365).contains(&self.history_retention_days),
+            (1..=crate::platform::local_time::RETENTION_DAYS)
+                .contains(&self.history_retention_days),
             crate::i18n::tr("history-retention-must-be-between-1-and-365-days")
         );
         anyhow::ensure!(
@@ -2834,10 +2571,21 @@ impl Settings {
         changed
     }
 
-    pub fn normalize_popup_visibility(&mut self) -> bool {
+    fn normalize_popup_visibility(&mut self) -> bool {
         let ids: Vec<&str> = self.instances.iter().map(|i| i.id.as_str()).collect();
         let retained = self.popup_visibility.retain_instances(&ids);
         self.popup_visibility.normalize() | retained
+    }
+
+    /// Restores every cross-reference invariant after an edit: unique ids,
+    /// no references to removed instances, valid widget lists. Returns
+    /// whether anything changed.
+    pub fn normalize_all(&mut self) -> bool {
+        self.normalize_instances()
+            | self.normalize_tray_widgets()
+            | self.taskbar.normalize()
+            | self.command_palette.normalize()
+            | self.normalize_popup_visibility()
     }
 
     /// Every configured instance, enabled or not, in display order.
@@ -2881,23 +2629,6 @@ impl Settings {
             .is_some_and(|instance| instance.enabled)
     }
 
-    /// Enabled instances of one driver, in display order.
-    pub fn enabled_instances_of(&self, driver: ProviderKind) -> Vec<ProviderId> {
-        self.instances
-            .iter()
-            .filter(|instance| instance.enabled && instance.driver == driver)
-            .map(ProviderInstance::provider_id)
-            .collect()
-    }
-
-    /// The single enabled instance, when there is exactly one usable choice.
-    pub fn single_enabled_provider(&self) -> Option<ProviderId> {
-        match self.enabled_providers().as_slice() {
-            [provider] => Some(*provider),
-            _ => None,
-        }
-    }
-
     pub fn set_enabled(&mut self, provider: ProviderId, enabled: bool) {
         if let Some(instance) = self.instance_mut(provider) {
             instance.enabled = enabled;
@@ -2910,14 +2641,10 @@ impl Settings {
     }
 
     pub(crate) fn usage_stats_collection_enabled(&self, provider: ProviderId) -> bool {
-        let Some(instance) = self.instance(provider) else {
-            return false;
-        };
         self.usage_stats_enabled
-            && instance.usage_stats
-            && crate::instances::Capabilities::of(instance).usage_stats
-            && (provider.kind() != ProviderKind::OpenRouter
-                || crate::openrouter::has_management_key(instance.openrouter.as_slice()))
+            && self
+                .instance(provider)
+                .is_some_and(ProviderInstance::collects_usage_stats)
     }
 
     /// Instances whose usage statistics are collected, independent of the
@@ -2925,12 +2652,7 @@ impl Settings {
     pub fn usage_stats_providers(&self) -> Vec<ProviderId> {
         self.instances
             .iter()
-            .filter(|instance| {
-                instance.usage_stats
-                    && crate::instances::Capabilities::of(instance).usage_stats
-                    && (instance.driver != ProviderKind::OpenRouter
-                        || crate::openrouter::has_management_key(instance.openrouter.as_slice()))
-            })
+            .filter(|instance| instance.collects_usage_stats())
             .map(ProviderInstance::provider_id)
             .collect()
     }
@@ -2958,13 +2680,6 @@ impl Settings {
         if let Some(instance) = self.instance_mut(provider) {
             instance.usage_stats = enabled;
         }
-    }
-
-    pub fn absorb_discovered_popup_bricks(
-        &mut self,
-        limits: &crate::limits::ProviderLimits,
-    ) -> bool {
-        self.popup_visibility.absorb_discovered_bricks(limits)
     }
 
     /// A new instance of `driver`. It takes the driver's legacy id while that
@@ -3099,29 +2814,6 @@ impl Settings {
                 .collect::<Vec<_>>()
     }
 
-    /// Moves an instance one slot earlier or later.
-    pub fn move_provider(&mut self, provider: ProviderId, earlier: bool) -> bool {
-        let Some(index) = self
-            .instances
-            .iter()
-            .position(|instance| instance.id == provider.id())
-        else {
-            return false;
-        };
-        let swap_index = if earlier {
-            index.checked_sub(1)
-        } else if index + 1 < self.instances.len() {
-            Some(index + 1)
-        } else {
-            None
-        };
-        let Some(swap_index) = swap_index else {
-            return false;
-        };
-        self.instances.swap(index, swap_index);
-        true
-    }
-
     /// Keeps persisted widget identities and cardinality valid without
     /// rewriting disabled or temporarily unavailable provider references.
     pub fn normalize_tray_widgets(&mut self) -> bool {
@@ -3137,171 +2829,6 @@ impl Settings {
         }
         changed
     }
-
-    /// Applies settings whose effect lives outside the render tree.
-    pub fn apply_runtime_effects(&self) -> Result<()> {
-        if !crate::settings_window::has_pending_edits() {
-            self.language.apply();
-        }
-        crate::theme::set_animations_enabled(self.animations_enabled);
-        #[cfg(windows)]
-        gpui::set_software_rendering(self.software_rendering);
-        crate::notifications::set_sound_enabled(self.notifications.sound);
-        crate::notifications::set_follow_do_not_disturb(self.notifications.follow_do_not_disturb);
-        crate::game_mode::apply(
-            self.game_mode,
-            self.notifications.game_mode_changes,
-            &self.game_mode_games,
-            &self.game_mode_ignored,
-        );
-        crate::popup::set_user_pinned(self.popup_pinned);
-        crate::popup::apply_popup_appearance(
-            self.bottom_bar_size,
-            self.popup_corner_radius,
-            self.popup_background_material,
-        );
-        crate::provider_registry::apply_logo_settings(self.replace_chatgpt_logo_with_codex);
-        crate::instances::publish(&self.instances);
-        crate::discovery::protect_configured_paths(
-            self.instances
-                .iter()
-                .filter(|instance| instance.driver == ProviderKind::Codex)
-                .filter_map(|instance| instance.binary_path.as_deref()),
-        );
-        self.time_format.apply();
-        // The sandbox must never rewrite the real install's login entry.
-        if crate::fake::enabled() {
-            return Ok(());
-        }
-        apply_startup_registration(self.start_at_login)
-    }
-
-    /// If the installer (or another tool) registered us in HKCU Run while
-    /// settings still say off, adopt that into settings before we apply them —
-    /// otherwise `apply_runtime_effects` would delete the Run value on launch.
-    pub fn reconcile_startup_from_registry(&mut self, path: &Path) -> Result<()> {
-        if crate::fake::enabled() || self.start_at_login || !startup_registration_present()? {
-            return Ok(());
-        }
-        self.start_at_login = true;
-        self.save(path)
-    }
-}
-
-#[cfg(windows)]
-fn startup_registration_present() -> Result<bool> {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_READ, RRF_RT_REG_SZ, RegCloseKey, RegGetValueW,
-            RegOpenKeyExW,
-        },
-    };
-
-    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let value_name: Vec<u16> = "Codex Minibar"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut key: HKEY = std::ptr::null_mut();
-    let status =
-        unsafe { RegOpenKeyExW(HKEY_CURRENT_USER, subkey.as_ptr(), 0, KEY_READ, &mut key) };
-    if status != ERROR_SUCCESS {
-        return Ok(false);
-    }
-    let mut data_size = 0u32;
-    let result = unsafe {
-        RegGetValueW(
-            key,
-            std::ptr::null(),
-            value_name.as_ptr(),
-            RRF_RT_REG_SZ,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut data_size,
-        )
-    };
-    unsafe { RegCloseKey(key) };
-    Ok(result == ERROR_SUCCESS)
-}
-
-#[cfg(not(windows))]
-fn startup_registration_present() -> Result<bool> {
-    crate::linux::autostart::is_registered()
-}
-
-#[cfg(windows)]
-fn apply_startup_registration(enabled: bool) -> Result<()> {
-    use windows_sys::Win32::{
-        Foundation::ERROR_SUCCESS,
-        System::Registry::{
-            HKEY, HKEY_CURRENT_USER, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ, RegCloseKey,
-            RegCreateKeyExW, RegDeleteValueW, RegSetValueExW,
-        },
-    };
-
-    let subkey: Vec<u16> = "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let value_name: Vec<u16> = "Codex Minibar"
-        .encode_utf16()
-        .chain(std::iter::once(0))
-        .collect();
-    let mut key: HKEY = std::ptr::null_mut();
-    let status = unsafe {
-        RegCreateKeyExW(
-            HKEY_CURRENT_USER,
-            subkey.as_ptr(),
-            0,
-            std::ptr::null_mut(),
-            REG_OPTION_NON_VOLATILE,
-            KEY_SET_VALUE,
-            std::ptr::null(),
-            &mut key,
-            std::ptr::null_mut(),
-        )
-    };
-    anyhow::ensure!(
-        status == ERROR_SUCCESS,
-        "open Windows startup registry key: {status}"
-    );
-
-    let result = if enabled {
-        let executable =
-            std::env::current_exe().context("resolve current executable for startup")?;
-        let command = format!("\"{}\"", executable.display());
-        let data: Vec<u16> = command.encode_utf16().chain(std::iter::once(0)).collect();
-        unsafe {
-            RegSetValueExW(
-                key,
-                value_name.as_ptr(),
-                0,
-                REG_SZ,
-                data.as_ptr().cast(),
-                (data.len() * size_of::<u16>()) as u32,
-            )
-        }
-    } else {
-        unsafe { RegDeleteValueW(key, value_name.as_ptr()) }
-    };
-    unsafe { RegCloseKey(key) };
-    // Deleting an already-absent Run value is success: the desired end state is
-    // "not registered", whether we removed it now or it was never there.
-    const ERROR_FILE_NOT_FOUND: u32 = 2;
-    anyhow::ensure!(
-        result == ERROR_SUCCESS || (!enabled && result == ERROR_FILE_NOT_FOUND),
-        "update Windows startup registration: {result}"
-    );
-    Ok(())
-}
-
-#[cfg(not(windows))]
-fn apply_startup_registration(enabled: bool) -> Result<()> {
-    crate::linux::autostart::apply(enabled)
 }
 
 /// The `version` a raw settings file claims, or 0 when it has none.
@@ -3328,757 +2855,6 @@ fn backup_corrupt_settings(path: &Path) -> Result<()> {
     let backup = path.with_extension("toml.corrupt");
     fs::copy(path, &backup)
         .with_context(|| format!("backup corrupt settings to {}", backup.display()))?;
-    Ok(())
-}
-
-/// Converts leftover pre-indicator tray widget tables into the current shape.
-/// Safe to run on every load: modern widgets (with `indicators`) are left alone.
-fn heal_legacy_tray_widgets(document: &mut toml::Value) -> bool {
-    let Some(root) = document.as_table_mut() else {
-        return false;
-    };
-    let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") else {
-        return false;
-    };
-    let mut changed = false;
-    let mut healed = Vec::with_capacity(widgets.len());
-    for (index, value) in widgets.iter_mut().enumerate() {
-        let Some(widget) = value.as_table_mut() else {
-            changed = true;
-            continue;
-        };
-        let looks_legacy = (widget.contains_key("provider")
-            || widget.contains_key("source")
-            || widget.contains_key("metric")
-            || widget.contains_key("limit_value"))
-            && !widget.contains_key("indicators");
-        if looks_legacy {
-            convert_legacy_tray_widget(widget, index);
-            changed = true;
-        } else if widget.contains_key("source") {
-            // Current schema has no widget-level `source`; drop leftovers so a
-            // downgrade/upgrade ping-pong cannot keep confusing decoders.
-            widget.remove("source");
-            widget.remove("provider");
-            widget.remove("limit_value");
-            widget.remove("metric");
-            changed = true;
-        }
-        healed.push(value.clone());
-    }
-    if changed {
-        *widgets = healed;
-    }
-    changed
-}
-
-fn convert_legacy_tray_widget(widget: &mut toml::map::Map<String, toml::Value>, index: usize) {
-    let provider = widget
-        .remove("provider")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "codex".into());
-    let source = widget
-        .remove("source")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "combined".into());
-    let limit_value = widget
-        .remove("limit_value")
-        .and_then(|value| value.as_str().map(str::to_owned))
-        .unwrap_or_else(|| "remaining".into());
-    let color_mode = widget
-        .remove("color_mode")
-        .unwrap_or_else(|| toml::Value::String("status".into()));
-    let fixed_color = widget.remove("fixed_color");
-    widget.remove("metric");
-    let primary = match provider.as_str() {
-        "claude" => "claude.session",
-        "cursor" => "cursor.auto",
-        "openrouter" => "openrouter.limit",
-        _ => "codex.session",
-    };
-    let secondary = match provider.as_str() {
-        "claude" => "claude.weekly",
-        "cursor" => "cursor.auto",
-        "openrouter" => "openrouter.limit",
-        _ => "codex.weekly",
-    };
-    let metric_ids: Vec<&str> = match source.as_str() {
-        "primary" | "primary_reset" => vec![primary],
-        "secondary" => vec![secondary],
-        _ if primary == secondary => vec![primary],
-        _ => vec![primary, secondary],
-    };
-    let indicators = metric_ids
-        .into_iter()
-        .map(|metric_id| {
-            let mut indicator = toml::map::Map::new();
-            indicator.insert("provider".into(), toml::Value::String(provider.clone()));
-            indicator.insert("metric_id".into(), toml::Value::String(metric_id.into()));
-            indicator.insert(
-                "limit_value".into(),
-                toml::Value::String(limit_value.clone()),
-            );
-            indicator.insert("color_mode".into(), color_mode.clone());
-            if let Some(fixed_color) = fixed_color.clone() {
-                indicator.insert("fixed_color".into(), fixed_color);
-            }
-            toml::Value::Table(indicator)
-        })
-        .collect();
-    widget
-        .entry("id")
-        .or_insert_with(|| toml::Value::String(format!("legacy-tray-{index}")));
-    widget
-        .entry("kind")
-        .or_insert_with(|| toml::Value::String("limits".into()));
-    widget.insert("indicators".into(), toml::Value::Array(indicators));
-    if !widget.contains_key("presentation") {
-        let presentation = match source.as_str() {
-            "primary_reset" => "reset_time",
-            "primary" | "secondary" => "number",
-            _ => "stacked_numbers",
-        };
-        widget.insert(
-            "presentation".into(),
-            toml::Value::String(presentation.into()),
-        );
-    }
-}
-
-fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()> {
-    while version < SETTINGS_VERSION {
-        match version {
-            // Version 0 was the pre-versioned format. All its property names remain
-            // compatible; serde defaults fill newly introduced notification/update fields.
-            0 => {
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("version".into(), toml::Value::Integer(1));
-                version = 1;
-            }
-            1 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
-                    for widget in widgets {
-                        let Some(widget) = widget.as_table_mut() else {
-                            continue;
-                        };
-                        let metric = widget
-                            .remove("metric")
-                            .and_then(|value| value.as_str().map(str::to_owned));
-                        let (source, presentation) = match metric.as_deref() {
-                            Some("primary_remaining") => ("primary", "number"),
-                            Some("secondary_remaining") => ("secondary", "number"),
-                            Some("primary_reset") => ("primary_reset", "reset_time"),
-                            Some("secondary_reset") => ("primary_reset", "reset_time"),
-                            _ => ("combined", "stacked_numbers"),
-                        };
-                        widget.insert("source".into(), toml::Value::String(source.into()));
-                        widget.insert(
-                            "presentation".into(),
-                            toml::Value::String(presentation.into()),
-                        );
-                        widget.insert(
-                            "limit_value".into(),
-                            toml::Value::String("remaining".into()),
-                        );
-                    }
-                }
-                root.insert("version".into(), toml::Value::Integer(2));
-                version = 2;
-            }
-            2 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                let notifications = root
-                    .entry("notifications")
-                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-                if let Some(table) = notifications.as_table_mut() {
-                    table
-                        .entry("update_available")
-                        .or_insert(toml::Value::Boolean(true));
-                }
-                root.insert("version".into(), toml::Value::Integer(3));
-                version = 3;
-            }
-            3 => {
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .entry("show_usage_stats")
-                    .or_insert(toml::Value::Boolean(true));
-                document
-                    .as_table_mut()
-                    .expect("settings root was checked above")
-                    .insert("version".into(), toml::Value::Integer(4));
-                version = 4;
-            }
-            4 => {
-                // Usage activity is intentionally a compact recent view. This
-                // setting was previously informational-only, so migrate the
-                // former default rather than preserving an inaccessible 90-day
-                // value.
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.insert("history_retention_days".into(), toml::Value::Integer(30));
-                root.insert("version".into(), toml::Value::Integer(5));
-                version = 5;
-            }
-            5 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("show_banked_resets")
-                    .or_insert(toml::Value::Boolean(true));
-                root.insert("version".into(), toml::Value::Integer(6));
-                version = 6;
-            }
-            6 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("provider")
-                    .or_insert(toml::Value::String("codex".into()));
-                root.insert("version".into(), toml::Value::Integer(7));
-                version = 7;
-            }
-            7 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                let selected = root
-                    .remove("provider")
-                    .and_then(|value| value.as_str().map(str::to_owned));
-                let claude_enabled = selected.as_deref() == Some("claude");
-                let mut providers = toml::map::Map::new();
-                providers.insert(
-                    "codex_enabled".into(),
-                    toml::Value::Boolean(!claude_enabled),
-                );
-                providers.insert(
-                    "claude_enabled".into(),
-                    toml::Value::Boolean(claude_enabled),
-                );
-                root.insert("providers".into(), toml::Value::Table(providers));
-                root.insert("version".into(), toml::Value::Integer(8));
-                version = 8;
-            }
-            8 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("limit_refresh_interval")
-                    .or_insert(toml::Value::String("minute1".into()));
-                root.insert("version".into(), toml::Value::Integer(9));
-                version = 9;
-            }
-            9 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("show_account_name")
-                    .or_insert(toml::Value::Boolean(false));
-                root.insert("version".into(), toml::Value::Integer(10));
-                version = 10;
-            }
-            10 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                let providers = root
-                    .entry("providers")
-                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-                if let Some(providers) = providers.as_table_mut() {
-                    providers
-                        .entry("cursor_enabled")
-                        .or_insert(toml::Value::Boolean(false));
-                }
-                root.insert("version".into(), toml::Value::Integer(11));
-                version = 11;
-            }
-            11 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.remove("hide_plan_credits");
-                root.insert("version".into(), toml::Value::Integer(12));
-                version = 12;
-            }
-            12 => {
-                // Do not surprise existing users with onboarding after an
-                // update. Only settings files created by this version start
-                // with onboarding incomplete.
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("onboarding_completed".into(), toml::Value::Boolean(true));
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("version".into(), toml::Value::Integer(13));
-                version = 13;
-            }
-            13 => {
-                // The Home tab previously had no usage summary at all, so
-                // preserve the new feature's default when existing settings
-                // files are upgraded.
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .entry("show_combined_usage_on_all_tab")
-                    .or_insert(toml::Value::Boolean(true));
-                document
-                    .as_table_mut()
-                    .expect("settings root was checked above")
-                    .insert("version".into(), toml::Value::Integer(14));
-                version = 14;
-            }
-            14 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                let previous = root
-                    .remove("show_combined_usage_on_all_tab")
-                    .unwrap_or(toml::Value::Boolean(true));
-                root.entry("show_total_spend_on_all_tab")
-                    .or_insert(previous);
-                root.insert("version".into(), toml::Value::Integer(15));
-                version = 15;
-            }
-            15 => {
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .entry("total_spend_presentation")
-                    .or_insert(toml::Value::String("donut".into()));
-                document
-                    .as_table_mut()
-                    .expect("settings root was checked above")
-                    .insert("version".into(), toml::Value::Integer(16));
-                version = 16;
-            }
-            16 => {
-                // Preserve the historical Codex → Claude → Cursor presentation
-                // order for existing installs when provider reordering lands.
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("provider_order").or_insert_with(|| {
-                    toml::Value::Array(
-                        ProviderKind::ALL
-                            .iter()
-                            .map(|provider| toml::Value::String(provider.id().into()))
-                            .collect(),
-                    )
-                });
-                root.insert("version".into(), toml::Value::Integer(17));
-                version = 17;
-            }
-            17 => {
-                // Promote provider_order into popup_order and pin Usage Stats
-                // above the historical provider stack.
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                let providers = root
-                    .remove("provider_order")
-                    .and_then(|value| value.as_array().cloned())
-                    .unwrap_or_else(|| {
-                        ProviderKind::ALL
-                            .iter()
-                            .map(|provider| toml::Value::String(provider.id().into()))
-                            .collect()
-                    });
-                let mut popup_order = vec![toml::Value::String("total_spend".into())];
-                for provider in providers {
-                    if let Some(id) = provider.as_str()
-                        && matches!(id, "codex" | "claude" | "cursor" | "openrouter")
-                    {
-                        popup_order.push(toml::Value::String(id.into()));
-                    }
-                }
-                for provider in ProviderKind::ALL {
-                    // Home widget ids of that era.
-                    let id = match provider {
-                        ProviderKind::OpenCodeZen => "open_code_zen",
-                        ProviderKind::OpenCodeGo => "open_code_go",
-                        other => other.id(),
-                    };
-                    if !popup_order.iter().any(|value| value.as_str() == Some(id)) {
-                        popup_order.push(toml::Value::String(id.into()));
-                    }
-                }
-                root.insert("popup_order".into(), toml::Value::Array(popup_order));
-                root.insert("version".into(), toml::Value::Integer(18));
-                version = 18;
-            }
-            18 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("theme")
-                    .or_insert(toml::Value::String("auto".into()));
-                root.entry("accent_color")
-                    .or_insert(toml::Value::String("windows".into()));
-                root.entry("animations_enabled")
-                    .or_insert(toml::Value::Boolean(true));
-                root.insert("version".into(), toml::Value::Integer(19));
-                version = 19;
-            }
-            19 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                let provider_flags = root
-                    .get("providers")
-                    .and_then(toml::Value::as_table)
-                    .cloned()
-                    .unwrap_or_default();
-                let popup_order = root
-                    .get("popup_order")
-                    .and_then(toml::Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                let mut enabled = Vec::new();
-                for value in popup_order {
-                    let Some(id) = value.as_str() else {
-                        continue;
-                    };
-                    let flag = format!("{id}_enabled");
-                    if provider_flags
-                        .get(&flag)
-                        .and_then(toml::Value::as_bool)
-                        .unwrap_or(false)
-                    {
-                        enabled.push(toml::Value::String(id.into()));
-                    }
-                }
-                for provider in ProviderKind::ALL {
-                    let id = provider.id();
-                    let flag = format!("{id}_enabled");
-                    if provider_flags
-                        .get(&flag)
-                        .and_then(toml::Value::as_bool)
-                        .unwrap_or(false)
-                        && !enabled.iter().any(|value| value.as_str() == Some(id))
-                    {
-                        enabled.push(toml::Value::String(id.into()));
-                    }
-                }
-                let mut providers = toml::map::Map::new();
-                providers.insert("enabled".into(), toml::Value::Array(enabled));
-                root.insert("providers".into(), toml::Value::Table(providers));
-                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
-                    for (index, value) in widgets.iter_mut().enumerate() {
-                        let Some(widget) = value.as_table_mut() else {
-                            continue;
-                        };
-                        if widget.contains_key("indicators") {
-                            continue;
-                        }
-                        convert_legacy_tray_widget(widget, index);
-                    }
-                }
-                root.insert("version".into(), toml::Value::Integer(20));
-                version = 20;
-            }
-            20 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                if let Some(toml::Value::Array(widgets)) = root.get_mut("tray_widgets") {
-                    for value in widgets.iter_mut() {
-                        let Some(widget) = value.as_table_mut() else {
-                            continue;
-                        };
-                        let color_mode = widget
-                            .remove("color_mode")
-                            .unwrap_or_else(|| toml::Value::String("status".into()));
-                        let fixed_color = widget.remove("fixed_color");
-                        let Some(toml::Value::Array(indicators)) = widget.get_mut("indicators")
-                        else {
-                            continue;
-                        };
-                        for indicator_value in indicators.iter_mut() {
-                            let Some(indicator) = indicator_value.as_table_mut() else {
-                                continue;
-                            };
-                            indicator.entry("color_mode").or_insert(color_mode.clone());
-                            if let Some(fixed_color) = fixed_color.clone() {
-                                indicator.entry("fixed_color").or_insert(fixed_color);
-                            }
-                        }
-                    }
-                }
-                root.insert("version".into(), toml::Value::Integer(21));
-                version = 21;
-            }
-            21 => {
-                // Preserve the historical Thirty Days default for existing installs.
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .entry("total_spend_period")
-                    .or_insert(toml::Value::String("thirty_days".into()));
-                document
-                    .as_table_mut()
-                    .expect("settings root was checked above")
-                    .insert("version".into(), toml::Value::Integer(22));
-                version = 22;
-            }
-            22 => {
-                // `codex_path` remains optional: absent means automatic
-                // discovery, which preserves existing installations exactly.
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("version".into(), toml::Value::Integer(23));
-                version = 23;
-            }
-            23 => {
-                // The new provider paths are optional. Missing values retain
-                // automatic discovery for Claude and Cursor.
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("version".into(), toml::Value::Integer(24));
-                version = 24;
-            }
-            24 | 25 => {
-                // No released build wrote these versions. Step through them
-                // so the instance migration still runs for older files.
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("version".into(), toml::Value::Integer(26));
-                version = 26;
-            }
-            26 => {
-                // Manual OpenCode keys are stored outside settings. These
-                // non-secret revisions only wake already-running workers.
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("opencode_zen_credentials_revision")
-                    .or_insert(toml::Value::Integer(0));
-                root.entry("opencode_go_credentials_revision")
-                    .or_insert(toml::Value::Integer(0));
-                root.entry("openrouter_credentials_revision")
-                    .or_insert(toml::Value::Integer(0));
-                root.insert("version".into(), toml::Value::Integer(27));
-                version = 27;
-            }
-            27 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("openrouter_accounts")
-                    .or_insert_with(|| toml::Value::Array(Vec::new()));
-                root.insert("version".into(), toml::Value::Integer(28));
-                version = 28;
-            }
-            28 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                let show_banked_resets = root
-                    .get("show_banked_resets")
-                    .and_then(toml::Value::as_bool)
-                    .unwrap_or(true);
-                let show_usage_stats = root
-                    .get("show_usage_stats")
-                    .and_then(toml::Value::as_bool)
-                    .unwrap_or(true);
-                let mut bricks = toml::map::Map::new();
-                for provider in ProviderKind::ALL {
-                    for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
-                        let (all_tab, provider_tab) = if brick_id.ends_with(".usage") {
-                            (false, show_usage_stats)
-                        } else if brick_id.ends_with(".resets") {
-                            (show_banked_resets, show_banked_resets)
-                        } else {
-                            let default = PopupVisibility::default_brick_visibility(&brick_id);
-                            (default.all_tab, default.provider_tab)
-                        };
-                        let mut entry = toml::map::Map::new();
-                        entry.insert("all_tab".into(), toml::Value::Boolean(all_tab));
-                        entry.insert("provider_tab".into(), toml::Value::Boolean(provider_tab));
-                        bricks.insert(brick_id, toml::Value::Table(entry));
-                    }
-                }
-                let mut popup_visibility = toml::map::Map::new();
-                popup_visibility.insert("bricks".into(), toml::Value::Table(bricks));
-                root.insert(
-                    "popup_visibility".into(),
-                    toml::Value::Table(popup_visibility),
-                );
-                root.remove("show_banked_resets");
-                root.remove("show_usage_stats");
-                root.insert("version".into(), toml::Value::Integer(29));
-                version = 29;
-            }
-            29 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                if !root.contains_key("time_format") {
-                    root.insert(
-                        "time_format".into(),
-                        toml::Value::String(TimeFormat::from_windows().as_str().into()),
-                    );
-                }
-                root.insert("version".into(), toml::Value::Integer(30));
-                version = 30;
-            }
-            30 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("auto_activation_pauses")
-                    .or_insert_with(|| toml::Value::Array(Vec::new()));
-                root.insert("version".into(), toml::Value::Integer(31));
-                version = 31;
-            }
-            31 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("bottom_bar_size")
-                    .or_insert_with(|| toml::Value::String("comfortable".into()));
-                root.entry("popup_corner_radius")
-                    .or_insert_with(|| toml::Value::String("small".into()));
-                root.insert("version".into(), toml::Value::Integer(32));
-                version = 32;
-            }
-            32 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("popup_background_material")
-                    .or_insert_with(|| toml::Value::String("acrylic".into()));
-                root.insert("version".into(), toml::Value::Integer(33));
-                version = 33;
-            }
-            33 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("usage_refresh_interval")
-                    .or_insert_with(|| toml::Value::String("minutes15".into()));
-                root.insert("version".into(), toml::Value::Integer(34));
-                version = 34;
-            }
-            34 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("usage_stats_enabled")
-                    .or_insert(toml::Value::Boolean(true));
-                root.insert("version".into(), toml::Value::Integer(35));
-                version = 35;
-            }
-            35 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("reset_announcement_refresh_interval")
-                    .or_insert_with(|| toml::Value::String("hour1".into()));
-                let notifications = root
-                    .entry("notifications")
-                    .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-                if let Some(table) = notifications.as_table_mut() {
-                    table
-                        .entry("forced_reset_feed_enabled")
-                        .or_insert(toml::Value::Boolean(true));
-                    table
-                        .entry("forced_reset_notifications")
-                        .or_insert(toml::Value::Boolean(true));
-                }
-                root.insert("version".into(), toml::Value::Integer(36));
-                version = 36;
-            }
-            36 => {
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                root.entry("usage_stats_excluded_providers")
-                    .or_insert_with(|| toml::Value::Array(Vec::new()));
-                root.insert("version".into(), toml::Value::Integer(37));
-                version = 37;
-            }
-            37 => {
-                // Antigravity and Grok CLI folders are optional. Missing values
-                // retain automatic discovery for existing installations.
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("version".into(), toml::Value::Integer(38));
-                version = 38;
-            }
-            38 => {
-                migration::migrate_to_instances(document)?;
-                version = migration::INSTANCES_VERSION;
-            }
-            39 => {
-                // The global legacy-cards switch became the Classic layout of
-                // each Home provider widget that still used ordinary cards.
-                let root = document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?;
-                let legacy_cards = root
-                    .remove("compact_usage_cards")
-                    .and_then(|value| value.as_bool())
-                    == Some(false);
-                if legacy_cards {
-                    let ids = root
-                        .get("instances")
-                        .and_then(toml::Value::as_array)
-                        .into_iter()
-                        .flatten()
-                        .filter_map(|instance| instance.get("id")?.as_str().map(str::to_owned))
-                        .collect::<Vec<_>>();
-                    let layouts = root
-                        .entry("popup_home_card_layouts")
-                        .or_insert_with(|| toml::Value::Table(toml::map::Map::new()));
-                    if let Some(layouts) = layouts.as_table_mut() {
-                        for id in ids {
-                            layouts
-                                .entry(id)
-                                .or_insert_with(|| toml::Value::String("classic".into()));
-                        }
-                    }
-                }
-                root.insert("version".into(), toml::Value::Integer(40));
-                version = 40;
-            }
-            40 => {
-                // The taskbar widget is switched on after decoding, where its
-                // default widget can be built from the enabled providers.
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert("version".into(), toml::Value::Integer(41));
-                version = 41;
-            }
-            // Unknown future/gap versions: stamp current and keep decoding with
-            // serde defaults rather than refusing to start.
-            _ => {
-                document
-                    .as_table_mut()
-                    .context("settings root must be a TOML table")?
-                    .insert(
-                        "version".into(),
-                        toml::Value::Integer(i64::from(SETTINGS_VERSION)),
-                    );
-                version = SETTINGS_VERSION;
-            }
-        }
-    }
     Ok(())
 }
 
@@ -4147,9 +2923,9 @@ mod tests {
         let old_bytes = std::fs::read(&old).unwrap();
         let bad_bytes = std::fs::read(&bad).unwrap();
 
-        let imported = Settings::load_from_import(&old).unwrap();
+        let imported = Settings::read(&old).unwrap();
         assert!((1..=365).contains(&imported.history_retention_days));
-        assert!(Settings::load_from_import(&bad).is_err());
+        assert!(Settings::read(&bad).is_err());
 
         assert_eq!(std::fs::read(&old).unwrap(), old_bytes);
         assert_eq!(std::fs::read(&bad).unwrap(), bad_bytes);
@@ -4194,7 +2970,7 @@ mod tests {
             .openrouter
             .clone()
             .unwrap();
-        assert!(!crate::openrouter::has_management_key(
+        assert!(!crate::providers::openrouter::has_management_key(
             std::slice::from_ref(&account)
         ));
         assert!(!settings.usage_stats_collection_enabled(openrouter));
@@ -4308,7 +3084,7 @@ mod tests {
         assert_eq!(loaded.version, SETTINGS_VERSION);
         assert!(loaded.usage_stats_provider_enabled(id(ProviderKind::OpenRouter)));
         let raw = fs::read_to_string(path).unwrap();
-        // The selection now lives on each instance.
+        // The exclusion list became a per-instance switch.
         assert!(!raw.contains("usage_stats_excluded_providers"));
         assert!(raw.contains("usage_stats = true"));
         assert_eq!(
@@ -4362,7 +3138,7 @@ show_usage_stats = false
         let mut visibility = PopupVisibility::build_defaults();
         assert!(visibility.is_visible("codex.session", PopupSurface::HomeTab, true));
         assert!(visibility.driver_visible_on_home(ProviderKind::Codex));
-        for brick in crate::provider_registry::catalog_brick_ids(ProviderKind::Codex) {
+        for brick in crate::providers::registry::catalog_brick_ids(ProviderKind::Codex) {
             let tab = visibility.visibility_for(&brick).provider_tab;
             visibility.set_brick(brick, false, tab);
         }
@@ -4397,19 +3173,19 @@ show_usage_stats = false
     #[test]
     fn absorbs_runtime_additional_limits_into_popup_visibility() {
         let mut settings = Settings::default();
-        let brick_id = crate::provider_registry::additional_limit_brick_id(
+        let brick_id = crate::providers::registry::additional_limit_brick_id(
             ProviderKind::Claude,
             "seven_day_runtime_lane",
         );
         assert!(!settings.popup_visibility.bricks.contains_key(&brick_id));
 
-        let limits = crate::limits::ProviderLimits::from_entries([(
+        let limits = crate::quota::limits::ProviderLimits::from_entries([(
             id(ProviderKind::Claude),
-            crate::limits::RateLimits {
-                additional_limits: vec![crate::limits::AdditionalLimit {
+            crate::quota::limits::RateLimits {
+                additional_limits: vec![crate::quota::limits::AdditionalLimit {
                     id: "seven_day_runtime_lane".into(),
                     title: "Runtime Lane".into(),
-                    window: crate::limits::LimitWindow {
+                    window: crate::quota::limits::LimitWindow {
                         used_percent: Some(1),
                         ..Default::default()
                     },
@@ -4417,13 +3193,13 @@ show_usage_stats = false
                 ..Default::default()
             },
         )]);
-        assert!(settings.absorb_discovered_popup_bricks(&limits));
+        assert!(settings.popup_visibility.absorb_discovered_bricks(&limits));
         assert!(
             settings
                 .popup_visibility
                 .is_visible(&brick_id, PopupSurface::HomeTab, true)
         );
-        assert!(!settings.absorb_discovered_popup_bricks(&limits));
+        assert!(!settings.popup_visibility.absorb_discovered_bricks(&limits));
     }
 
     #[test]
@@ -4687,11 +3463,13 @@ enabled = ["codex", "claude"]
     }
 
     #[test]
-    fn floating_panel_settings_default_per_platform_and_round_trip() {
+    fn popup_layout_fields_default_per_platform_and_round_trip() {
         let mut settings: Settings = toml::from_str("onboarding_completed = true").unwrap();
         assert_eq!(settings.popup_floating, !cfg!(windows));
         assert!(settings.popup_position.is_none());
         assert_eq!(settings.popup_height_dip, None);
+        assert!(settings.show_popup_action_bar);
+        assert!(!settings.popup_two_columns);
         settings.popup_height_dip = Some(900);
         settings.popup_floating = true;
         settings.popup_pinned = true;
@@ -4702,8 +3480,20 @@ enabled = ["codex", "claude"]
             screen_x: -1800,
             screen_y: 330,
         });
+        settings.show_popup_action_bar = false;
+        settings.popup_two_columns = true;
+        let right = vec![
+            HomeWidgetId::total_spend(),
+            HomeWidgetId::provider(id(ProviderKind::Claude)),
+        ];
+        settings.popup_home_right_column = Some(right.clone());
+        for instance in &mut settings.instances {
+            instance.enabled = false;
+        }
         let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored, settings);
+        // Hidden instances keep their column.
+        assert_eq!(restored.popup_home_right_column, Some(right));
     }
 
     #[test]
@@ -4724,45 +3514,14 @@ enabled = ["codex", "claude"]
     }
 
     #[test]
-    fn popup_action_bar_defaults_visible_and_persists_when_hidden() {
-        let mut settings: Settings = toml::from_str("onboarding_completed = true").unwrap();
-        assert!(settings.show_popup_action_bar);
-        settings.show_popup_action_bar = false;
-        let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
-        assert!(!restored.show_popup_action_bar);
-    }
-
-    #[test]
-    fn popup_columns_default_off_and_round_trip_with_hidden_widgets() {
-        let legacy: Settings = toml::from_str("onboarding_completed = true").unwrap();
-        assert!(!legacy.popup_two_columns);
-        let mut settings = legacy;
-        settings.popup_two_columns = true;
-        let right = vec![
-            HomeWidgetId::total_spend(),
-            HomeWidgetId::provider(id(ProviderKind::Claude)),
-        ];
-        settings.popup_home_right_column = Some(right.clone());
-        for instance in &mut settings.instances {
-            instance.enabled = false;
-        }
-        let encoded = toml::to_string(&settings).unwrap();
-        let decoded: Settings = toml::from_str(&encoded).unwrap();
-        // Hidden instances keep their column.
-        assert_eq!(decoded.popup_home_right_column, Some(right));
-    }
-
-    #[test]
-    fn instances_reorder_and_move_within_the_shared_order() {
+    fn instances_reorder_within_the_shared_order() {
         let mut settings = Settings::default();
         let (codex, cursor) = (id(ProviderKind::Codex), id(ProviderKind::Cursor));
         settings.set_enabled(codex, true);
         settings.set_enabled(cursor, true);
         assert_eq!(settings.enabled_providers(), vec![codex, cursor]);
-        assert!(settings.move_provider(cursor, true));
-        assert!(settings.move_provider(cursor, true));
+        assert!(settings.reorder_providers(cursor, codex, &[codex, cursor]));
         assert_eq!(settings.enabled_providers(), vec![cursor, codex]);
-        assert!(!settings.move_provider(cursor, true));
         assert!(settings.reorder_providers(cursor, codex, &[codex, cursor]));
         assert_eq!(settings.enabled_providers(), vec![codex, cursor]);
         let ids = settings
@@ -4994,6 +3753,27 @@ enabled = ["claude"]
     }
 
     #[test]
+    fn version_one_tray_widget_keeps_its_single_metric() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "version = 1
+tray_widgets = [{ metric = \"primary_remaining\" }]
+",
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+        let metrics: Vec<_> = loaded.tray_widgets[0]
+            .indicators
+            .iter()
+            .map(|indicator| indicator.metric_id.as_str())
+            .collect();
+        assert_eq!(metrics, ["codex.session"]);
+    }
+
+    #[test]
     fn resets_invalid_tray_widgets_without_failing_startup() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
@@ -5104,18 +3884,6 @@ enabled = true
     }
 
     #[test]
-    fn readable_settings_are_saved_without_reordering() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings.toml");
-        let settings = Settings::default();
-        settings.save(&path).unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            toml::to_string_pretty(&settings).unwrap()
-        );
-    }
-
-    #[test]
     fn recreates_defaults_for_unparseable_settings() {
         let directory = tempfile::tempdir().unwrap();
         let path = directory.path().join("settings.toml");
@@ -5160,7 +3928,7 @@ enabled = true
             let directory = tempfile::tempdir().unwrap();
             let path = directory.path().join("import.toml");
             fs::write(&path, raw).unwrap();
-            let result = Settings::load_from_import(&path);
+            let result = Settings::read(&path);
             assert_eq!(result.is_ok(), valid);
             if let Ok(settings) = result {
                 assert_eq!(settings.version, SETTINGS_VERSION);

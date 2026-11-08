@@ -454,14 +454,14 @@ cargo test --all-targets --all-features --locked
 
 Every window is rendered with [GPUI](https://gpui.rs) on one dedicated UI thread: the tray
 popup, the Settings window and the first-launch onboarding. Settings controls (toggles,
-dropdowns, sliders, text inputs, dialogs) live in `src/settings_window/kit.rs` and
-`src/settings_window/input.rs`. No UI framework runtime is redistributed; the release
+dropdowns, sliders, text inputs, dialogs) live in `src/ui/gui/kit.rs` and
+`src/ui/gui/input.rs`. No UI framework runtime is redistributed; the release
 package is the executable plus its `assets` folder.
 CI checks formatting, lints, and tests on Windows and Linux. Linux desktop integration
 (tray, notifications, portal settings, keyring, autostart, single instance, the D-Bus status
-service) lives in `src/linux/`. `codex-minibar status` is `src/status.rs`; it and the D-Bus
+service) lives in `src/platform/linux/`. `codex-minibar status` is `src/surfaces/status.rs`; it and the D-Bus
 service share one report, served to the CLI over the same loopback bridge as Stream Deck
-(`src/streamdeck.rs`). The GNOME Shell extension and Plasma widget live in `integrations/`.
+(`src/surfaces/streamdeck.rs`). The GNOME Shell extension and Plasma widget live in `integrations/`.
 
 ### Stream Deck companion
 

@@ -1,7 +1,7 @@
 //! SQLite-backed provider store for limits and usage caches.
 //!
-//! Hot UI path still reads `AppState` in memory. Workers and startup hydrate
-//! from this WAL database — the only on-disk persistence for provider data.
+//! The UI reads `AppState` in memory; workers and startup hydrate from this
+//! WAL database, the only on-disk persistence for provider data.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -11,18 +11,20 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use chrono::{DateTime, Duration, Local, NaiveDate, SecondsFormat, TimeZone, Timelike, Utc};
-use directories::ProjectDirs;
+use chrono::{DateTime, Duration, Local, NaiveDate, SecondsFormat, TimeZone, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::limits::{ProviderLimits, RateLimits};
+use crate::platform::local_time::{
+    HOURLY_WINDOW_HOURS, RETENTION_DAYS, start_of_local_day, truncate_hour,
+};
+use crate::quota::limits::{ProviderLimits, RateLimits};
 use crate::usage::{
     CachedClaudeSessionFile, CachedClaudeUsageEntry, CachedSessionFile, ClaudeUsageCache,
-    DailyTokenUsage, TokenUsage, UsageCache, UsageStatistics, statistics_from_daily,
+    DailyTokenUsage, Rollup, TokenUsage, UsageCache, UsageStatistics, statistics_from_daily,
 };
-use crate::{instances::ProviderId, settings::ProviderKind};
+use crate::{providers::instances::ProviderId, providers::registry::ProviderKind};
 
 pub(crate) mod codex_accounts;
 pub(crate) mod repricing;
@@ -30,8 +32,6 @@ pub(crate) mod repricing;
 const SCHEMA_VERSION: i64 = 1;
 const CODEX_CACHE_VERSION: u8 = crate::usage::CODEX_CACHE_VERSION;
 const CLAUDE_CACHE_VERSION: u8 = crate::usage::CLAUDE_CACHE_VERSION;
-const CURSOR_USAGE_VERSION: u8 = 8;
-const CACHE_RETENTION_DAYS: i64 = 365;
 
 static SHARED: OnceLock<Arc<Mutex<ProviderStore>>> = OnceLock::new();
 
@@ -58,7 +58,7 @@ pub struct ProviderStore {
 
 impl ProviderStore {
     pub fn open() -> Result<Self> {
-        let path = store_path()?;
+        let path = crate::platform::paths::store_db()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create provider store dir {}", parent.display()))?;
@@ -436,6 +436,7 @@ impl ProviderStore {
             .context("load cached pricing catalog")
     }
 
+    // Only the non-test pricing download persists catalogs.
     #[cfg_attr(test, allow(dead_code))]
     pub(crate) fn save_pricing_catalog(
         &self,
@@ -493,15 +494,12 @@ impl ProviderStore {
         provider: ProviderId,
         history_days: u16,
     ) -> Result<UsageStatistics> {
-        if provider.kind() == ProviderKind::OpenRouter
-            && !self.has_openrouter_analytics(provider)?
-        {
-            return Ok(UsageStatistics::default());
-        }
-        if provider == ProviderId::primary(ProviderKind::Codex)
-            && let Some(account) = self.codex_account_for_reads()?
-        {
-            return self.account_statistics_for(&account, history_days);
+        match self.usage_reads(provider)? {
+            UsageReads::Nothing => return Ok(UsageStatistics::default()),
+            UsageReads::CodexAccount(account) => {
+                return self.account_statistics_for(&account, history_days);
+            }
+            UsageReads::Stored => {}
         }
         let mut statement = self.conn.prepare(
             "SELECT date, input_tokens, cached_input_tokens, output_tokens,
@@ -569,29 +567,37 @@ impl ProviderStore {
         Ok(())
     }
 
-    /// Hourly usage in `[start, end]`, local hours. Claude prefers `usage_events`
-    /// timestamps; Codex/OpenCode read the hourly table filled on refresh.
+    /// Where reads of `provider`'s usage come from. Every read path routes
+    /// through here so the special cases stay in one place.
+    fn usage_reads(&self, provider: ProviderId) -> Result<UsageReads> {
+        // OpenRouter rows from before credit-cost analytics stay hidden until
+        // the analytics cache has been fetched.
+        if provider.kind() == ProviderKind::OpenRouter
+            && !self.has_openrouter_analytics(provider)?
+        {
+            return Ok(UsageReads::Nothing);
+        }
+        if provider == ProviderId::primary(ProviderKind::Codex)
+            && let Some(account) = self.codex_account_for_reads()?
+        {
+            return Ok(UsageReads::CodexAccount(account));
+        }
+        Ok(UsageReads::Stored)
+    }
+
+    /// Hourly usage in `[start, end]`, local hours.
     pub fn load_usage_hourly(
         &self,
         provider: ProviderId,
         start: DateTime<Local>,
         end: DateTime<Local>,
     ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
-        if provider == ProviderId::primary(ProviderKind::Codex)
-            && let Some(account) = self.codex_account_for_reads()?
-        {
-            return self.account_hourly_for(&account, start, end);
-        }
-        if provider.kind() == ProviderKind::OpenRouter {
-            let mut hours = BTreeMap::<DateTime<Local>, TokenUsage>::new();
-            for (_, at, usage) in self.load_openrouter_hourly_rows(provider, start, end)? {
-                hours.entry(at).or_default().add(&usage);
+        match self.usage_reads(provider)? {
+            UsageReads::Nothing => return Ok(BTreeMap::new()),
+            UsageReads::CodexAccount(account) => {
+                return self.account_hourly_for(&account, start, end);
             }
-            return Ok(hours);
-        }
-        let from_events = self.load_event_hourly(provider, start, end)?;
-        if !from_events.is_empty() {
-            return Ok(from_events);
+            UsageReads::Stored => {}
         }
         let mut statement = self.conn.prepare(
             "SELECT hour, input_tokens, cached_input_tokens, output_tokens,
@@ -612,10 +618,7 @@ impl ProviderStore {
             let (hour_str, usage) = row?;
             if let Some(dt) = parse_datetime_option(&hour_str) {
                 let hour = dt.with_timezone(&Local);
-                hourly
-                    .entry(truncate_local_hour(hour))
-                    .or_default()
-                    .add(&usage);
+                hourly.entry(truncate_hour(hour)).or_default().add(&usage);
             } else {
                 eprintln!(
                     "Skipping usage_hourly row with malformed hour: {}",
@@ -626,165 +629,96 @@ impl ProviderStore {
         Ok(hourly)
     }
 
-    fn load_event_hourly(
+    /// Replaces every derived row of `provider` in one transaction. With
+    /// `daily_since`, only daily rows from that date on are authoritative and
+    /// older days are kept. Hours are upserted rather than replaced, so a
+    /// rollup without hours leaves the stored ones alone.
+    pub(crate) fn save_rollup(
         &self,
         provider: ProviderId,
-        start: DateTime<Local>,
-        end: DateTime<Local>,
-    ) -> Result<BTreeMap<DateTime<Local>, TokenUsage>> {
-        // `end` names the last hour; its events run until the next hour starts.
-        let end_exclusive = end + Duration::hours(1);
-        let mut statement = self.conn.prepare(
-            "SELECT ts, input_tokens, cached_input_tokens, output_tokens,
-                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd,
-                    message_id, request_id, is_sidechain, has_speed
-             FROM usage_events
-             WHERE provider = ?1 AND ts >= ?2 AND ts < ?3
-             ORDER BY path ASC, event_ord ASC",
-        )?;
-        let rows = statement.query_map(
-            params![
-                provider.id(),
-                start.with_timezone(&Utc).to_rfc3339(),
-                end_exclusive.with_timezone(&Utc).to_rfc3339()
-            ],
-            |row| {
-                let ts_str = row.get::<_, String>(0)?;
-                let usage = token_usage_from_row(row, 1)?;
-                Ok((
-                    ts_str,
-                    usage,
-                    row.get::<_, Option<String>>(8)?,
-                    row.get::<_, Option<String>>(9)?,
-                    row.get::<_, i64>(10)? != 0,
-                    row.get::<_, i64>(11)? != 0,
-                ))
-            },
-        )?;
-        // Resumed sessions copy earlier assistant lines into new JSONL files;
-        // dedupe by message/request id like the daily rollup does.
-        let mut window = CachedClaudeSessionFile::default();
-        for row in rows {
-            let (ts_str, usage, message_id, request_id, is_sidechain, has_speed) = row?;
-            if let Some(timestamp) = parse_datetime_option(&ts_str) {
-                window.entries.push(CachedClaudeUsageEntry {
-                    timestamp,
-                    message_id,
-                    request_id,
-                    is_sidechain,
-                    has_speed,
-                    usage,
-                    model: None,
-                });
-            } else {
-                eprintln!(
-                    "Skipping usage_events row with malformed timestamp: {}",
-                    ts_str
-                );
-            }
-        }
-        let mut cache = ClaudeUsageCache::default();
-        cache.files.insert(String::new(), window);
-        let mut hourly = BTreeMap::<DateTime<Local>, TokenUsage>::new();
-        for entry in crate::usage::deduplicate_claude_entries(&cache) {
-            let local = entry.timestamp.with_timezone(&Local);
-            if local < start || local >= end_exclusive {
-                continue;
-            }
-            hourly
-                .entry(truncate_local_hour(local))
-                .or_default()
-                .add(&entry.usage);
-        }
-        Ok(hourly)
+        rollup: &Rollup,
+        daily_since: Option<NaiveDate>,
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        self.write_rollup(provider, rollup, daily_since)?;
+        tx.commit()?;
+        Ok(())
     }
 
-    pub fn replace_usage_hourly(
+    fn write_rollup(
+        &self,
+        provider: ProviderId,
+        rollup: &Rollup,
+        daily_since: Option<NaiveDate>,
+    ) -> Result<()> {
+        self.replace_usage_daily_bounded(provider, &rollup.daily, daily_since)?;
+        self.replace_keyed_daily_in_transaction(
+            "usage_model_daily",
+            "model",
+            provider,
+            &rollup.models,
+            daily_since,
+        )?;
+        self.replace_keyed_daily_in_transaction(
+            "usage_project_daily",
+            "project",
+            provider,
+            &rollup.projects,
+            daily_since,
+        )?;
+        self.write_usage_hourly(provider, &rollup.hourly)
+    }
+
+    fn write_usage_hourly(
         &self,
         provider: ProviderId,
         hours: &[(DateTime<Local>, TokenUsage)],
     ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
         let cutoff = hourly_cutoff();
         // Retention applies to every provider, not just the one being written.
-        tx.execute("DELETE FROM usage_hourly WHERE hour < ?1", params![cutoff])?;
-        {
-            let mut insert = tx.prepare(
-                "INSERT INTO usage_hourly(
-                    provider, hour, input_tokens, cached_input_tokens, output_tokens,
-                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
-                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-                 ON CONFLICT(provider, hour) DO UPDATE SET
-                    input_tokens=excluded.input_tokens,
-                    cached_input_tokens=excluded.cached_input_tokens,
-                    output_tokens=excluded.output_tokens,
-                    requests=excluded.requests,
-                    estimated_cost_microusd=excluded.estimated_cost_microusd,
-                    priced_requests=excluded.priced_requests,
-                    cache_savings_microusd=excluded.cache_savings_microusd
-                 WHERE (usage_hourly.input_tokens, usage_hourly.cached_input_tokens,
-                        usage_hourly.output_tokens, usage_hourly.requests,
-                        usage_hourly.estimated_cost_microusd, usage_hourly.priced_requests,
-                        usage_hourly.cache_savings_microusd)
-                    <> (excluded.input_tokens, excluded.cached_input_tokens,
-                        excluded.output_tokens, excluded.requests,
-                        excluded.estimated_cost_microusd, excluded.priced_requests,
-                        excluded.cache_savings_microusd)",
-            )?;
-            for (hour, usage) in hours {
-                let hour_key = hour_key(*hour);
-                if hour_key < cutoff {
-                    continue;
-                }
-                insert.execute(params![
-                    provider.id(),
-                    hour_key,
-                    usage.input_tokens as i64,
-                    usage.cached_input_tokens as i64,
-                    usage.output_tokens as i64,
-                    usage.requests as i64,
-                    usage.estimated_cost_microusd as i64,
-                    usage.priced_requests as i64,
-                    usage.cache_savings_microusd as i64,
-                ])?;
+        self.conn
+            .execute("DELETE FROM usage_hourly WHERE hour < ?1", params![cutoff])?;
+        // Unchanged rows are skipped: rescans rewrite the whole window.
+        let mut insert = self.conn.prepare(
+            "INSERT INTO usage_hourly(
+                provider, hour, input_tokens, cached_input_tokens, output_tokens,
+                requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+             ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(provider, hour) DO UPDATE SET
+                input_tokens=excluded.input_tokens,
+                cached_input_tokens=excluded.cached_input_tokens,
+                output_tokens=excluded.output_tokens,
+                requests=excluded.requests,
+                estimated_cost_microusd=excluded.estimated_cost_microusd,
+                priced_requests=excluded.priced_requests,
+                cache_savings_microusd=excluded.cache_savings_microusd
+             WHERE (usage_hourly.input_tokens, usage_hourly.cached_input_tokens,
+                    usage_hourly.output_tokens, usage_hourly.requests,
+                    usage_hourly.estimated_cost_microusd, usage_hourly.priced_requests,
+                    usage_hourly.cache_savings_microusd)
+                <> (excluded.input_tokens, excluded.cached_input_tokens,
+                    excluded.output_tokens, excluded.requests,
+                    excluded.estimated_cost_microusd, excluded.priced_requests,
+                    excluded.cache_savings_microusd)",
+        )?;
+        for (hour, usage) in hours {
+            let hour_key = hour_key(*hour);
+            if hour_key < cutoff {
+                continue;
             }
+            insert.execute(params![
+                provider.id(),
+                hour_key,
+                usage.input_tokens as i64,
+                usage.cached_input_tokens as i64,
+                usage.output_tokens as i64,
+                usage.requests as i64,
+                usage.estimated_cost_microusd as i64,
+                usage.priced_requests as i64,
+                usage.cache_savings_microusd as i64,
+            ])?;
         }
-        tx.commit()?;
         Ok(())
-    }
-
-    pub fn replace_usage_daily(
-        &self,
-        provider: ProviderId,
-        days: &[DailyTokenUsage],
-    ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        self.replace_usage_daily_in_transaction(provider, days)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// Like `replace_usage_daily`, but only rows dated `since` or later are
-    /// pruned. For sources that report a limited window, so older accumulated
-    /// history survives a refresh.
-    pub fn replace_usage_daily_since(
-        &self,
-        provider: ProviderId,
-        days: &[DailyTokenUsage],
-        since: NaiveDate,
-    ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        self.replace_usage_daily_bounded(provider, days, Some(since))?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    fn replace_usage_daily_in_transaction(
-        &self,
-        provider: ProviderId,
-        days: &[DailyTokenUsage],
-    ) -> Result<()> {
-        self.replace_usage_daily_bounded(provider, days, None)
     }
 
     fn replace_usage_daily_bounded(
@@ -869,20 +803,18 @@ impl ProviderStore {
             .map(|dt| dt.with_timezone(&Utc)))
     }
 
+    /// Records a remote usage fetch together with the caller's own format
+    /// `version`, which [`Self::usage_version`] reads back.
     pub fn set_usage_fetched_at(
         &self,
         provider: ProviderId,
         fetched_at: DateTime<Utc>,
+        version: u8,
     ) -> Result<()> {
-        self.upsert_provider_meta(
-            provider,
-            Some(fetched_at),
-            i64::from(CURSOR_USAGE_VERSION),
-            None,
-        )
+        self.upsert_provider_meta(provider, Some(fetched_at), i64::from(version), None)
     }
 
-    pub fn cursor_usage_version(&self, provider: ProviderId) -> Result<u8> {
+    pub fn usage_version(&self, provider: ProviderId) -> Result<u8> {
         let mut statement = self
             .conn
             .prepare("SELECT schema_version FROM provider_meta WHERE provider = ?1")?;
@@ -1018,7 +950,14 @@ impl ProviderStore {
         })
     }
 
-    pub(crate) fn save_codex_cache(&self, provider: ProviderId, cache: &UsageCache) -> Result<()> {
+    /// Saves the per-file scan state and replaces the provider rollup derived
+    /// from it, with `hourly` as its recent hours.
+    pub(crate) fn save_codex_cache(
+        &self,
+        provider: ProviderId,
+        cache: &UsageCache,
+        hourly: Vec<(DateTime<Local>, TokenUsage)>,
+    ) -> Result<()> {
         // Files whose rows already equal the cache are never rewritten; only
         // dirty files are replaced and files that left the cache are deleted.
         let stale = self.stale_codex_paths(provider, cache)?;
@@ -1129,12 +1068,7 @@ impl ProviderStore {
             i64::from(cache.version),
             Some(flags.to_string()),
         )?;
-        self.replace_usage_daily(
-            provider,
-            &aggregate_codex_daily(cache, CACHE_RETENTION_DAYS as u16),
-        )?;
-        self.replace_usage_model_daily(provider, &aggregate_codex_model_daily(cache))?;
-        Ok(())
+        self.save_rollup(provider, &cache.rollup(hourly), None)
     }
 
     /// Paths with stored per-file Codex rows that are no longer in `cache`.
@@ -1476,33 +1410,6 @@ impl ProviderStore {
         Ok(())
     }
 
-    pub(crate) fn load_openrouter_hourly_rows(
-        &self,
-        provider: ProviderId,
-        start: DateTime<Local>,
-        end: DateTime<Local>,
-    ) -> Result<Vec<(String, DateTime<Local>, TokenUsage)>> {
-        match self.load_openrouter_analytics(provider)? {
-            Some(raw) => crate::openrouter::analytics::cached_hourly_rows(&raw, start, end),
-            None => Ok(Vec::new()),
-        }
-    }
-
-    pub(crate) fn load_openrouter_account_models(
-        &self,
-        provider: ProviderId,
-        account: &str,
-        start: NaiveDate,
-        end: NaiveDate,
-    ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
-        match self.load_openrouter_analytics(provider)? {
-            Some(raw) => {
-                crate::openrouter::analytics::cached_account_models(&raw, account, start, end)
-            }
-            None => Ok(Vec::new()),
-        }
-    }
-
     pub(crate) fn load_openrouter_analytics(&self, provider: ProviderId) -> Result<Option<String>> {
         Ok(self
             .conn
@@ -1526,15 +1433,14 @@ impl ProviderStore {
         &self,
         provider: ProviderId,
         cache: &str,
-        daily: &[DailyTokenUsage],
-        models: &[(String, NaiveDate, TokenUsage)],
+        version: u8,
+        rollup: &Rollup,
         at: DateTime<Utc>,
     ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
-        self.replace_usage_daily_in_transaction(provider, daily)?;
-        self.replace_usage_model_daily_in_transaction(provider, models)?;
+        self.write_rollup(provider, rollup, None)?;
         self.set_meta(&openrouter_analytics_key(provider), cache)?;
-        self.set_usage_fetched_at(provider, at)?;
+        self.set_usage_fetched_at(provider, at, version)?;
         tx.commit()?;
         Ok(())
     }
@@ -1570,10 +1476,12 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<u64> {
-        if provider == ProviderId::primary(ProviderKind::Codex)
-            && let Some(account) = self.codex_account_for_reads()?
-        {
-            return self.account_sessions_for(&account, start, end);
+        match self.usage_reads(provider)? {
+            UsageReads::Nothing => return Ok(0),
+            UsageReads::CodexAccount(account) => {
+                return self.account_sessions_for(&account, start, end);
+            }
+            UsageReads::Stored => {}
         }
         let from_files: i64 = self.conn.query_row(
             "SELECT COUNT(DISTINCT path) FROM usage_file_daily
@@ -1587,7 +1495,6 @@ impl ProviderStore {
 
         // Claude (and any other event-scanned provider) never writes
         // usage_file_daily — only usage_events + rolled-up usage_daily.
-        // Counting files there always returned 0 while spend was real.
         let start_ts = start_of_local_day(start).with_timezone(&Utc).to_rfc3339();
         let end_ts = start_of_local_day(end + Duration::days(1))
             .with_timezone(&Utc)
@@ -1607,19 +1514,16 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, TokenUsage)>> {
-        if provider.kind() == ProviderKind::OpenRouter
-            && !self.has_openrouter_analytics(provider)?
-        {
-            return Ok(Vec::new());
-        }
-        if provider == ProviderId::primary(ProviderKind::Codex)
-            && let Some(account) = self.codex_account_for_reads()?
-        {
-            let mut merged = BTreeMap::<String, TokenUsage>::new();
-            for (model, _, usage) in self.account_daily_for(&account, start, end)? {
-                merged.entry(model).or_default().add(&usage);
+        match self.usage_reads(provider)? {
+            UsageReads::Nothing => return Ok(Vec::new()),
+            UsageReads::CodexAccount(account) => {
+                let mut merged = BTreeMap::<String, TokenUsage>::new();
+                for (model, _, usage) in self.account_daily_for(&account, start, end)? {
+                    merged.entry(model).or_default().add(&usage);
+                }
+                return Ok(merged.into_iter().collect());
             }
-            return Ok(merged.into_iter().collect());
+            UsageReads::Stored => {}
         }
         let mut statement = self.conn.prepare(
             "SELECT model, input_tokens, cached_input_tokens, output_tokens,
@@ -1650,15 +1554,12 @@ impl ProviderStore {
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, NaiveDate, TokenUsage)>> {
-        if provider.kind() == ProviderKind::OpenRouter
-            && !self.has_openrouter_analytics(provider)?
-        {
-            return Ok(Vec::new());
-        }
-        if provider == ProviderId::primary(ProviderKind::Codex)
-            && let Some(account) = self.codex_account_for_reads()?
-        {
-            return self.account_daily_for(&account, start, end);
+        match self.usage_reads(provider)? {
+            UsageReads::Nothing => return Ok(Vec::new()),
+            UsageReads::CodexAccount(account) => {
+                return self.account_daily_for(&account, start, end);
+            }
+            UsageReads::Stored => {}
         }
         let mut statement = self.conn.prepare(
             "SELECT model, date, input_tokens, cached_input_tokens, output_tokens,
@@ -1682,44 +1583,6 @@ impl ProviderStore {
         .collect()
     }
 
-    pub(crate) fn replace_usage_model_daily(
-        &self,
-        provider: ProviderId,
-        rows: &[(String, NaiveDate, TokenUsage)],
-    ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        self.replace_usage_model_daily_in_transaction(provider, rows)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    fn replace_usage_model_daily_in_transaction(
-        &self,
-        provider: ProviderId,
-        rows: &[(String, NaiveDate, TokenUsage)],
-    ) -> Result<()> {
-        self.replace_keyed_daily_in_transaction("usage_model_daily", "model", provider, rows)
-    }
-
-    pub(crate) fn replace_usage_project_daily(
-        &self,
-        provider: ProviderId,
-        rows: &[(String, NaiveDate, TokenUsage)],
-    ) -> Result<()> {
-        let tx = self.conn.unchecked_transaction()?;
-        self.replace_usage_project_daily_in_transaction(provider, rows)?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    pub(crate) fn replace_usage_project_daily_in_transaction(
-        &self,
-        provider: ProviderId,
-        rows: &[(String, NaiveDate, TokenUsage)],
-    ) -> Result<()> {
-        self.replace_keyed_daily_in_transaction("usage_project_daily", "project", provider, rows)
-    }
-
     /// Replaces a provider's `(date, key)` rollup in `table`, whose key column
     /// is `column`. Unchanged rows are left untouched.
     fn replace_keyed_daily_in_transaction(
@@ -1728,6 +1591,7 @@ impl ProviderStore {
         column: &str,
         provider: ProviderId,
         rows: &[(String, NaiveDate, TokenUsage)],
+        since: Option<NaiveDate>,
     ) -> Result<()> {
         let mut retained = BTreeSet::new();
         {
@@ -1785,12 +1649,12 @@ impl ProviderStore {
         self.conn.execute(
             &format!(
                 "DELETE FROM {table}
-                 WHERE provider = ?1 AND NOT EXISTS (
+                 WHERE provider = ?1 AND (?2 IS NULL OR date >= ?2) AND NOT EXISTS (
                     SELECT 1 FROM temp.retained_keyed_daily r
                     WHERE r.date = {table}.date AND r.key = {table}.{column}
                  )"
             ),
-            params![provider.id()],
+            params![provider.id(), since.map(|date| date.to_string())],
         )?;
         self.conn
             .execute("DELETE FROM temp.retained_keyed_daily", [])?;
@@ -1849,9 +1713,9 @@ impl ProviderStore {
     }
 
     /// True while a scanned Claude log has no stored `cwd`, or logged usage
-    /// has no project rollup yet. The next refresh must then skip the
-    /// unchanged-logs shortcut, which would never fill them in.
-    pub(crate) fn claude_projects_missing(&self, provider: ProviderId) -> Result<bool> {
+    /// has no project or recent hourly rollup yet. The next refresh must then
+    /// skip the unchanged-logs shortcut, which would never fill them in.
+    pub(crate) fn claude_rollup_missing(&self, provider: ProviderId) -> Result<bool> {
         Ok(self.conn.query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM scan_files s
@@ -1862,48 +1726,43 @@ impl ProviderStore {
              ) OR (
                 EXISTS(SELECT 1 FROM usage_events WHERE provider = ?1)
                 AND NOT EXISTS(SELECT 1 FROM usage_project_daily WHERE provider = ?1)
+             ) OR (
+                EXISTS(SELECT 1 FROM usage_events WHERE provider = ?1 AND ts >= ?2)
+                AND NOT EXISTS(SELECT 1 FROM usage_hourly WHERE provider = ?1)
              )",
-            params![provider.id()],
+            params![
+                provider.id(),
+                crate::platform::local_time::hourly_window_start(Local::now())
+                    .with_timezone(&Utc)
+                    .to_rfc3339()
+            ],
             |row| row.get(0),
         )?)
     }
 
     /// Usage per project working directory in `[start, end]`. An empty `cwd`
-    /// collects usage whose project is unknown. Only transcript-scanned
-    /// providers (Codex, Claude) record projects; others return nothing.
+    /// collects usage whose project is unknown.
     pub fn load_project_breakdown(
         &self,
         provider: ProviderId,
         start: NaiveDate,
         end: NaiveDate,
     ) -> Result<Vec<(String, TokenUsage)>> {
-        let sql = match provider.kind() {
-            ProviderKind::Claude => {
-                "SELECT project, SUM(input_tokens), SUM(cached_input_tokens),
-                        SUM(output_tokens), SUM(requests), SUM(estimated_cost_microusd),
-                        SUM(priced_requests), SUM(cache_savings_microusd)
-                 FROM usage_project_daily
-                 WHERE provider = ?1 AND date >= ?2 AND date <= ?3
-                 GROUP BY project"
+        match self.usage_reads(provider)? {
+            UsageReads::Nothing => return Ok(Vec::new()),
+            UsageReads::CodexAccount(account) => {
+                return self.account_projects_for(&account, start, end);
             }
-            ProviderKind::Codex => {
-                if provider.is_primary()
-                    && let Some(account) = self.codex_account_for_reads()?
-                {
-                    return self.account_projects_for(&account, start, end);
-                }
-                "SELECT COALESCE(c.cwd, '') AS project, SUM(f.input_tokens),
-                        SUM(f.cached_input_tokens), SUM(f.output_tokens), SUM(f.requests),
-                        SUM(f.estimated_cost_microusd), SUM(f.priced_requests),
-                        SUM(f.cache_savings_microusd)
-                 FROM usage_file_daily f
-                 LEFT JOIN usage_source_cwd c ON c.provider = f.provider AND c.path = f.path
-                 WHERE f.provider = ?1 AND f.date >= ?2 AND f.date <= ?3
-                 GROUP BY project"
-            }
-            _ => return Ok(Vec::new()),
-        };
-        let mut statement = self.conn.prepare(sql)?;
+            UsageReads::Stored => {}
+        }
+        let mut statement = self.conn.prepare(
+            "SELECT project, SUM(input_tokens), SUM(cached_input_tokens),
+                    SUM(output_tokens), SUM(requests), SUM(estimated_cost_microusd),
+                    SUM(priced_requests), SUM(cache_savings_microusd)
+             FROM usage_project_daily
+             WHERE provider = ?1 AND date >= ?2 AND date <= ?3
+             GROUP BY project",
+        )?;
         let rows = statement.query_map(
             params![provider.id(), start.to_string(), end.to_string()],
             |row| Ok((row.get::<_, String>(0)?, token_usage_from_row(row, 1)?)),
@@ -1915,7 +1774,7 @@ impl ProviderStore {
     /// multi-gigabyte rescan of local session logs. Malformed caches remain on
     /// disk and the normal scanner can recover without losing their evidence.
     fn migrate_legacy_json_caches(&self) {
-        let Ok(config) = config_dir() else {
+        let Ok(config) = crate::platform::paths::config_dir() else {
             return;
         };
 
@@ -1976,7 +1835,7 @@ impl ProviderStore {
         if cache.version != CODEX_CACHE_VERSION {
             cache.pricing_rebuild_needed = true;
         }
-        self.save_codex_cache(ProviderId::primary(ProviderKind::Codex), &cache)?;
+        self.save_codex_cache(ProviderId::primary(ProviderKind::Codex), &cache, Vec::new())?;
         Ok(true)
     }
 
@@ -1990,13 +1849,9 @@ impl ProviderStore {
         if cache.version != CLAUDE_CACHE_VERSION {
             return Ok(false);
         }
-        self.save_claude_cache(ProviderId::primary(ProviderKind::Claude), &cache)?;
-        let stats = crate::usage::statistics_from_claude_cache(&cache, CACHE_RETENTION_DAYS as u16);
-        self.replace_usage_daily(ProviderId::primary(ProviderKind::Claude), &stats.daily)?;
-        self.replace_usage_model_daily(
-            ProviderId::primary(ProviderKind::Claude),
-            &aggregate_claude_model_daily(&cache),
-        )?;
+        let claude = ProviderId::primary(ProviderKind::Claude);
+        self.save_claude_cache(claude, &cache)?;
+        self.save_rollup(claude, &crate::usage::claude_rollup(&cache), None)?;
         Ok(true)
     }
 
@@ -2007,12 +1862,77 @@ impl ProviderStore {
         let Ok(cache) = serde_json::from_slice::<LegacyCursorUsageCache>(&bytes) else {
             return Ok(false);
         };
-        if cache.version != CURSOR_USAGE_VERSION {
+        if cache.version != crate::providers::cursor::USAGE_CACHE_VERSION {
             return Ok(false);
         }
-        self.replace_usage_daily(ProviderId::primary(ProviderKind::Cursor), &cache.daily)?;
-        self.set_usage_fetched_at(ProviderId::primary(ProviderKind::Cursor), cache.fetched_at)?;
+        let cursor = ProviderId::primary(ProviderKind::Cursor);
+        let rollup = Rollup {
+            daily: cache.daily,
+            ..Rollup::default()
+        };
+        self.save_rollup(cursor, &rollup, None)?;
+        self.set_usage_fetched_at(cursor, cache.fetched_at, cache.version)?;
         Ok(true)
+    }
+}
+
+/// See [`ProviderStore::usage_reads`].
+enum UsageReads {
+    /// Nothing trustworthy is stored yet.
+    Nothing,
+    /// The primary Codex instance reads the active account's events.
+    CodexAccount(String),
+    Stored,
+}
+
+/// Single-table writers for tests that seed one kind of row at a time.
+#[cfg(test)]
+impl ProviderStore {
+    pub(crate) fn replace_usage_daily(
+        &self,
+        provider: ProviderId,
+        days: &[DailyTokenUsage],
+    ) -> Result<()> {
+        self.replace_usage_daily_bounded(provider, days, None)
+    }
+
+    pub(crate) fn replace_usage_daily_since(
+        &self,
+        provider: ProviderId,
+        days: &[DailyTokenUsage],
+        since: NaiveDate,
+    ) -> Result<()> {
+        self.replace_usage_daily_bounded(provider, days, Some(since))
+    }
+
+    pub(crate) fn replace_usage_hourly(
+        &self,
+        provider: ProviderId,
+        hours: &[(DateTime<Local>, TokenUsage)],
+    ) -> Result<()> {
+        self.write_usage_hourly(provider, hours)
+    }
+
+    pub(crate) fn replace_usage_model_daily(
+        &self,
+        provider: ProviderId,
+        rows: &[(String, NaiveDate, TokenUsage)],
+    ) -> Result<()> {
+        self.replace_keyed_daily_in_transaction("usage_model_daily", "model", provider, rows, None)
+    }
+
+    pub(crate) fn replace_usage_project_daily(
+        &self,
+        provider: ProviderId,
+        rows: &[(String, NaiveDate, TokenUsage)],
+    ) -> Result<()> {
+        self.replace_keyed_daily_in_transaction(
+            "usage_project_daily",
+            "project",
+            provider,
+            rows,
+            None,
+        )
     }
 }
 
@@ -2023,8 +1943,7 @@ struct LegacyCursorUsageCache {
     daily: Vec<DailyTokenUsage>,
 }
 
-/// The primary instance keeps the original key so existing analytics survive.
-const HOURLY_RETENTION_DAYS: i64 = 8;
+const HOURLY_RETENTION_HOURS: i64 = 4 * HOURLY_WINDOW_HOURS;
 
 /// Canonical UTC key for `usage_hourly.hour`; lexical order equals time order.
 fn hour_key<Tz: TimeZone>(at: DateTime<Tz>) -> String {
@@ -2033,7 +1952,7 @@ fn hour_key<Tz: TimeZone>(at: DateTime<Tz>) -> String {
 }
 
 fn hourly_cutoff() -> String {
-    hour_key(Utc::now() - Duration::days(HOURLY_RETENTION_DAYS))
+    hour_key(Utc::now() - Duration::hours(HOURLY_RETENTION_HOURS))
 }
 
 fn openrouter_analytics_key(provider: ProviderId) -> String {
@@ -2121,18 +2040,6 @@ fn codex_session_key(path: &str, session_id: &str) -> String {
     }
 }
 
-fn aggregate_codex_daily(cache: &UsageCache, history_days: u16) -> Vec<DailyTokenUsage> {
-    statistics_from_daily(
-        &cache
-            .files
-            .values()
-            .flat_map(|file| file.daily.iter().cloned())
-            .collect::<Vec<_>>(),
-        history_days,
-    )
-    .daily
-}
-
 fn token_usage_from_row(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Result<TokenUsage> {
     Ok(TokenUsage {
         input_tokens: row.get::<_, i64>(start)? as u64,
@@ -2143,37 +2050,6 @@ fn token_usage_from_row(row: &rusqlite::Row<'_>, start: usize) -> rusqlite::Resu
         priced_requests: row.get::<_, i64>(start + 5)? as u64,
         cache_savings_microusd: row.get::<_, i64>(start + 6).unwrap_or(0) as u64,
     })
-}
-
-fn aggregate_codex_model_daily(cache: &UsageCache) -> Vec<(String, NaiveDate, TokenUsage)> {
-    let mut merged = BTreeMap::<(String, NaiveDate), TokenUsage>::new();
-    for file in cache.files.values() {
-        for (model, days) in &file.model_daily {
-            for entry in days {
-                merged
-                    .entry((model.clone(), entry.date))
-                    .or_default()
-                    .add(&entry.usage);
-            }
-        }
-    }
-    merged
-        .into_iter()
-        .map(|((model, date), usage)| (model, date, usage))
-        .collect()
-}
-
-fn aggregate_claude_model_daily(cache: &ClaudeUsageCache) -> Vec<(String, NaiveDate, TokenUsage)> {
-    crate::usage::aggregate_claude_model_daily(cache)
-        .into_iter()
-        .map(|(date, model, usage)| (model, date, usage))
-        .collect()
-}
-
-fn start_of_local_day(date: NaiveDate) -> DateTime<Local> {
-    date.and_hms_opt(0, 0, 0)
-        .and_then(|naive| Local.from_local_datetime(&naive).single())
-        .unwrap_or_else(Local::now)
 }
 
 fn parse_date_option(raw: &str) -> Option<NaiveDate> {
@@ -2190,29 +2066,6 @@ fn parse_datetime_option(raw: &str) -> Option<DateTime<Utc>> {
         .ok()
 }
 
-fn truncate_local_hour(timestamp: DateTime<Local>) -> DateTime<Local> {
-    timestamp
-        .with_minute(0)
-        .and_then(|value| value.with_second(0))
-        .and_then(|value| value.with_nanosecond(0))
-        .unwrap_or(timestamp)
-}
-
-fn config_dir() -> Result<PathBuf> {
-    // The sandbox must never read or overwrite the real install's cache.
-    if crate::fake::enabled() {
-        let settings = crate::fake::settings_path();
-        return Ok(settings.parent().unwrap_or(&settings).to_path_buf());
-    }
-    ProjectDirs::from("dev", "Codex Minibar", "Codex Minibar")
-        .map(|dirs| dirs.config_dir().to_path_buf())
-        .context("could not resolve the application config directory")
-}
-
-fn store_path() -> Result<PathBuf> {
-    Ok(config_dir()?.join("provider-store.sqlite"))
-}
-
 /// Convenience helper used by workers that only need a short critical section.
 pub fn with_store<R>(f: impl FnOnce(&mut ProviderStore) -> Result<R>) -> Result<R> {
     let store = shared()?;
@@ -2225,6 +2078,7 @@ pub fn with_store<R>(f: impl FnOnce(&mut ProviderStore) -> Result<R>) -> Result<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Timelike;
     use tempfile::tempdir;
 
     fn id(kind: ProviderKind) -> ProviderId {
@@ -2263,7 +2117,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = test_store(&dir.path().join("hourly.sqlite"));
         let provider = id(ProviderKind::Codex);
-        let at = truncate_local_hour(Local::now());
+        let at = truncate_hour(Local::now());
         let rows = vec![(at, hour_usage(10))];
         store.replace_usage_hourly(provider, &rows).unwrap();
         let before = store.conn.total_changes();
@@ -2375,6 +2229,10 @@ mod tests {
                 .set_meta(&openrouter_analytics_key(provider), "{}")
                 .unwrap();
         }
+        let router = ProviderId::new(ProviderKind::OpenRouter, "openrouter-2");
+        store
+            .set_meta(&openrouter_analytics_key(router), "{}")
+            .unwrap();
         store.set_meta("openrouter.analytics.v1", "x").unwrap();
         store.set_meta("openrouter.analytics.v2", "x").unwrap();
         store
@@ -2401,7 +2259,7 @@ mod tests {
         store.prune_unknown_providers(&[]).unwrap();
         assert_eq!(hourly_rows(&store).len(), 2, "empty list must not prune");
 
-        store.prune_unknown_providers(&[keep]).unwrap();
+        store.prune_unknown_providers(&[keep, router]).unwrap();
         let rows = hourly_rows(&store);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, keep.id());
@@ -2410,11 +2268,14 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM usage_model_daily", [], |r| r.get(0))
             .unwrap();
         assert_eq!(models, 1);
-        let keys = meta_keys(&store);
-        assert!(keys.iter().all(|k| !k.ends_with(".stale")), "{keys:?}");
-        assert!(
-            keys.contains(&openrouter_analytics_key(keep))
-                || keep.kind() != ProviderKind::OpenRouter
+        let mut keys = meta_keys(&store);
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "openrouter.analytics.v3".to_owned(),
+                openrouter_analytics_key(router),
+            ]
         );
     }
 
@@ -2447,7 +2308,7 @@ mod tests {
             .unwrap();
         let rows = store
             .load_model_daily(
-                crate::instances::ProviderId::from(ProviderKind::Codex),
+                crate::providers::instances::ProviderId::from(ProviderKind::Codex),
                 day,
                 day + Duration::days(1),
             )
@@ -2514,8 +2375,12 @@ mod tests {
             .save_openrouter_analytics(
                 id(ProviderKind::OpenRouter),
                 "first",
-                std::slice::from_ref(&day),
-                &[("model".into(), day.date, day.usage.clone())],
+                3,
+                &Rollup {
+                    daily: vec![day.clone()],
+                    models: vec![("model".into(), day.date, day.usage.clone())],
+                    ..Rollup::default()
+                },
                 Utc::now(),
             )
             .unwrap();
@@ -2527,8 +2392,12 @@ mod tests {
                 .save_openrouter_analytics(
                     id(ProviderKind::OpenRouter),
                     "second",
-                    &[changed.clone()],
-                    &[("model".into(), changed.date, changed.usage)],
+                    3,
+                    &Rollup {
+                        daily: vec![changed.clone()],
+                        models: vec![("model".into(), changed.date, changed.usage)],
+                        ..Rollup::default()
+                    },
                     Utc::now()
                 )
                 .is_err()
@@ -2536,7 +2405,7 @@ mod tests {
         assert_eq!(
             store
                 .load_usage_daily(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     30
                 )
                 .unwrap()
@@ -2577,8 +2446,12 @@ mod tests {
             .save_openrouter_analytics(
                 id(ProviderKind::OpenRouter),
                 "old",
-                std::slice::from_ref(&day),
-                &[("model".into(), day.date, day.usage.clone())],
+                3,
+                &Rollup {
+                    daily: vec![day.clone()],
+                    models: vec![("model".into(), day.date, day.usage.clone())],
+                    ..Rollup::default()
+                },
                 Utc::now(),
             )
             .unwrap();
@@ -2598,7 +2471,7 @@ mod tests {
         assert_eq!(
             store
                 .load_usage_daily(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     30
                 )
                 .unwrap()
@@ -2609,7 +2482,7 @@ mod tests {
         assert!(
             store
                 .load_model_breakdown(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     day.date,
                     day.date
                 )
@@ -2619,7 +2492,7 @@ mod tests {
         assert!(
             store
                 .load_model_daily(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     day.date,
                     day.date
                 )
@@ -2637,15 +2510,19 @@ mod tests {
             .save_openrouter_analytics(
                 id(ProviderKind::OpenRouter),
                 "fresh",
-                std::slice::from_ref(&fresh),
-                &[("model".into(), day.date, fresh.usage.clone())],
+                3,
+                &Rollup {
+                    daily: vec![fresh.clone()],
+                    models: vec![("model".into(), day.date, fresh.usage.clone())],
+                    ..Rollup::default()
+                },
                 Utc::now(),
             )
             .unwrap();
         assert_eq!(
             store
                 .load_usage_daily(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     30
                 )
                 .unwrap()
@@ -2653,35 +2530,6 @@ mod tests {
                 .estimated_cost_microusd,
             15_440_000
         );
-    }
-
-    #[test]
-    fn round_trips_usage_daily() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test.sqlite");
-        let store = test_store(&path);
-        let days = vec![DailyTokenUsage {
-            date: Local::now().date_naive(),
-            usage: TokenUsage {
-                input_tokens: 10,
-                output_tokens: 5,
-                requests: 1,
-                priced_requests: 1,
-                estimated_cost_microusd: 100,
-                ..Default::default()
-            },
-        }];
-        store
-            .replace_usage_daily(
-                crate::instances::ProviderId::from(ProviderKind::Cursor),
-                &days,
-            )
-            .unwrap();
-        let stats = store
-            .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Cursor), 30)
-            .unwrap();
-        assert_eq!(stats.daily.len(), 1);
-        assert_eq!(stats.history.requests, 1);
     }
 
     #[test]
@@ -2704,8 +2552,9 @@ mod tests {
             .unwrap();
         store
             .set_usage_fetched_at(
-                crate::instances::ProviderId::from(ProviderKind::Cursor),
+                crate::providers::instances::ProviderId::from(ProviderKind::Cursor),
                 Utc::now(),
+                crate::providers::cursor::USAGE_CACHE_VERSION,
             )
             .unwrap();
 
@@ -2713,41 +2562,48 @@ mod tests {
 
         assert!(
             store
-                .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Cursor), 30)
+                .load_usage_daily(
+                    crate::providers::instances::ProviderId::from(ProviderKind::Cursor),
+                    30
+                )
                 .unwrap()
                 .daily
                 .is_empty()
         );
         assert!(
             store
-                .usage_fetched_at(crate::instances::ProviderId::from(ProviderKind::Cursor))
+                .usage_fetched_at(crate::providers::instances::ProviderId::from(
+                    ProviderKind::Cursor
+                ))
                 .unwrap()
                 .is_none()
         );
     }
 
-    /// Counts writes to the per-file Codex tables, ignoring temp-table
-    /// bookkeeping that `total_changes()` would also include.
+    /// Records which log path each write to a per-file Codex table touched.
     fn track_file_writes(store: &ProviderStore) {
         let mut sql =
-            String::from("CREATE TEMP TABLE IF NOT EXISTS file_writes(n INTEGER NOT NULL);");
+            String::from("CREATE TEMP TABLE IF NOT EXISTS file_writes(path TEXT NOT NULL);");
         for table in ["scan_files", "usage_file_daily", "usage_file_model_daily"] {
-            for op in ["INSERT", "UPDATE", "DELETE"] {
+            for (op, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
                 sql.push_str(&format!(
                     "CREATE TEMP TRIGGER IF NOT EXISTS count_{table}_{op} AFTER {op} ON main.{table}
-                     BEGIN INSERT INTO file_writes VALUES(1); END;"
+                     BEGIN INSERT INTO file_writes VALUES({row}.path); END;"
                 ));
             }
         }
         store.conn.execute_batch(&sql).unwrap();
     }
 
-    fn file_writes(store: &ProviderStore) -> i64 {
-        store
+    fn written_paths(store: &ProviderStore) -> BTreeSet<String> {
+        let mut statement = store
             .conn
-            .query_row("SELECT COUNT(*) FROM temp.file_writes", [], |row| {
-                row.get(0)
-            })
+            .prepare("SELECT path FROM temp.file_writes")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
             .unwrap()
     }
 
@@ -2756,15 +2612,15 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = test_store(&dir.path().join("test.sqlite"));
         store
-            .save_codex_cache(id(ProviderKind::Codex), &sample_codex_cache())
+            .save_codex_cache(id(ProviderKind::Codex), &sample_codex_cache(), Vec::new())
             .unwrap();
         let cache = store.load_codex_cache(id(ProviderKind::Codex)).unwrap();
         track_file_writes(&store);
         store
-            .save_codex_cache(id(ProviderKind::Codex), &cache)
+            .save_codex_cache(id(ProviderKind::Codex), &cache, Vec::new())
             .unwrap();
 
-        assert_eq!(file_writes(&store), 0);
+        assert!(written_paths(&store).is_empty());
     }
 
     #[test]
@@ -2780,7 +2636,7 @@ mod tests {
             .file_identity = Some("7:42".into());
         let other = cache.files["sessions/sample.jsonl"].clone();
         cache.files.insert("sessions/other.jsonl".into(), other);
-        store.save_codex_cache(codex, &cache).unwrap();
+        store.save_codex_cache(codex, &cache, Vec::new()).unwrap();
 
         let mut cache = store.load_codex_cache(codex).unwrap();
         assert_eq!(
@@ -2796,9 +2652,11 @@ mod tests {
             file.offset = 99;
             file.persisted = false;
         }
-        store.save_codex_cache(codex, &cache).unwrap();
-        // scan row + 1 daily delete/insert + 1 model delete/insert for one file.
-        assert!(file_writes(&store) <= 5);
+        store.save_codex_cache(codex, &cache, Vec::new()).unwrap();
+        assert_eq!(
+            written_paths(&store),
+            BTreeSet::from(["sessions/other.jsonl".to_owned()])
+        );
         let loaded = store.load_codex_cache(codex).unwrap();
         assert_eq!(loaded.files["sessions/other.jsonl"].offset, 99);
         assert_eq!(loaded.files["sessions/sample.jsonl"].offset, 42);
@@ -2806,7 +2664,7 @@ mod tests {
 
         let mut cache = loaded;
         cache.files.remove("sessions/other.jsonl");
-        store.save_codex_cache(codex, &cache).unwrap();
+        store.save_codex_cache(codex, &cache, Vec::new()).unwrap();
         let loaded = store.load_codex_cache(codex).unwrap();
         assert_eq!(loaded.files.len(), 1);
         assert!(loaded.files.contains_key("sessions/sample.jsonl"));
@@ -2845,6 +2703,17 @@ mod tests {
         };
         store.save_claude_cache(claude, &cache).unwrap();
 
+        let event_rows = || -> Vec<(i64, String)> {
+            let mut statement = store
+                .conn
+                .prepare("SELECT rowid, message_id FROM usage_events ORDER BY event_ord")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
         let mut cache = store.load_claude_cache(claude).unwrap();
         assert_eq!(
             cache.files["/p/a.jsonl"].file_identity.as_deref(),
@@ -2858,12 +2727,15 @@ mod tests {
         store.save_claude_cache(claude, &cache).unwrap();
         assert_eq!(store.conn.total_changes(), before);
 
+        let stored = event_rows();
         let file = cache.files.get_mut("/p/a.jsonl").unwrap();
         file.entries.push(entry("m3"));
         file.offset = 20;
-        let before = store.conn.total_changes();
         store.save_claude_cache(claude, &cache).unwrap();
-        assert_eq!(store.conn.total_changes() - before, 2); // scan row + 1 event
+        // The already stored events keep their rows; only the tail is added.
+        let appended = event_rows();
+        assert_eq!(appended[..2], stored[..]);
+        assert_eq!(appended[2].1, "m3");
         let mut cache = store.load_claude_cache(claude).unwrap();
         assert_eq!(cache.files["/p/a.jsonl"].entries.len(), 3);
 
@@ -2904,7 +2776,10 @@ mod tests {
         );
         assert_eq!(
             store
-                .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Codex), 30)
+                .load_usage_daily(
+                    crate::providers::instances::ProviderId::from(ProviderKind::Codex),
+                    30
+                )
                 .unwrap()
                 .history
                 .requests,
@@ -2916,7 +2791,7 @@ mod tests {
     fn claude_hourly_dedupes_copied_messages_and_includes_the_end_hour() {
         let dir = tempdir().unwrap();
         let store = test_store(&dir.path().join("test.sqlite"));
-        let hour = truncate_local_hour(Local::now());
+        let hour = truncate_hour(Local::now());
         let at = hour + Duration::minutes(30);
         let entry = |message: &str| CachedClaudeUsageEntry {
             timestamp: at.with_timezone(&Utc),
@@ -2947,11 +2822,73 @@ mod tests {
         };
         let claude = id(ProviderKind::Claude);
         store.save_claude_cache(claude, &cache).unwrap();
+        store
+            .save_rollup(claude, &crate::usage::claude_rollup(&cache), None)
+            .unwrap();
         let hourly = store
             .load_usage_hourly(claude, hour - Duration::hours(23), hour)
             .unwrap();
         assert_eq!(hourly[&hour].requests, 2);
         assert_eq!(hourly[&hour].input_tokens, 20);
+    }
+
+    #[test]
+    fn bounded_rollup_keeps_model_and_project_rows_before_the_cutoff() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let cursor = id(ProviderKind::Cursor);
+        let usage = |requests| TokenUsage {
+            requests,
+            ..Default::default()
+        };
+        let date = |text: &str| text.parse::<NaiveDate>().unwrap();
+        let rollup = |rows: Vec<(&str, &str, u64)>| crate::usage::Rollup {
+            models: rows
+                .iter()
+                .map(|(key, day, requests)| (key.to_string(), date(day), usage(*requests)))
+                .collect(),
+            projects: rows
+                .iter()
+                .map(|(key, day, requests)| (key.to_string(), date(day), usage(*requests)))
+                .collect(),
+            ..Default::default()
+        };
+        store
+            .save_rollup(
+                cursor,
+                &rollup(vec![("a", "2026-01-01", 1), ("a", "2026-03-02", 2)]),
+                None,
+            )
+            .unwrap();
+        store
+            .save_rollup(
+                cursor,
+                &rollup(vec![("b", "2026-03-02", 3)]),
+                Some(date("2026-03-01")),
+            )
+            .unwrap();
+        let models: Vec<_> = store
+            .load_model_daily(cursor, date("2025-01-01"), date("2027-01-01"))
+            .unwrap()
+            .into_iter()
+            .map(|(key, day, usage)| (key, day.to_string(), usage.requests))
+            .collect();
+        assert_eq!(
+            models,
+            vec![
+                ("a".to_owned(), "2026-01-01".to_owned(), 1),
+                ("b".to_owned(), "2026-03-02".to_owned(), 3),
+            ]
+        );
+        let projects: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM usage_project_daily WHERE date < '2026-03-01'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(projects, 1);
     }
 
     #[test]
@@ -3034,7 +2971,7 @@ mod tests {
         assert_eq!(
             store
                 .count_session_paths(
-                    crate::instances::ProviderId::from(ProviderKind::Claude),
+                    crate::providers::instances::ProviderId::from(ProviderKind::Claude),
                     today,
                     today
                 )
@@ -3048,7 +2985,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let store = test_store(&dir.path().join("test.sqlite"));
         store
-            .save_codex_cache(id(ProviderKind::Codex), &sample_codex_cache())
+            .save_codex_cache(id(ProviderKind::Codex), &sample_codex_cache(), Vec::new())
             .unwrap();
         let loaded = store.load_codex_cache(id(ProviderKind::Codex)).unwrap();
         let file = loaded.files.get("sessions/sample.jsonl").unwrap();
@@ -3061,7 +2998,7 @@ mod tests {
         let today = Local::now().date_naive();
         let models = store
             .load_model_breakdown(
-                crate::instances::ProviderId::from(ProviderKind::Codex),
+                crate::providers::instances::ProviderId::from(ProviderKind::Codex),
                 today,
                 today,
             )
@@ -3079,7 +3016,7 @@ mod tests {
         let mut cache = sample_codex_cache();
         let file = cache.files.get_mut("sessions/sample.jsonl").unwrap();
         file.cwd = Some("/work/app".into());
-        store.save_codex_cache(codex, &cache).unwrap();
+        store.save_codex_cache(codex, &cache, Vec::new()).unwrap();
 
         let loaded = store.load_codex_cache(codex).unwrap();
         let file = loaded.files.get("sessions/sample.jsonl").unwrap();
@@ -3094,7 +3031,7 @@ mod tests {
 
         // A log that left the cache takes its cwd row with it.
         store
-            .save_codex_cache(codex, &UsageCache::default())
+            .save_codex_cache(codex, &UsageCache::default(), Vec::new())
             .unwrap();
         let rows: i64 = store
             .conn
@@ -3127,7 +3064,7 @@ mod tests {
             )]),
         };
         store.save_claude_cache(claude, &cache).unwrap();
-        assert!(!store.claude_projects_missing(claude).unwrap());
+        assert!(!store.claude_rollup_missing(claude).unwrap());
         store
             .replace_usage_project_daily(claude, &[("/work/app".into(), today, usage.clone())])
             .unwrap();
@@ -3138,6 +3075,34 @@ mod tests {
                 .load_project_breakdown(id(ProviderKind::Cursor), today, today)
                 .unwrap()
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn every_provider_reads_back_its_project_rollup() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let today = Local::now().date_naive();
+        let usage = TokenUsage {
+            input_tokens: 5,
+            requests: 1,
+            ..Default::default()
+        };
+        let rollup = Rollup {
+            daily: vec![DailyTokenUsage {
+                date: today,
+                usage: usage.clone(),
+            }],
+            projects: vec![("C:\\Dev\\app".into(), today, usage.clone())],
+            ..Rollup::default()
+        };
+        let command_code = id(ProviderKind::CommandCode);
+        store.save_rollup(command_code, &rollup, None).unwrap();
+        assert_eq!(
+            store
+                .load_project_breakdown(command_code, today, today)
+                .unwrap(),
+            vec![("C:\\Dev\\app".to_owned(), usage)]
         );
     }
 }

@@ -6,10 +6,12 @@
 #[cfg(windows)]
 fn main() {
     use chrono::{Duration, Utc};
+    use codex_minibar::settings::choice::Choice;
     use codex_minibar::{
-        instances::ProviderId,
-        limits::{LimitWindow, ProviderLimits, RateLimits},
-        settings::{ProviderKind, Settings, TaskbarWidget, TaskbarWidgetStyle, TrayIndicator},
+        providers::instances::ProviderId,
+        providers::registry::ProviderKind,
+        quota::limits::{LimitWindow, ProviderLimits, RateLimits},
+        settings::{Settings, TaskbarWidget, TaskbarWidgetStyle, TrayIndicator},
     };
 
     unsafe {
@@ -46,7 +48,7 @@ fn main() {
         instance.enabled = matches!(instance.driver, ProviderKind::Codex | ProviderKind::Claude);
     }
     // Not `apply_runtime_effects`: that would register this binary at login.
-    codex_minibar::instances::publish(&settings.instances);
+    codex_minibar::providers::instances::publish(&settings.instances);
     let codex = ProviderId::primary(ProviderKind::Codex);
     let claude = ProviderId::primary(ProviderKind::Claude);
     settings.taskbar.enabled = true;
@@ -95,20 +97,20 @@ fn main() {
         ])
     };
 
-    codex_minibar::taskbar::publish_limits(&limits(0));
-    codex_minibar::taskbar::publish_settings(&settings);
+    codex_minibar::surfaces::taskbar::publish_limits(&limits(0));
+    codex_minibar::surfaces::taskbar::publish_settings(&settings);
     let started = std::time::Instant::now();
     let mut step = 0u8;
     while started.elapsed().as_secs() < seconds {
         std::thread::sleep(std::time::Duration::from_secs(4));
         step = (step + 1) % 4;
-        codex_minibar::taskbar::publish_limits(&limits(step));
-        for action in codex_minibar::taskbar::take_actions() {
+        codex_minibar::surfaces::taskbar::publish_limits(&limits(step));
+        for action in codex_minibar::surfaces::taskbar::take_actions() {
             eprintln!("action: {action:?}");
         }
     }
     settings.taskbar.enabled = false;
-    codex_minibar::taskbar::publish_settings(&settings);
+    codex_minibar::surfaces::taskbar::publish_settings(&settings);
     std::thread::sleep(std::time::Duration::from_millis(400));
 }
 
