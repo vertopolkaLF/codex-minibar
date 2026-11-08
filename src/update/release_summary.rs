@@ -145,9 +145,17 @@ struct Builder {
     bold: usize,
     italic: usize,
     strike: usize,
-    links: Vec<Option<usize>>,
+    /// Open links; None for links that are not followed (non-HTTPS).
+    links: Vec<Option<OpenLink>>,
     image: Option<(String, String)>,
     code_block: Option<String>,
+}
+
+/// A link being read. An image inside it flushes the paragraph, so the
+/// link's slot in [`Inline::links`] is claimed per paragraph.
+struct OpenLink {
+    url: String,
+    index: Option<usize>,
 }
 
 impl Builder {
@@ -157,16 +165,8 @@ impl Builder {
             italic: self.italic > 0,
             strike: self.strike > 0,
             code: false,
-            link: self.links.last().copied().flatten(),
+            link: None,
         }
-    }
-
-    fn inline(&mut self) -> &mut Inline {
-        let depth = self.lists.len();
-        &mut self
-            .current
-            .get_or_insert_with(|| (Pending::Paragraph(depth), Inline::default()))
-            .1
     }
 
     fn text(&mut self, text: &str, style: SpanStyle) {
@@ -175,11 +175,26 @@ impl Builder {
         } else if let Some(code) = &mut self.code_block {
             code.push_str(text);
         } else {
-            self.inline().push(text, style);
+            let depth = self.lists.len();
+            let inline = &mut self
+                .current
+                .get_or_insert_with(|| (Pending::Paragraph(depth), Inline::default()))
+                .1;
+            let link = match self.links.last_mut() {
+                Some(Some(open)) => Some(*open.index.get_or_insert_with(|| {
+                    inline.links.push(open.url.clone());
+                    inline.links.len() - 1
+                })),
+                _ => None,
+            };
+            inline.push(text, SpanStyle { link, ..style });
         }
     }
 
     fn flush(&mut self) {
+        for open in self.links.iter_mut().flatten() {
+            open.index = None;
+        }
         let Some((pending, mut text)) = self.current.take() else {
             return;
         };
@@ -276,12 +291,10 @@ impl Builder {
             }
             Tag::Link { dest_url, .. } => {
                 let url = dest_url.trim();
-                let link = is_https(url).then(|| {
-                    let inline = self.inline();
-                    inline.links.push(url.to_string());
-                    inline.links.len() - 1
-                });
-                self.links.push(link);
+                self.links.push(is_https(url).then(|| OpenLink {
+                    url: url.to_string(),
+                    index: None,
+                }));
             }
             Tag::Emphasis => self.italic += 1,
             Tag::Strong => self.bold += 1,
@@ -400,6 +413,17 @@ mod tests {
                 Block::Rule,
             ]
         );
+    }
+
+    #[test]
+    fn a_link_around_an_image_keeps_its_caption_linked() {
+        let blocks = parse("[![shot](https://example.com/a.png) caption](https://example.com)");
+        let [Block::Image { .. }, Block::Paragraph { text, .. }] = blocks.as_slice() else {
+            panic!("{blocks:?}");
+        };
+        assert_eq!(text.text.trim(), "caption");
+        assert_eq!(text.links, vec!["https://example.com".to_string()]);
+        assert!(text.spans.iter().all(|span| span.style.link == Some(0)));
     }
 
     #[test]

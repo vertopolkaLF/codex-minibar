@@ -2308,14 +2308,15 @@ impl Settings {
             .and_then(toml::Value::as_integer)
             .unwrap_or(0);
         let original_version = u32::try_from(original_version).unwrap_or(u32::MAX);
-        // Heal legacy tray widget shapes even when `version` already claims to
-        // be current — a stamped version must never leave us unable to decode.
-        let healed_tray = heal_legacy_tray_widgets(&mut document);
-        let mut dirty = healed_tray;
+        let mut dirty = false;
         if original_version < SETTINGS_VERSION {
             migrate(&mut document, original_version)?;
             dirty = true;
         }
+        // Heal legacy tray widget shapes even when `version` already claims to
+        // be current — a stamped version must never leave us unable to decode.
+        // This runs after migration so version 1's `metric` is read first.
+        dirty |= heal_legacy_tray_widgets(&mut document);
         match document.clone().try_into::<Self>() {
             Ok(settings) => Ok((settings, dirty)),
             Err(error) => {
@@ -3749,6 +3750,27 @@ enabled = ["claude"]
             loaded.tray_widgets[0].indicators[0].limit_value,
             LimitValue::Used
         );
+    }
+
+    #[test]
+    fn version_one_tray_widget_keeps_its_single_metric() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("settings.toml");
+        fs::write(
+            &path,
+            "version = 1
+tray_widgets = [{ metric = \"primary_remaining\" }]
+",
+        )
+        .unwrap();
+
+        let loaded = Settings::load_or_create(&path).unwrap();
+        let metrics: Vec<_> = loaded.tray_widgets[0]
+            .indicators
+            .iter()
+            .map(|indicator| indicator.metric_id.as_str())
+            .collect();
+        assert_eq!(metrics, ["codex.session"]);
     }
 
     #[test]

@@ -657,12 +657,14 @@ impl ProviderStore {
             "model",
             provider,
             &rollup.models,
+            daily_since,
         )?;
         self.replace_keyed_daily_in_transaction(
             "usage_project_daily",
             "project",
             provider,
             &rollup.projects,
+            daily_since,
         )?;
         self.write_usage_hourly(provider, &rollup.hourly)
     }
@@ -1589,6 +1591,7 @@ impl ProviderStore {
         column: &str,
         provider: ProviderId,
         rows: &[(String, NaiveDate, TokenUsage)],
+        since: Option<NaiveDate>,
     ) -> Result<()> {
         let mut retained = BTreeSet::new();
         {
@@ -1646,12 +1649,12 @@ impl ProviderStore {
         self.conn.execute(
             &format!(
                 "DELETE FROM {table}
-                 WHERE provider = ?1 AND NOT EXISTS (
+                 WHERE provider = ?1 AND (?2 IS NULL OR date >= ?2) AND NOT EXISTS (
                     SELECT 1 FROM temp.retained_keyed_daily r
                     WHERE r.date = {table}.date AND r.key = {table}.{column}
                  )"
             ),
-            params![provider.id()],
+            params![provider.id(), since.map(|date| date.to_string())],
         )?;
         self.conn
             .execute("DELETE FROM temp.retained_keyed_daily", [])?;
@@ -1915,7 +1918,7 @@ impl ProviderStore {
         provider: ProviderId,
         rows: &[(String, NaiveDate, TokenUsage)],
     ) -> Result<()> {
-        self.replace_keyed_daily_in_transaction("usage_model_daily", "model", provider, rows)
+        self.replace_keyed_daily_in_transaction("usage_model_daily", "model", provider, rows, None)
     }
 
     pub(crate) fn replace_usage_project_daily(
@@ -1923,7 +1926,13 @@ impl ProviderStore {
         provider: ProviderId,
         rows: &[(String, NaiveDate, TokenUsage)],
     ) -> Result<()> {
-        self.replace_keyed_daily_in_transaction("usage_project_daily", "project", provider, rows)
+        self.replace_keyed_daily_in_transaction(
+            "usage_project_daily",
+            "project",
+            provider,
+            rows,
+            None,
+        )
     }
 }
 
@@ -2821,6 +2830,65 @@ mod tests {
             .unwrap();
         assert_eq!(hourly[&hour].requests, 2);
         assert_eq!(hourly[&hour].input_tokens, 20);
+    }
+
+    #[test]
+    fn bounded_rollup_keeps_model_and_project_rows_before_the_cutoff() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let cursor = id(ProviderKind::Cursor);
+        let usage = |requests| TokenUsage {
+            requests,
+            ..Default::default()
+        };
+        let date = |text: &str| text.parse::<NaiveDate>().unwrap();
+        let rollup = |rows: Vec<(&str, &str, u64)>| crate::usage::Rollup {
+            models: rows
+                .iter()
+                .map(|(key, day, requests)| (key.to_string(), date(day), usage(*requests)))
+                .collect(),
+            projects: rows
+                .iter()
+                .map(|(key, day, requests)| (key.to_string(), date(day), usage(*requests)))
+                .collect(),
+            ..Default::default()
+        };
+        store
+            .save_rollup(
+                cursor,
+                &rollup(vec![("a", "2026-01-01", 1), ("a", "2026-03-02", 2)]),
+                None,
+            )
+            .unwrap();
+        store
+            .save_rollup(
+                cursor,
+                &rollup(vec![("b", "2026-03-02", 3)]),
+                Some(date("2026-03-01")),
+            )
+            .unwrap();
+        let models: Vec<_> = store
+            .load_model_daily(cursor, date("2025-01-01"), date("2027-01-01"))
+            .unwrap()
+            .into_iter()
+            .map(|(key, day, usage)| (key, day.to_string(), usage.requests))
+            .collect();
+        assert_eq!(
+            models,
+            vec![
+                ("a".to_owned(), "2026-01-01".to_owned(), 1),
+                ("b".to_owned(), "2026-03-02".to_owned(), 3),
+            ]
+        );
+        let projects: i64 = store
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM usage_project_daily WHERE date < '2026-03-01'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(projects, 1);
     }
 
     #[test]

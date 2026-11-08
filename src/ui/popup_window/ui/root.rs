@@ -1466,7 +1466,8 @@ impl PopupRoot {
         if finished {
             self.persist(cx, move |settings| settings.popup_height_dip = Some(saved));
         } else {
-            Arc::make_mut(&mut Rc::make_mut(&mut self.ui).settings).popup_height_dip = Some(saved);
+            // The drag height lives in `host.height` until the drop persists
+            // it; touching the snapshot here would make the final edit a no-op.
             cx.notify();
         }
     }

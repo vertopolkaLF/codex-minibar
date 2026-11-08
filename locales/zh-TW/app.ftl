@@ -2055,7 +2055,7 @@ automatic-resets = 自動重置
 banked-reset-applied-automatically = 已自動套用已儲備重置
 
 # src/providers/instances.rs
-this-provider-has-no-banked-resets = 此提供者沒有已儲備重置。
+this-provider-has-no-banked-resets = 此服務供應商沒有已儲備重置。
 
 # src/app/auto_reset.rs
 banked-reset-applies-in-minutes = 已儲備重置將在 { $minutes } 分鐘後套用
@@ -2076,7 +2076,7 @@ skip-automatic-reset = 取消
 banked-reset-applied = 已套用已儲備重置
 
 # src/ui/settings_window/providers/page.rs
-claude-other-account-needs-cli = 額外的 Claude 帳戶需要 Claude Code CLI。Claude 應用程式內建的副本只服務於應用程式本身的帳戶。
+claude-other-account-needs-cli = 額外的 Claude 帳號需要 Claude Code CLI。Claude 應用程式內建的副本只服務於應用程式本身的帳號。
 # src/surfaces/tray.rs
 linux-no-tray-title = 找不到系統匣
 
