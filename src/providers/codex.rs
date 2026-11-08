@@ -1083,6 +1083,7 @@ mod tests {
     #[test]
     fn app_server_timeout_stops_the_native_child_of_a_unix_shim() {
         use std::os::unix::fs::PermissionsExt;
+        use std::time::Instant;
         let root = tempfile::tempdir().unwrap();
         let shim = root.path().join("codex");
         fs::write(

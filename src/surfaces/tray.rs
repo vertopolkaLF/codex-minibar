@@ -1163,7 +1163,7 @@ mod tests {
         // executable: only a user-installed font registered with fontconfig.
         fs::write(
             root.path().join("user-font"),
-            include_bytes!("../assets/fonts/geist/Geist-Bold.ttf"),
+            include_bytes!("../../assets/fonts/geist/Geist-Bold.ttf"),
         )
         .unwrap();
         let config = root.path().join("fonts.conf");
@@ -1194,8 +1194,8 @@ mod tests {
         // Build a TTC containing regular then bold. SFNT table offsets in a
         // collection are absolute, so rebase each embedded font's table list.
         let faces: [&[u8]; 2] = [
-            include_bytes!("../assets/fonts/geist/Geist-Regular.ttf"),
-            include_bytes!("../assets/fonts/geist/Geist-Bold.ttf"),
+            include_bytes!("../../assets/fonts/geist/Geist-Regular.ttf"),
+            include_bytes!("../../assets/fonts/geist/Geist-Bold.ttf"),
         ];
         let mut collection = b"ttcf\0\x01\0\0\0\0\0\x02".to_vec();
         collection.resize(20, 0);

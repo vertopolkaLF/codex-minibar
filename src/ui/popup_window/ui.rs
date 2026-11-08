@@ -46,7 +46,7 @@ pub(crate) use root::PopupRoot;
 #[cfg(windows)]
 pub(crate) use win32::Monitor;
 
-use super::{AppState, PopupCommand, UiState};
+use super::{AppState, PopupCommand};
 
 #[cfg(not(windows))]
 #[derive(Clone, Copy, Debug)]

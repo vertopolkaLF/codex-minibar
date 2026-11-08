@@ -10,7 +10,7 @@ pub const APP_ID: &str = "io.github.vertopolkalf.CodexMinibar";
 const DESKTOP_FILE: &str = "io.github.vertopolkalf.CodexMinibar.desktop";
 const MANAGED: &str = "X-CodexMinibar-Managed=true";
 const DESKTOP_ENTRY: &str =
-    include_str!("../../packaging/linux/io.github.vertopolkalf.CodexMinibar.desktop");
+    include_str!("../../../packaging/linux/io.github.vertopolkalf.CodexMinibar.desktop");
 
 pub async fn register_portal() -> Result<()> {
     static REGISTERED: OnceLock<()> = OnceLock::new();
@@ -107,11 +107,11 @@ fn publish_portable_icon(data_home: &Path) -> Result<()> {
     for (size, contents) in [
         (
             "48x48",
-            include_bytes!("../../assets/icons/app-icon-48.png").as_slice(),
+            include_bytes!("../../../assets/icons/app-icon-48.png").as_slice(),
         ),
         (
             "256x256",
-            include_bytes!("../../assets/icons/app-icon-256.png").as_slice(),
+            include_bytes!("../../../assets/icons/app-icon-256.png").as_slice(),
         ),
     ] {
         let directory = data_home.join("icons/hicolor").join(size).join("apps");
@@ -181,7 +181,7 @@ mod tests {
         assert!(APP_ID.parse::<ashpd::AppID>().is_ok());
         assert_eq!(DESKTOP_FILE, format!("{APP_ID}.desktop"));
         assert!(DESKTOP_ENTRY.contains(&format!("StartupWMClass={APP_ID}\n")));
-        assert!(include_str!("../../build-linux.sh").contains(DESKTOP_FILE));
+        assert!(include_str!("../../../build-linux.sh").contains(DESKTOP_FILE));
     }
 
     #[test]
@@ -202,14 +202,14 @@ mod tests {
             .join("icons/hicolor/256x256/apps/codex-minibar.png");
         assert_eq!(
             std::fs::read(&icon).unwrap(),
-            include_bytes!("../../assets/icons/app-icon-256.png")
+            include_bytes!("../../../assets/icons/app-icon-256.png")
         );
         let small_icon = directory
             .path()
             .join("icons/hicolor/48x48/apps/codex-minibar.png");
         assert_eq!(
             std::fs::read(&small_icon).unwrap(),
-            include_bytes!("../../assets/icons/app-icon-48.png")
+            include_bytes!("../../../assets/icons/app-icon-48.png")
         );
         // Backfill an absent small icon even when the large one is customized.
         std::fs::remove_file(&small_icon).unwrap();
@@ -226,7 +226,7 @@ mod tests {
         assert_eq!(std::fs::read(icon).unwrap(), b"user icon");
         assert_eq!(
             std::fs::read(small_icon).unwrap(),
-            include_bytes!("../../assets/icons/app-icon-48.png")
+            include_bytes!("../../../assets/icons/app-icon-48.png")
         );
     }
 
@@ -288,7 +288,11 @@ mod tests {
         std::fs::write(package.join("bin/codex-minibar"), "fixture, never launched").unwrap();
         std::fs::write(applications.join(DESKTOP_FILE), DESKTOP_ENTRY).unwrap();
         let installer = package.join("install.sh");
-        std::fs::write(&installer, include_str!("../../packaging/linux/install.sh")).unwrap();
+        std::fs::write(
+            &installer,
+            include_str!("../../../packaging/linux/install.sh"),
+        )
+        .unwrap();
         for name in [
             "normal",
             "spaces and Юникод",

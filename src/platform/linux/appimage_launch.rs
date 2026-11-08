@@ -51,7 +51,7 @@ pub(super) fn for_image(image: &Path) -> Result<PathBuf> {
 fn launcher_in(directory: &Path, image: &Path) -> Result<PathBuf> {
     let digest = Sha256::digest(image.as_os_str().as_bytes());
     let path = directory.join(format!("appimage-{digest:x}.sh"));
-    let template = include_bytes!("../../assets/appimage-launch.sh");
+    let template = include_bytes!("../../../assets/appimage-launch.sh");
     let marker = b"@APPIMAGE@";
     let position = template
         .windows(marker.len())

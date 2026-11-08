@@ -3,6 +3,7 @@
 
 use gpui::{AnyElement, Context, IntoElement, KeyDownEvent, ParentElement, Styled, div, px};
 
+use super::Host;
 use super::window::SettingsWindow;
 use crate::platform::linux::keybinding::{self, Accelerator};
 use crate::ui::gui::kit::{self, Button, Kit, Row};

@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 pub fn open_url(url: &str) -> Result<()> {
     open_shell_target(url.into(), url.to_owned())
@@ -61,7 +61,7 @@ fn shell_execute(target: &std::ffi::OsStr, description: &str) -> Result<()> {
             unsafe { CoUninitialize() };
         }
         if result as isize <= 32 {
-            bail!("ShellExecuteW failed for {description}");
+            anyhow::bail!("ShellExecuteW failed for {description}");
         }
         Ok(())
     }

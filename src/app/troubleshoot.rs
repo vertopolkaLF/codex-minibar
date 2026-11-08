@@ -236,7 +236,7 @@ fn linux_script_in(directory: &Path) -> Result<PathBuf> {
     let mut staged =
         tempfile::NamedTempFile::new_in(directory).context("stage troubleshooting script")?;
     staged
-        .write_all(include_bytes!("../assets/troubleshoot.sh"))
+        .write_all(include_bytes!("../../assets/troubleshoot.sh"))
         .context("write troubleshooting script")?;
     staged
         .persist(&path)
@@ -392,7 +392,7 @@ mod tests {
         assert_eq!(previous, "previous script");
         assert_eq!(
             fs::read(&path).unwrap(),
-            include_bytes!("../assets/troubleshoot.sh")
+            include_bytes!("../../assets/troubleshoot.sh")
         );
         fs::remove_file(&path).unwrap();
         let outside = root.path().join("unrelated");
@@ -420,7 +420,7 @@ mod tests {
             fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
         }
         let script = root.path().join("troubleshoot.sh");
-        fs::write(&script, include_str!("../assets/troubleshoot.sh")).unwrap();
+        fs::write(&script, include_str!("../../assets/troubleshoot.sh")).unwrap();
         let run = || {
             Command::new("/bin/bash")
                 .arg(&script)

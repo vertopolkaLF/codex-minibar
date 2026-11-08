@@ -1,7 +1,4 @@
-use std::{
-    env,
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use crate::providers::support::{CliSearch, find_cli};
 
@@ -43,7 +40,7 @@ pub fn discover(explicit: Option<&Path>) -> Vec<CodexCandidate> {
 fn desktop_app_locations() -> Vec<PathBuf> {
     let mut paths = desktop_app_locations_from_registry();
 
-    let Some(program_files) = env::var_os("ProgramFiles") else {
+    let Some(program_files) = std::env::var_os("ProgramFiles") else {
         return paths;
     };
     paths.extend(desktop_paths_from_packages(

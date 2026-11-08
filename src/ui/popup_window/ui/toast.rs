@@ -161,7 +161,7 @@ pub(crate) struct ToastHost {
     fx: Fx,
     /// Palette of the popup state it was built from, keyed by that state and
     /// the system appearance; resolving the system accent every frame is slow.
-    palette: Option<(*const super::UiState, bool, Palette)>,
+    palette: Option<(*const crate::ui::popup_window::UiState, bool, Palette)>,
     ticking: bool,
     visible: bool,
     #[cfg(windows)]
