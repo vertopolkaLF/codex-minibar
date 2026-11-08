@@ -2183,3 +2183,4 @@ currency-symbol-description = Exibido exatamente como digitado, incluindo espaç
 currency-symbol-position = Posição do símbolo
 currency-symbol-before = Antes do valor
 currency-symbol-after = Depois do valor
+currency-source = Cotações da Exchange Rate API

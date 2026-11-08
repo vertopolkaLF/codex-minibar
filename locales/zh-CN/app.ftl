@@ -2162,3 +2162,4 @@ currency-symbol-description = 按输入内容原样显示（包括空格）。�
 currency-symbol-position = 符号位置
 currency-symbol-before = 金额之前
 currency-symbol-after = 金额之后
+currency-source = 汇率来源：Exchange Rate API

@@ -3061,3 +3061,4 @@ currency-symbol-description = 入力したとおりにスペースも含めて�
 currency-symbol-position = 記号の位置
 currency-symbol-before = 金額の前
 currency-symbol-after = 金額の後
+currency-source = 為替レート提供: Exchange Rate API

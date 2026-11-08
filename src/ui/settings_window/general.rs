@@ -125,15 +125,18 @@ impl SettingsWindow {
                 currency_row,
                 symbol_row,
                 position_row,
-                Row::new("general-currency-source", "Rates by Exchange Rate API")
-                    .description(
-                        k,
-                        currency::note().unwrap_or_else(|| crate::i18n::tr("currency-usd").into()),
-                    )
-                    .on_click(kit::handler(|(), _, _| {
-                        super::window::open_url(currency::SOURCE_URL)
-                    }))
-                    .render(k),
+                Row::new(
+                    "general-currency-source",
+                    crate::i18n::tr("currency-source"),
+                )
+                .description(
+                    k,
+                    currency::note().unwrap_or_else(|| crate::i18n::tr("currency-usd").into()),
+                )
+                .on_click(kit::handler(|(), _, _| {
+                    super::window::open_url(currency::SOURCE_URL)
+                }))
+                .render(k),
                 kit::dropdown_row(
                     k,
                     "general-usage-refresh",

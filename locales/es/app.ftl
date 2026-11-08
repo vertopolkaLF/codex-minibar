@@ -2183,3 +2183,4 @@ currency-symbol-description = Se muestra tal como se escribe, con espacios inclu
 currency-symbol-position = Posición del símbolo
 currency-symbol-before = Antes del importe
 currency-symbol-after = Después del importe
+currency-source = Tipos de cambio de Exchange Rate API

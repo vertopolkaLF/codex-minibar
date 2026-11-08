@@ -3060,3 +3060,4 @@ currency-symbol-description = 공백을 포함해 입력한 그대로 표시됩�
 currency-symbol-position = 기호 위치
 currency-symbol-before = 금액 앞
 currency-symbol-after = 금액 뒤
+currency-source = 환율 제공: Exchange Rate API

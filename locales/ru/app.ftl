@@ -3088,3 +3088,4 @@ currency-symbol-description = Показывается как введён, вм
 currency-symbol-position = Положение символа
 currency-symbol-before = Перед суммой
 currency-symbol-after = После суммы
+currency-source = Курсы от Exchange Rate API

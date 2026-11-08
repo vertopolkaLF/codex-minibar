@@ -3081,3 +3081,4 @@ currency-symbol-description = Shown exactly as typed, spaces included. Leave emp
 currency-symbol-position = Symbol position
 currency-symbol-before = Before amount
 currency-symbol-after = After amount
+currency-source = Rates by Exchange Rate API

@@ -3089,3 +3089,4 @@ currency-symbol-description = Affiché tel que saisi, espaces compris. Laissez v
 currency-symbol-position = Position du symbole
 currency-symbol-before = Avant le montant
 currency-symbol-after = Après le montant
+currency-source = Taux fournis par Exchange Rate API

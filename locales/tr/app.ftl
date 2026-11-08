@@ -3060,3 +3060,4 @@ currency-symbol-description = Boşluklar dahil, yazıldığı gibi gösterilir. 
 currency-symbol-position = Simge konumu
 currency-symbol-before = Tutardan önce
 currency-symbol-after = Tutardan sonra
+currency-source = Kurlar: Exchange Rate API
