@@ -115,13 +115,13 @@ group-tokens-or-cost-by-model = 按模型分组 token 或费用
 
 model = 模型
 
-# src/popup_window/ui/usage.rs
+# src/ui/popup_window/ui/usage.rs
 project = 项目
 
-# src/usage_overview.rs
+# src/usage/overview.rs
 unknown-project = 未知项目
 
-# src/popup_window/ui/usage.rs
+# src/ui/popup_window/ui/usage.rs
 no-project-usage = 此期间没有项目数据
 
 tokens = Token
@@ -194,7 +194,7 @@ updated = 已更新{ " " }
 
 refresh-last-updated-relative = 刷新 · 上次更新于 { $relative }
 
-# src/popup_window/ui/footer.rs
+# src/ui/popup_window/ui/footer.rs
 popup-pin = 置顶固定并保持打开
 popup-unpin = 取消固定并在失去焦点时关闭
 
@@ -690,10 +690,10 @@ msg-1-hour = 1 小时
 
 msg-3-hours = 3 小时
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 msg-2-hours = 2 小时
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 msg-5-hours = 5 小时
 
 msg-6-hours = 6 小时
@@ -822,10 +822,10 @@ found-an-official-grok-cli-sign-in-on-this-pc = 已在此电脑找到官方 Grok
 
 not-found-run-grok-login-before-enabling-it = 未找到。请先运行 grok login 再启用。
 
-# src/settings_window/onboarding.rs
+# src/ui/settings_window/onboarding.rs
 found-an-official-command-code-cli-sign-in-on-this-pc = 已在此电脑找到官方 Command Code CLI 登录信息。
 
-# src/settings_window/onboarding.rs
+# src/ui/settings_window/onboarding.rs
 not-found-run-cmdc-login-before-enabling-it = 未找到。请先运行 cmdc login 再启用。
 
 found-kiro-ide-kiro-crew-or-a-signed-in-kiro-cli = 已找到 Kiro IDE、Kiro Crew 或已登录的 Kiro CLI。
@@ -1246,7 +1246,7 @@ cursor-app-folder = Cursor 应用文件夹
 
 grok-cli-folder = Grok CLI 文件夹
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 command-code-cli-folder = Command Code CLI 文件夹
 
 kiro-ide-folder = Kiro IDE 文件夹
@@ -1271,7 +1271,7 @@ reads-subscription-quota-from-your-existing-official-agy-windows = 通过现有�
 
 reads-supergrok-subscription-credits-from-your-existing-official = 通过现有的官方 Grok CLI 登录读取 SuperGrok 订阅积分。
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 reads-command-code-5h-weekly-and-monthly-credits-from-your-existin = 通过现有的官方 CLI 登录读取 Command Code 的 5 小时、每周和每月积分。
 
 fetches-kiro-s-live-monthly-credits-with-its-shared-sign-in-recog = 通过 Kiro 共享登录获取实时每月积分；可识别 IDE、Crew 和 CLI 安装。
@@ -1290,7 +1290,7 @@ antigravity-app = Antigravity 应用
 
 grok-cli = Grok CLI
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 command-code-cli = Command Code CLI
 
 kiro-ide = Kiro IDE
@@ -1496,7 +1496,7 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = 包含 agy.e
 
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = 包含 grok.exe、grok.cmd 或 grok.ps1 的文件夹。留空以自动查找。
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = 包含 cmdc.cmd 或 cmdc.ps1 的文件夹。留空以自动查找。
 
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = 包含 Kiro.exe 的文件夹或可执行文件本身。留空以自动查找。
@@ -1683,10 +1683,10 @@ openrouter-keys-untrack-message = Minibar 将忘记此密钥。它在 OpenRouter
 openrouter-keys-tracked-here = Minibar 正在跟踪此密钥。
 openrouter-keys-manage-hint = 在设置中添加管理密钥，即可创建、编辑和删除密钥。
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notification-sounds = 通知声音
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 plays-a-short-sound-with-each-notification = 每条通知播放一段简短提示音
 
 use-reset = 使用重置
@@ -1706,97 +1706,97 @@ reset-sign-in-again = 请重新登录 Claude 以使用重置。
 reset-cli-login-required = 请使用同一账户的 Claude CLI 登录来重置。
 reset-invalid-grant = Claude 返回了无效的重置额度。
 
-# src/updater.rs
+# src/update.rs
 update-downloading = 正在下载更新
 
-# src/updater.rs
+# src/update.rs
 update-download-progress = { $downloaded } / { $total }
 
-# src/updater.rs
+# src/update.rs
 update-downloaded = 已下载 { $downloaded }
 
-# src/updater.rs
+# src/update.rs
 update-installing = 正在安装更新
 
-# src/updater.rs
+# src/update.rs
 update-unpacking = 正在解压文件…
 
-# src/updater.rs
+# src/update.rs
 update-restarting = 正在重启 Codex Minibar
 
-# src/updater.rs
+# src/update.rs
 update-restarting-body = 应用即将重新打开。
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 provider-status = 提供商状态
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 show-provider-incidents = 显示提供商事件
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 show-provider-incidents-description = 每 5 分钟检查 Codex、Claude 和 Cursor 的公开状态页，并在弹出窗口中显示正在进行的事件
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 notify-about-new-incidents = 新事件通知
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 notify-about-new-incidents-description = 当状态页报告已启用提供商的新事件时显示通知
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 open-status-page = 打开状态页
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 provider-incident-title = { $provider }：{ $impact }
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 status-since = 始于 { $time }
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-maintenance = 维护
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-degraded = 性能下降
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-partial-outage = 部分中断
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-major-outage = 严重中断
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-investigating = 调查中
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-identified = 已确定原因
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-monitoring = 监控中
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-in-progress = 进行中
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 news-and-status = 动态与状态
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 no-summary-for-this-version = 此版本暂无摘要。完整发行说明见 GitHub。
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 couldn-t-load-what-s-new = 无法加载新功能。请检查网络连接，或在 GitHub 上查看发行说明。
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 full-release-notes = 完整发行说明
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 show-what-s-new-after-updating = 更新后显示新功能
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 a-short-summary-of-the-release-once-it-s-installed = 安装后显示该版本的简短摘要。
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 view = 查看
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 popup-shortcut = 弹出窗口快捷键
 popup-shortcut-description = 在 Windows 任意位置按下即可显示或隐藏弹出窗口。
 shortcut-not-set = 未设置
@@ -1861,19 +1861,19 @@ taskbar-click-nearest = 主页；不在主页时打开其标签页
 taskbar-click-tab = 提供商标签页
 taskbar-click-home = 主页
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 follow-do-not-disturb = 勿扰模式时暂停
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 follow-do-not-disturb-description = Windows 勿扰或专注模式开启期间，跳过通知并关闭提示音。你主动发起的操作结果仍会显示。
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 performance = 性能
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 game-mode = 游戏模式
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 game-mode-description = 降低额度和用量的检查频率，以低优先级运行并暂停通知。“自动”会在游戏切到前台时开启，直到游戏关闭。
 
 # src/settings.rs
@@ -1885,127 +1885,127 @@ game-mode-automatic = 自动
 # src/settings.rs
 game-mode-always = 始终开启
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notify-game-mode-changes = 游戏模式切换
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notify-game-mode-changes-description = 游戏模式开启或关闭时通知
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-title = 游戏模式已开启
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-body = 降低额度检查频率并暂停通知
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-game-body = { $game } 正在运行。降低额度检查频率并暂停通知
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 not-a-game = 不是游戏
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 add-a-game = 添加游戏
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 add-a-game-description = Windows Game Bar 已识别的游戏以及 Steam、Epic、GOG 和 Xbox 中的游戏会被自动检测。可在此添加其他任何程序。
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 never-a-game-path = 从不视为游戏 · { $path }
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-off-title = 游戏模式已关闭
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-off-body = 已恢复正常检查和通知
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 command-palette = Command Palette
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 stream-deck = Stream Deck
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 install = 安装
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-extension = Command Palette 扩展
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-description = 将 Minibar 添加到 PowerToys Command Palette：输入提供商名称即可查看额度，或将条带固定到 Dock。安装需要管理员批准。
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installed-hint = 已安装。在 Command Palette 中输入“minibar”或提供商名称，或通过“编辑 Dock”固定条带。
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-downloading = 正在下载扩展…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installing = 正在等待安装程序。请批准管理员提示以继续。
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installing-short = 正在安装…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-removing = 正在移除扩展…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-failed = 无法安装或移除扩展。
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-reinstall = 重新安装
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-dock-bands = Dock 条带
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-dock-bands-caption = 每个条带都会出现在 Command Palette 的 Dock 设置中。通过“编辑 Dock”固定它，然后选择位置。
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-no-bands = 没有条带
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-no-bands-description = 添加条带，将提供商额度固定到 Dock。
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-add-band = 添加条带
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-band = 条带 { $v0 }
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-band-removed = 条带已移除
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-remove-band = 移除条带
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-content-hint = Dock 将条带显示为标题和下方的副标题。
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-indicators-hint = 最多 2 个额度：一个占用标题和副标题，两个各占一行。
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 tibo-banked-reset = Tibo Banked Reset™
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 banked-reset-credit = 已储存的重置
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 before-when = { $when } 之前
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 time-ago = { $time }前
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 new-codex-banked-reset-info = 新的 Codex 储存重置信息
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 a-possible-codex-reset-is-expected-before-when-within-countdown = Codex 可能在 { $when } 之前重置（{ $countdown } 内）
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 label-possible-reset-before-when-within-countdown = { $label }：可能在 { $when } 之前重置（{ $countdown } 内）
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 time-late = 延迟 { $time }
 
 # Floating usage panel
@@ -2022,44 +2022,44 @@ popup-close = 关闭面板
 show-popup-action-bar = 显示弹出面板操作栏
 show-popup-action-bar-description = 在普通弹出面板中显示应用名称和操作按钮。浮动面板始终显示此栏。
 
-# src/settings_window/activation.rs
+# src/ui/settings_window/activation.rs
 use-banked-resets-automatically = 自动使用已储备重置
 
-# src/settings_window/activation.rs
+# src/ui/settings_window/activation.rs
 spends-a-banked-reset-shortly-before-it-expires = 在已储备重置过期前不久自动应用，避免浪费。当限制没有可清除的用量时跳过。
 
-# src/settings_window/activation.rs
+# src/ui/settings_window/activation.rs
 use-before-expiry = 过期前使用
 
-# src/settings_window/activation.rs
+# src/ui/settings_window/activation.rs
 how-long-before-a-banked-reset-expires-it-is-applied = 已储备重置在过期前多久应用。
 
-# src/settings_window/providers/page.rs
+# src/ui/settings_window/providers/page.rs
 automatic-resets = 自动重置
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 banked-reset-applied-automatically = 已自动应用已储备重置
 
-# src/instances.rs
+# src/providers/instances.rs
 this-provider-has-no-banked-resets = 此提供商没有已储备重置。
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 banked-reset-applies-in-minutes = 已储备重置将在 { $minutes } 分钟后应用
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 before-an-automatic-reset = 自动重置之前
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = 在自动应用已储备重置前 10 分钟提醒。
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 apply-reset-now = 立即应用
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 skip-automatic-reset = 取消
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 banked-reset-applied = 已应用已储备重置
 
-# src/settings_window/providers/page.rs
+# src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = 额外的 Claude 账户需要 Claude Code CLI。Claude 应用内置的副本只服务于应用自己的账户。

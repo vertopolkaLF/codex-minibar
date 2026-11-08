@@ -1,0 +1,1819 @@
+//! OpenRouter API-key quota provider.
+
+use std::{
+    collections::HashMap,
+    sync::{Arc, atomic::AtomicBool},
+    time::Duration,
+};
+
+use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Datelike, Duration as ChronoDuration, NaiveDate, TimeZone, Utc};
+use serde::Deserialize;
+
+use crate::{
+    platform::secrets,
+    providers::drivers::{Credential, Driver, InstallSource, InstallStatus, SettingsCopy, Sources},
+    providers::instances::{ProviderId, ProviderInstance},
+    providers::worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
+    quota::limits::{
+        LimitWindow, OpenRouterAccountSnapshot, OpenRouterApiKeySnapshot, RateLimits,
+        SpendingSummary,
+    },
+    settings::OpenRouterAccount,
+    usage::UsageStatistics,
+};
+
+const API_URL: &str = "https://openrouter.ai/api/v1/key";
+const KEYS_API_URL: &str = "https://openrouter.ai/api/v1/keys";
+const CREDITS_API_URL: &str = "https://openrouter.ai/api/v1/credits";
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const SECRET_NAME: &str = "openrouter-api-key";
+const SECRET_PREFIX: &str = "openrouter-account-";
+const LEGACY_ACCOUNT_ID: &str = "legacy";
+const LEGACY_API_KEY_ID: &str = "legacy";
+
+pub(crate) mod admin;
+pub(crate) mod analytics;
+
+#[derive(Clone)]
+pub struct OpenRouterClient {
+    cancelled: Arc<AtomicBool>,
+    provider: ProviderId,
+    credentials_revision: u64,
+    agent: ureq::Agent,
+    accounts: Vec<AccountCredentials>,
+    /// Stable key metadata (name/limit/reset). Usage is never stored here.
+    key_cache: HashMap<String, CachedOpenRouterKey>,
+}
+
+#[derive(Clone)]
+struct AccountCredentials {
+    id: String,
+    name: String,
+    api_keys: Vec<ApiKeyCredential>,
+    management_key: Option<String>,
+}
+
+#[derive(Clone)]
+struct ApiKeyCredential {
+    id: String,
+    value: String,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CachedOpenRouterKey {
+    label: Option<String>,
+    masked_key: Option<String>,
+    limit_microusd: Option<u64>,
+    reset_kind: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    disabled: bool,
+}
+
+impl OpenRouterClient {
+    /// One instance is one OpenRouter account with its own keys.
+    pub fn new(instance: &ProviderInstance) -> Result<Self> {
+        let provider = instance.provider_id();
+        Ok(Self {
+            cancelled: Arc::new(AtomicBool::new(false)),
+            provider,
+            credentials_revision: instance.credentials_revision,
+            agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
+            accounts: load_credentials(instance)?,
+            key_cache: load_key_cache_from_store(provider),
+        })
+    }
+}
+
+/// Outcome of `GET /api/v1/key`. Expired keys are rejected with 401 and are
+/// also omitted from the management `/keys` directory, so this path is the
+/// authoritative expired signal when a local secret is still configured.
+#[derive(Debug)]
+enum KeyReadOutcome {
+    Live(ParsedOpenRouterKey),
+    Expired,
+}
+
+fn read_key_with_agent(
+    agent: &ureq::Agent,
+    api_key: &str,
+    sampled_at: DateTime<Utc>,
+) -> Result<KeyReadOutcome> {
+    match agent
+        .get(API_URL)
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Accept", "application/json")
+        .call()
+    {
+        Ok(response) => {
+            let body = response
+                .into_string()
+                .context("read OpenRouter API-key response")?;
+            Ok(KeyReadOutcome::Live(parse_key_response(&body, sampled_at)?))
+        }
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            if status == 401 && body_indicates_expired_api_key(&body) {
+                return Ok(KeyReadOutcome::Expired);
+            }
+            if status == 429 {
+                return Err(crate::platform::net::rate_limit_error(
+                    "OpenRouter API-key usage request was rate limited (HTTP 429).",
+                ));
+            }
+            bail!("request OpenRouter API-key usage: {API_URL}: status code {status}");
+        }
+        Err(error) => Err(error).context("request OpenRouter API-key usage"),
+    }
+}
+
+fn body_indicates_expired_api_key(body: &str) -> bool {
+    let lower = body.to_ascii_lowercase();
+    lower.contains("api key expired")
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct AccountCredits {
+    balance_microusd: u64,
+    total_credits_microusd: u64,
+}
+
+fn read_account_credits_with_agent(
+    agent: &ureq::Agent,
+    api_key: &str,
+) -> Result<Option<AccountCredits>> {
+    let response = match agent
+        .get(CREDITS_API_URL)
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Accept", "application/json")
+        .call()
+    {
+        Ok(response) => response,
+        Err(ureq::Error::Status(429, _)) => {
+            return Err(crate::platform::net::rate_limit_error(
+                "OpenRouter account credits request was rate limited (HTTP 429).",
+            ));
+        }
+        Err(error) => return Err(error).context("request OpenRouter account credits"),
+    };
+    let body = response
+        .into_string()
+        .context("read OpenRouter account credits response")?;
+    parse_credits_response(&body).map(Some)
+}
+
+/// Maps masked `label` values from `/key` to directory metadata.
+/// Only called when a management key is configured. Failed reads must surface
+/// as provider errors rather than silently looking like an empty directory.
+fn read_key_directory_with_agent(
+    agent: &ureq::Agent,
+    api_key: &str,
+) -> Result<HashMap<String, DirectoryKeyInfo>> {
+    let response = match agent
+        .get(&format!("{KEYS_API_URL}?include_disabled=true"))
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Accept", "application/json")
+        .call()
+    {
+        Ok(response) => response,
+        Err(ureq::Error::Status(429, _)) => {
+            return Err(crate::platform::net::rate_limit_error(
+                "OpenRouter API key directory request was rate limited (HTTP 429).",
+            ));
+        }
+        Err(error) => return Err(error).context("request OpenRouter API key directory"),
+    };
+    let body = response
+        .into_string()
+        .context("read OpenRouter API key directory response")?;
+    parse_keys_directory(&body)
+}
+
+#[derive(Default)]
+struct AccountFetchResult {
+    id: String,
+    name: String,
+    api_keys: Vec<OpenRouterApiKeySnapshot>,
+    credits: Option<AccountCredits>,
+    cache_updates: Vec<(String, CachedOpenRouterKey)>,
+    rate_limited: bool,
+    errors: Vec<String>,
+}
+
+fn validate_account_fetches(accounts: &[AccountFetchResult]) -> Result<()> {
+    let errors = accounts
+        .iter()
+        .flat_map(|account| {
+            account
+                .errors
+                .iter()
+                .map(|error| format!("{}: {error}", account.name))
+        })
+        .collect::<Vec<_>>();
+    if !errors.is_empty() {
+        bail!("OpenRouter quota refresh failed: {}", errors.join("; "));
+    }
+    Ok(())
+}
+
+/// Fetch directory, every `/key`, and credits concurrently for one account.
+fn fetch_openrouter_account(
+    agent: &ureq::Agent,
+    account: &AccountCredentials,
+    key_cache: &HashMap<String, CachedOpenRouterKey>,
+    sampled_at: DateTime<Utc>,
+) -> AccountFetchResult {
+    // Credits require management credentials; an API-only account does not
+    // need to probe an endpoint it cannot use.
+    let credits_key = account.management_key.clone();
+
+    let (key_directory, live_results, credits, rate_limited, errors) =
+        std::thread::scope(|scope| {
+            let directory = account.management_key.as_ref().map(|key| {
+                let agent = agent.clone();
+                let key = key.clone();
+                scope.spawn(move || {
+                    // Key display names must come only from this account's management
+                    // key directory. Never fall back to an ordinary API key here.
+                    read_key_directory_with_agent(&agent, &key)
+                })
+            });
+            let keys: Vec<_> = account
+                .api_keys
+                .iter()
+                .map(|api_key| {
+                    let agent = agent.clone();
+                    let value = api_key.value.clone();
+                    scope.spawn(move || read_key_with_agent(&agent, &value, sampled_at))
+                })
+                .collect();
+            let credits = credits_key.map(|key| {
+                let agent = agent.clone();
+                scope.spawn(move || read_account_credits_with_agent(&agent, &key))
+            });
+
+            let directory = directory.map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow!("OpenRouter key directory worker panicked")))
+            });
+            let mut rate_limited = directory
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .is_some_and(crate::platform::net::is_rate_limited_error);
+            let mut errors = Vec::new();
+            if let Some(Err(error)) = &directory {
+                errors.push(format!("Key directory: {error:#}"));
+            }
+            let key_directory = directory.and_then(Result::ok).unwrap_or_default();
+            let live_results: Vec<Result<KeyReadOutcome>> = keys
+                .into_iter()
+                .map(|handle| {
+                    handle
+                        .join()
+                        .unwrap_or_else(|_| bail!("OpenRouter API-key worker panicked"))
+                })
+                .collect();
+            rate_limited |= live_results.iter().any(|result| {
+                result
+                    .as_ref()
+                    .err()
+                    .is_some_and(crate::platform::net::is_rate_limited_error)
+            });
+            for (key, result) in account.api_keys.iter().zip(&live_results) {
+                if let Err(error) = result {
+                    errors.push(format!("API key {}: {error:#}", key.id));
+                }
+            }
+            let credits = credits.map(|handle| {
+                handle
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow!("OpenRouter credits worker panicked")))
+            });
+            rate_limited |= credits
+                .as_ref()
+                .and_then(|result| result.as_ref().err())
+                .is_some_and(crate::platform::net::is_rate_limited_error);
+            if let Some(Err(error)) = &credits {
+                errors.push(format!("Account credits: {error:#}"));
+            }
+            let balance = credits.and_then(Result::ok).flatten();
+            (key_directory, live_results, balance, rate_limited, errors)
+        });
+
+    let mut api_keys = Vec::new();
+    let mut cache_updates = Vec::new();
+    for (api_key, live) in account.api_keys.iter().zip(live_results) {
+        let cache_id = key_cache_id(&account.id, &api_key.id);
+        let current_mask = collapse_api_key(&api_key.value);
+        let cached = key_cache
+            .get(&cache_id)
+            // Snapshots written before the fingerprint field existed are safe
+            // to reuse until the first successful refresh writes one. Current
+            // snapshots still reject metadata from a replaced key.
+            .filter(|cached| cached_key_matches_mask(cached, current_mask.as_deref()))
+            .cloned()
+            .unwrap_or_default();
+        let masked_key = current_mask.or_else(|| cached.masked_key.clone());
+        // OpenRouter's own label mask (sk-or-v1-abc...xyz) often uses a
+        // different head/tail length than our local collapse — match the
+        // full secret against directory labels instead of exact strings.
+        let directory = find_directory_entry(&api_key.value, masked_key.as_deref(), &key_directory);
+        let (live, marked_expired) = match live {
+            Ok(KeyReadOutcome::Live(parsed)) => (Some(parsed), false),
+            Ok(KeyReadOutcome::Expired) => {
+                crate::platform::logger::info(format!(
+                    "OpenRouter account {} API key {} is expired",
+                    account.name, api_key.id
+                ));
+                (None, true)
+            }
+            Err(error) => {
+                crate::platform::logger::info(format!(
+                    "OpenRouter account {} API key {} failed: {error:#}",
+                    account.name, api_key.id
+                ));
+                (None, false)
+            }
+        };
+
+        let (label, spending, has_live_usage, expires_at, disabled) = match live {
+            Some(parsed) => {
+                // Prefer the directory name for this key's own mask when
+                // /key only returned a masked label. Never borrow another
+                // key's cached title — cache is already account+key keyed.
+                let label =
+                    resolve_key_display_name(parsed.account_name.as_deref(), &key_directory)
+                        .or_else(|| directory.as_ref().and_then(|info| info.name.clone()))
+                        .or_else(|| resolve_key_display_name(masked_key.as_deref(), &key_directory))
+                        .or_else(|| cached.label.clone());
+                let expires_at = parsed
+                    .expires_at
+                    .or_else(|| directory.as_ref().and_then(|info| info.expires_at))
+                    .or(cached.expires_at);
+                let disabled = directory
+                    .as_ref()
+                    .map(|info| info.disabled)
+                    .unwrap_or(cached.disabled);
+                let spending =
+                    merge_key_spending(Some(&parsed.spending), &cached, sampled_at, true);
+                (label, spending, true, expires_at, disabled)
+            }
+            None => {
+                let label = cached
+                    .label
+                    .clone()
+                    .or_else(|| directory.as_ref().and_then(|info| info.name.clone()))
+                    .or_else(|| resolve_key_display_name(masked_key.as_deref(), &key_directory));
+                let expires_at = directory
+                    .as_ref()
+                    .and_then(|info| info.expires_at)
+                    .or(cached.expires_at);
+                // Expired keys disappear from `/keys`, so directory metadata is
+                // often missing — trust the `/key` 401 body in that case.
+                let disabled = marked_expired
+                    || directory
+                        .as_ref()
+                        .map(|info| info.disabled)
+                        .unwrap_or(cached.disabled);
+                let spending = merge_key_spending(None, &cached, sampled_at, false);
+                (label, spending, false, expires_at, disabled)
+            }
+        };
+
+        cache_updates.push((
+            cache_id,
+            CachedOpenRouterKey {
+                label: label.clone(),
+                masked_key: masked_key.clone(),
+                limit_microusd: spending.limit_microusd,
+                reset_kind: spending.reset_kind.clone(),
+                expires_at,
+                disabled,
+            },
+        ));
+        api_keys.push(OpenRouterApiKeySnapshot {
+            local_name: None,
+            id: api_key.id.clone(),
+            label,
+            masked_key,
+            spending,
+            has_live_usage,
+            expires_at,
+            disabled,
+        });
+    }
+
+    AccountFetchResult {
+        id: account.id.clone(),
+        name: account.name.clone(),
+        api_keys,
+        credits,
+        cache_updates,
+        rate_limited,
+        errors,
+    }
+}
+
+impl LimitProvider for OpenRouterClient {
+    fn read_limits(&mut self) -> Result<RateLimits> {
+        let sampled_at = Utc::now();
+        // Fan out accounts in parallel. Each account itself fans out
+        // directory ∥ /key ∥ credits. Cache merges stay on this thread.
+        let fetched: Vec<AccountFetchResult> = std::thread::scope(|scope| {
+            self.accounts
+                .iter()
+                .map(|account| {
+                    let agent = self.agent.clone();
+                    let cache = self.key_cache.clone();
+                    scope.spawn(move || {
+                        fetch_openrouter_account(&agent, account, &cache, sampled_at)
+                    })
+                })
+                .map(|handle| {
+                    handle.join().unwrap_or_else(|_| AccountFetchResult {
+                        id: String::new(),
+                        name: String::new(),
+                        api_keys: Vec::new(),
+                        credits: None,
+                        cache_updates: Vec::new(),
+                        rate_limited: false,
+                        errors: vec!["Account quota worker panicked".into()],
+                    })
+                })
+                .collect()
+        });
+
+        if fetched.iter().any(|account| account.rate_limited) {
+            return Err(crate::platform::net::rate_limit_error(
+                "OpenRouter account usage request was rate limited (HTTP 429).",
+            ));
+        }
+        // Validate before publishing or updating metadata. The worker's normal
+        // PollFailed path keeps the last successful snapshot and shows a
+        // provider error instead of publishing unknown usage / missing balance.
+        validate_account_fetches(&fetched)?;
+
+        let mut accounts = Vec::new();
+        for result in fetched {
+            for (cache_id, cached) in result.cache_updates {
+                self.key_cache.insert(cache_id, cached);
+            }
+            if result.api_keys.is_empty() && result.credits.is_none() {
+                continue;
+            }
+            if result.id.is_empty() {
+                continue;
+            }
+            accounts.push(OpenRouterAccountSnapshot {
+                id: result.id,
+                name: result.name,
+                api_keys: result.api_keys,
+                balance_microusd: result.credits.map(|credits| credits.balance_microusd),
+                total_credits_microusd: result
+                    .credits
+                    .map(|credits| credits.total_credits_microusd),
+            });
+        }
+
+        if accounts.is_empty() {
+            bail!("OpenRouter has no usable API or management key")
+        }
+        Ok(rate_limits_from_accounts(accounts, sampled_at))
+    }
+}
+
+pub fn is_installed() -> bool {
+    key_is_configured() || secrets::contains_prefix(SECRET_PREFIX)
+}
+
+pub fn key_is_configured() -> bool {
+    secrets::has_value(SECRET_NAME)
+}
+
+pub fn save_api_key(value: Option<&str>) -> Result<()> {
+    save_account_api_key(LEGACY_ACCOUNT_ID, LEGACY_API_KEY_ID, value)
+}
+
+pub fn accounts_for_instance(instance: &ProviderInstance) -> Vec<OpenRouterAccount> {
+    instance.openrouter.clone().into_iter().collect()
+}
+
+/// Overlay locally chosen account and key names onto a live quota snapshot.
+/// A rename is a settings-only change and must not wait for the next worker
+/// poll or an app restart.
+pub fn apply_account_names(limits: &mut RateLimits, instance: &ProviderInstance) -> bool {
+    let configured_accounts = instance.openrouter.as_slice();
+    let names: HashMap<&str, &str> = configured_accounts
+        .iter()
+        .map(|account| (account.id.as_str(), account.name.as_str()))
+        .collect();
+    let mut changed = false;
+    for account in &mut limits.openrouter_accounts {
+        let configured = configured_accounts.iter().find(|a| a.id == account.id);
+        for key in &mut account.api_keys {
+            let local_name = configured
+                .and_then(|a| a.api_key_names.get(&key.id))
+                .cloned();
+            if key.local_name != local_name {
+                key.local_name = local_name;
+                changed = true;
+            }
+        }
+        if let Some(name) = names.get(account.id.as_str())
+            && account.name != *name
+        {
+            account.name = (*name).to_owned();
+            changed = true;
+        }
+    }
+    if !limits.openrouter_accounts.is_empty() {
+        let expected = (limits.openrouter_accounts.len() == 1)
+            .then(|| limits.openrouter_accounts[0].name.clone());
+        if limits.account_name != expected {
+            limits.account_name = expected;
+            changed = true;
+        }
+    }
+    changed
+}
+
+pub fn is_installed_for_accounts(accounts: &[OpenRouterAccount]) -> bool {
+    is_installed()
+        || accounts.iter().any(|account| {
+            account
+                .api_key_ids
+                .iter()
+                .any(|key_id| api_key_is_configured(&account.id, key_id))
+                || management_key_is_configured(&account.id)
+        })
+}
+
+pub fn api_key_is_configured(account_id: &str, key_id: &str) -> bool {
+    secrets::has_value(&api_secret_name(account_id, key_id))
+}
+
+pub fn management_key_is_configured(account_id: &str) -> bool {
+    secrets::has_value(&management_secret_name(account_id))
+}
+
+pub(crate) fn has_management_key(accounts: &[OpenRouterAccount]) -> bool {
+    accounts
+        .iter()
+        .any(|account| management_key_is_configured(&account.id))
+}
+
+pub fn save_account_api_key(account_id: &str, key_id: &str, value: Option<&str>) -> Result<()> {
+    save_secret_and_hint(&api_secret_name(account_id, key_id), value)
+}
+
+pub fn save_management_key(account_id: &str, value: Option<&str>) -> Result<()> {
+    save_secret_and_hint(&management_secret_name(account_id), value)
+}
+
+#[derive(Clone, Debug)]
+pub(crate) enum AccountSecretChange {
+    ApiKey {
+        account_id: String,
+        key_id: String,
+        value: Option<String>,
+    },
+    ManagementKey {
+        account_id: String,
+        value: Option<String>,
+    },
+}
+
+impl AccountSecretChange {
+    pub(crate) fn api_key(
+        account_id: impl Into<String>,
+        key_id: impl Into<String>,
+        value: Option<String>,
+    ) -> Self {
+        Self::ApiKey {
+            account_id: account_id.into(),
+            key_id: key_id.into(),
+            value,
+        }
+    }
+
+    pub(crate) fn management(account_id: impl Into<String>, value: Option<String>) -> Self {
+        Self::ManagementKey {
+            account_id: account_id.into(),
+            value,
+        }
+    }
+
+    fn secret_name(&self) -> String {
+        match self {
+            Self::ApiKey {
+                account_id, key_id, ..
+            } => api_secret_name(account_id, key_id),
+            Self::ManagementKey { account_id, .. } => management_secret_name(account_id),
+        }
+    }
+
+    fn value(&self) -> Option<&str> {
+        match self {
+            Self::ApiKey { value, .. } | Self::ManagementKey { value, .. } => value.as_deref(),
+        }
+    }
+}
+
+/// Previous ciphertext for an atomic group of account-secret changes. Callers
+/// restore protected storage if the following settings commit fails. Capture
+/// never decrypts, so a corrupt slot can still be overwritten or removed.
+pub(crate) struct AccountSecretRollback(secrets::EncodedRollback);
+
+impl AccountSecretRollback {
+    pub(crate) fn restore(self) -> Result<()> {
+        let mut cache = SECRET_HINTS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        *cache = None;
+        self.0.restore()
+    }
+}
+
+pub(crate) fn apply_account_secret_changes(
+    changes: &[AccountSecretChange],
+) -> Result<AccountSecretRollback> {
+    let mut cache = SECRET_HINTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let writes = account_secret_writes(changes);
+    let rollback = secrets::apply_with_rollback(&writes)?;
+    invalidate_secret_hints(&mut cache, &writes);
+    Ok(AccountSecretRollback(rollback))
+}
+
+fn account_secret_writes(changes: &[AccountSecretChange]) -> Vec<(String, Option<String>)> {
+    changes
+        .iter()
+        .map(|change| (change.secret_name(), change.value().map(str::to_owned)))
+        .collect()
+}
+
+fn invalidate_secret_hints(
+    cache: &mut Option<HashMap<String, Option<String>>>,
+    writes: &[(String, Option<String>)],
+) {
+    if let Some(cache) = cache.as_mut() {
+        for (name, _) in writes {
+            cache.remove(name);
+        }
+    }
+}
+
+/// Masked form (`sk-or-v1-…abcd`) of a saved API key, or `None` when the key
+/// slot has no secret. Cached so Settings re-renders do not decrypt on every
+/// pointer move; saves through this module invalidate the entry.
+pub fn api_key_hint(account_id: &str, key_id: &str) -> Result<Option<String>> {
+    cached_secret_hint(&api_secret_name(account_id, key_id))
+}
+
+/// Masked form of an account's saved management key.
+pub fn management_key_hint(account_id: &str) -> Result<Option<String>> {
+    cached_secret_hint(&management_secret_name(account_id))
+}
+
+static SECRET_HINTS: std::sync::Mutex<Option<HashMap<String, Option<String>>>> =
+    std::sync::Mutex::new(None);
+
+fn cached_secret_hint(name: &str) -> Result<Option<String>> {
+    let mut cache = SECRET_HINTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    read_secret_hint(cache.get_or_insert_with(HashMap::new), name, || {
+        secrets::load(name)
+    })
+}
+
+fn read_secret_hint(
+    cache: &mut HashMap<String, Option<String>>,
+    name: &str,
+    load: impl FnOnce() -> Result<Option<String>>,
+) -> Result<Option<String>> {
+    if let Some(hint) = cache.get(name) {
+        return Ok(hint.clone());
+    }
+    // Only a definite answer is cached. A read that fails (file being
+    // rewritten, DPAPI hiccup) must not pin "Not saved" until the next save.
+    let hint = load()?
+        .filter(|value| !value.trim().is_empty())
+        .map(|value| secrets::masked_hint(&value));
+    cache.insert(name.to_owned(), hint.clone());
+    Ok(hint)
+}
+
+fn save_secret_and_hint(name: &str, value: Option<&str>) -> Result<()> {
+    // Serialize reads with saves: an in-flight read must not repopulate the
+    // old hint after invalidation, and a failed save keeps the existing hint.
+    let mut cache = SECRET_HINTS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    secrets::save(name, value)?;
+    if let Some(cache) = cache.as_mut() {
+        cache.remove(name);
+    }
+    Ok(())
+}
+
+/// Confirms OpenRouter accepts an inference API key before Settings stores it.
+pub fn verify_api_key(api_key: &str) -> Result<()> {
+    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+    match agent
+        .get(API_URL)
+        .set("Authorization", &format!("Bearer {}", api_key.trim()))
+        .set("Accept", "application/json")
+        .call()
+    {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(401, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            if body_indicates_expired_api_key(&body) {
+                bail!("This key has expired. Create a new one on openrouter.ai.")
+            }
+            bail!("OpenRouter rejected this key. Check it and try again.")
+        }
+        Err(ureq::Error::Status(status, _)) => {
+            bail!("OpenRouter returned status {status}. Try again in a moment.")
+        }
+        Err(error) => Err(error).context("Could not reach OpenRouter"),
+    }
+}
+
+/// Confirms a key can read the account key directory, which only management
+/// keys are allowed to do.
+pub fn verify_management_key(management_key: &str) -> Result<()> {
+    let agent = ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build();
+    match agent
+        .get(KEYS_API_URL)
+        .set(
+            "Authorization",
+            &format!("Bearer {}", management_key.trim()),
+        )
+        .set("Accept", "application/json")
+        .call()
+    {
+        Ok(_) => Ok(()),
+        Err(ureq::Error::Status(401, _)) => {
+            bail!("OpenRouter rejected this key. Check it and try again.")
+        }
+        Err(ureq::Error::Status(403, _)) => {
+            bail!("This looks like an API key, not a management key.")
+        }
+        Err(ureq::Error::Status(status, _)) => {
+            bail!("OpenRouter returned status {status}. Try again in a moment.")
+        }
+        Err(error) => Err(error).context("Could not reach OpenRouter"),
+    }
+}
+
+impl UsageProvider for OpenRouterClient {
+    fn set_cancellation(&mut self, cancelled: Arc<AtomicBool>) {
+        self.cancelled = cancelled;
+    }
+
+    fn load_cached_usage_when_disabled(&self) -> bool {
+        true
+    }
+
+    fn load_cached_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
+        analytics::load(self, history_days)
+    }
+
+    fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
+        analytics::refresh(self, history_days)
+    }
+}
+
+pub(crate) static DRIVER: Driver = Driver {
+    start: start_worker,
+    detect,
+    sources: Sources::APP,
+    copy: settings_copy,
+    forget_secrets: Some(forget_secrets),
+    consume_reset: None,
+};
+
+fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
+    let client = OpenRouterClient::new(instance)?;
+    Ok(crate::providers::worker::start_worker(
+        client.clone(),
+        client,
+        None,
+        options,
+    ))
+}
+
+fn detect(instance: &ProviderInstance) -> InstallStatus {
+    let detected = is_installed_for_accounts(instance.openrouter.as_slice());
+    InstallStatus {
+        app: detected
+            .then(|| crate::i18n::tr("openrouter-account-credentials-are-configured").into()),
+        used: detected.then_some(InstallSource::App),
+        ..InstallStatus::none(instance)
+    }
+}
+
+fn settings_copy() -> SettingsCopy {
+    SettingsCopy {
+        found: crate::i18n::tr("account-credentials-are-already-set"),
+        not_found: crate::i18n::tr("optional-add-accounts-later-in-providers"),
+        credential: Credential::KeyAccounts,
+        ..SettingsCopy::new(crate::i18n::tr(
+            "reads-api-key-usage-and-spend-limits-a-management-key-also-enable",
+        ))
+    }
+}
+
+fn forget_secrets(instance: &ProviderInstance) -> Result<()> {
+    let Some(account) = &instance.openrouter else {
+        return Ok(());
+    };
+    let mut changes = account
+        .api_key_ids
+        .iter()
+        .map(|key_id| AccountSecretChange::api_key(account.id.clone(), key_id.clone(), None))
+        .collect::<Vec<_>>();
+    changes.push(AccountSecretChange::management(account.id.clone(), None));
+    apply_account_secret_changes(&changes).map(drop)
+}
+
+#[derive(Debug)]
+struct ParsedOpenRouterKey {
+    account_name: Option<String>,
+    spending: SpendingSummary,
+    expires_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeyEnvelope {
+    data: KeyData,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeyData {
+    /// Masked key fingerprint from `/key`, e.g. `sk-or-v1-abc...123`.
+    label: Option<String>,
+    /// Human-readable key name when the endpoint provides it.
+    #[serde(default)]
+    name: Option<String>,
+    usage: Option<f64>,
+    limit: Option<f64>,
+    limit_remaining: Option<f64>,
+    limit_reset: Option<String>,
+    /// Absolute expiry timestamp, or null when the key never expires.
+    #[serde(default)]
+    expires_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeysDirectoryEnvelope {
+    data: Vec<KeyDirectoryEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct KeyDirectoryEntry {
+    label: Option<String>,
+    name: Option<String>,
+    #[serde(default)]
+    expires_at: Option<String>,
+    #[serde(default)]
+    disabled: bool,
+}
+
+#[derive(Clone, Debug, Default)]
+struct DirectoryKeyInfo {
+    name: Option<String>,
+    expires_at: Option<DateTime<Utc>>,
+    disabled: bool,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreditsEnvelope {
+    data: CreditsData,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreditsData {
+    total_credits: f64,
+    total_usage: f64,
+}
+
+fn load_credentials(instance: &ProviderInstance) -> Result<Vec<AccountCredentials>> {
+    accounts_for_instance(instance)
+        .into_iter()
+        .map(|account| {
+            let mut api_keys = Vec::new();
+            for key_id in &account.api_key_ids {
+                let secret_name = api_secret_name(&account.id, key_id);
+                if let Some(value) = load_secret_value(&secret_name)? {
+                    api_keys.push(ApiKeyCredential {
+                        id: key_id.clone(),
+                        value,
+                    });
+                }
+            }
+            let management_key = load_secret_value(&management_secret_name(&account.id))?;
+            if api_keys.is_empty() && management_key.is_none() {
+                return Ok(None);
+            }
+            Ok(Some(AccountCredentials {
+                id: account.id,
+                name: account.name,
+                api_keys,
+                management_key,
+            }))
+        })
+        .filter_map(|result| result.transpose())
+        .collect()
+}
+
+fn load_secret_value(name: &str) -> Result<Option<String>> {
+    secrets::load(name)
+}
+
+fn api_secret_name(account_id: &str, key_id: &str) -> String {
+    if account_id == LEGACY_ACCOUNT_ID && key_id == LEGACY_API_KEY_ID {
+        SECRET_NAME.into()
+    } else {
+        format!("{SECRET_PREFIX}{account_id}-api-{key_id}")
+    }
+}
+
+fn management_secret_name(account_id: &str) -> String {
+    format!("{SECRET_PREFIX}{account_id}-management")
+}
+
+fn rate_limits_from_accounts(
+    accounts: Vec<OpenRouterAccountSnapshot>,
+    sampled_at: DateTime<Utc>,
+) -> RateLimits {
+    let spending = aggregate_spending(&accounts);
+    let primary = spending
+        .as_ref()
+        .map_or_else(LimitWindow::default, |value| {
+            let used_percent = value.limit_microusd.and_then(|limit| {
+                (limit > 0).then(|| {
+                    ((value.used_microusd.min(limit) as f64 / limit as f64) * 100.0)
+                        .round()
+                        .clamp(0.0, 100.0) as u8
+                })
+            });
+            LimitWindow {
+                used_percent,
+                resets_at: value.resets_at,
+                duration_minutes: value.reset_kind.as_deref().and_then(|kind| {
+                    period_bounds(sampled_at, kind).map(|(_, _, minutes)| minutes)
+                }),
+            }
+        });
+    RateLimits {
+        primary,
+        sampled_at,
+        account_name: (accounts.len() == 1).then(|| accounts[0].name.clone()),
+        spending,
+        openrouter_accounts: accounts,
+        ..RateLimits::default()
+    }
+}
+
+fn aggregate_spending(accounts: &[OpenRouterAccountSnapshot]) -> Option<SpendingSummary> {
+    let spendings = accounts
+        .iter()
+        .flat_map(|account| account.api_keys.iter())
+        .filter(|key| key.has_live_usage)
+        .map(|key| &key.spending)
+        .collect::<Vec<_>>();
+    let used_microusd = spendings.iter().fold(0_u64, |total, spending| {
+        total.saturating_add(spending.used_microusd)
+    });
+    let limit_microusd = (!spendings.is_empty()
+        && spendings
+            .iter()
+            .all(|spending| spending.limit_microusd.is_some()))
+    .then(|| {
+        spendings.iter().fold(0_u64, |total, spending| {
+            total.saturating_add(spending.limit_microusd.unwrap_or_default())
+        })
+    });
+    let remaining_microusd = (!spendings.is_empty()
+        && spendings
+            .iter()
+            .all(|spending| spending.remaining_microusd.is_some()))
+    .then(|| {
+        spendings.iter().fold(0_u64, |total, spending| {
+            total.saturating_add(spending.remaining_microusd.unwrap_or_default())
+        })
+    });
+    let balance_microusd = accounts
+        .iter()
+        .filter_map(|account| account.balance_microusd)
+        .reduce(|total, balance| total.saturating_add(balance));
+    let resets_at = common_value(spendings.iter().map(|spending| spending.resets_at));
+    let reset_kind = common_value(spendings.iter().map(|spending| spending.reset_kind.clone()));
+    (!spendings.is_empty() || balance_microusd.is_some()).then_some(SpendingSummary {
+        used_microusd,
+        limit_microusd,
+        remaining_microusd,
+        resets_at,
+        reset_kind,
+        balance_microusd,
+    })
+}
+
+fn common_value<T>(mut values: impl Iterator<Item = Option<T>>) -> Option<T>
+where
+    T: Clone + PartialEq,
+{
+    let first = values.next()?;
+    values
+        .all(|value| value == first)
+        .then_some(first)
+        .flatten()
+}
+
+fn parse_key_response(raw: &str, sampled_at: DateTime<Utc>) -> Result<ParsedOpenRouterKey> {
+    let envelope: KeyEnvelope =
+        serde_json::from_str(raw).context("parse OpenRouter API-key response")?;
+    let usage = money_value(envelope.data.usage, "usage")?.unwrap_or(0);
+    let limit = money_value(envelope.data.limit, "limit")?;
+    let remaining = money_value(envelope.data.limit_remaining, "limit_remaining")?;
+    let reset_kind = envelope
+        .data
+        .limit_reset
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_ascii_lowercase);
+    let bounds = reset_kind
+        .as_deref()
+        .and_then(|kind| period_bounds(sampled_at, kind));
+    let derived_remaining = remaining.or_else(|| limit.map(|limit| limit.saturating_sub(usage)));
+    let account_name = key_identity_from_response(&envelope.data);
+    let expires_at = parse_optional_timestamp(envelope.data.expires_at.as_deref());
+
+    Ok(ParsedOpenRouterKey {
+        account_name,
+        spending: SpendingSummary {
+            used_microusd: usage,
+            limit_microusd: limit,
+            remaining_microusd: derived_remaining,
+            resets_at: bounds.map(|(_, reset, _)| reset),
+            reset_kind,
+            balance_microusd: None,
+        },
+        expires_at,
+    })
+}
+
+fn parse_credits_response(raw: &str) -> Result<AccountCredits> {
+    let envelope: CreditsEnvelope =
+        serde_json::from_str(raw).context("parse OpenRouter account credits response")?;
+    let total_credits = money_value(Some(envelope.data.total_credits), "total_credits")?
+        .context("OpenRouter credits response is missing total_credits")?;
+    let total_usage = money_value(Some(envelope.data.total_usage), "total_usage")?
+        .context("OpenRouter credits response is missing total_usage")?;
+    Ok(AccountCredits {
+        balance_microusd: total_credits.saturating_sub(total_usage),
+        total_credits_microusd: total_credits,
+    })
+}
+
+fn load_key_cache_from_store(provider: ProviderId) -> HashMap<String, CachedOpenRouterKey> {
+    let Ok(Some(previous)) = crate::store::with_store(|store| store.load_limits(provider)) else {
+        return HashMap::new();
+    };
+    let mut cache = HashMap::new();
+    for account in previous.openrouter_accounts {
+        for key in account.api_keys {
+            cache.insert(
+                key_cache_id(&account.id, &key.id),
+                CachedOpenRouterKey {
+                    label: key.label,
+                    masked_key: key.masked_key,
+                    limit_microusd: key.spending.limit_microusd,
+                    reset_kind: key.spending.reset_kind,
+                    expires_at: key.expires_at,
+                    disabled: key.disabled,
+                },
+            );
+        }
+    }
+    cache
+}
+
+fn key_cache_id(account_id: &str, key_id: &str) -> String {
+    format!("{account_id}\0{key_id}")
+}
+
+fn cached_key_matches_mask(cached: &CachedOpenRouterKey, current_mask: Option<&str>) -> bool {
+    match cached.masked_key.as_deref() {
+        None => true,
+        Some(cached_mask) => Some(cached_mask) == current_mask,
+    }
+}
+
+/// Merge live `/key` spending with cached metadata. Usage is taken from the
+/// live response only — never from cache.
+fn merge_key_spending(
+    live: Option<&SpendingSummary>,
+    cached: &CachedOpenRouterKey,
+    sampled_at: DateTime<Utc>,
+    has_live_usage: bool,
+) -> SpendingSummary {
+    let used_microusd = if has_live_usage {
+        live.map(|spending| spending.used_microusd).unwrap_or(0)
+    } else {
+        0
+    };
+    let limit_microusd = live
+        .and_then(|spending| spending.limit_microusd)
+        .or(cached.limit_microusd);
+    let reset_kind = live
+        .and_then(|spending| spending.reset_kind.clone())
+        .or_else(|| cached.reset_kind.clone());
+    let bounds = reset_kind
+        .as_deref()
+        .and_then(|kind| period_bounds(sampled_at, kind));
+    let remaining_microusd = if has_live_usage {
+        live.and_then(|spending| spending.remaining_microusd)
+            .or_else(|| limit_microusd.map(|limit| limit.saturating_sub(used_microusd)))
+    } else {
+        None
+    };
+    SpendingSummary {
+        used_microusd,
+        limit_microusd,
+        remaining_microusd,
+        resets_at: bounds
+            .map(|(_, reset, _)| reset)
+            .or_else(|| live.and_then(|spending| spending.resets_at)),
+        reset_kind,
+        balance_microusd: None,
+    }
+}
+
+fn parse_keys_directory(raw: &str) -> Result<HashMap<String, DirectoryKeyInfo>> {
+    let envelope: KeysDirectoryEnvelope =
+        serde_json::from_str(raw).context("parse OpenRouter API key directory")?;
+    let mut keys = HashMap::new();
+    for entry in envelope.data {
+        let Some(label) = cleaned_key_text(entry.label.as_deref()) else {
+            continue;
+        };
+        keys.insert(
+            label,
+            DirectoryKeyInfo {
+                name: cleaned_key_text(entry.name.as_deref()),
+                expires_at: parse_optional_timestamp(entry.expires_at.as_deref()),
+                disabled: entry.disabled,
+            },
+        );
+    }
+    Ok(keys)
+}
+
+fn parse_optional_timestamp(raw: Option<&str>) -> Option<DateTime<Utc>> {
+    let raw = raw.map(str::trim).filter(|value| !value.is_empty())?;
+    DateTime::parse_from_rfc3339(raw)
+        .ok()
+        .map(|value| value.with_timezone(&Utc))
+}
+
+fn find_directory_entry(
+    secret: &str,
+    masked_key: Option<&str>,
+    key_directory: &HashMap<String, DirectoryKeyInfo>,
+) -> Option<DirectoryKeyInfo> {
+    if let Some(mask) = masked_key.map(str::trim).filter(|value| !value.is_empty())
+        && let Some(info) = key_directory.get(mask)
+    {
+        return Some(info.clone());
+    }
+    key_directory
+        .iter()
+        .find(|(label, _)| masked_label_matches_secret(label, secret))
+        .map(|(_, info)| info.clone())
+}
+
+/// OpenRouter masks keys as `sk-or-v1-<head>...<tail>` with variable lengths.
+/// Match against the full secret by head/tail so local collapse differences
+/// cannot hide directory metadata such as `expires_at` / `disabled`.
+fn masked_label_matches_secret(label: &str, secret: &str) -> bool {
+    let label = label.trim();
+    let secret = secret.trim();
+    if secret.is_empty() || !is_masked_openrouter_key_label(label) {
+        return false;
+    }
+    let Some((head, tail)) = label.split_once("...") else {
+        return false;
+    };
+    if head.is_empty() || tail.is_empty() {
+        return false;
+    }
+    secret.starts_with(head) && secret.ends_with(tail)
+}
+
+fn key_identity_from_response(data: &KeyData) -> Option<String> {
+    cleaned_key_text(data.name.as_deref()).or_else(|| cleaned_key_text(data.label.as_deref()))
+}
+
+fn resolve_key_display_name(
+    identity: Option<&str>,
+    key_directory: &HashMap<String, DirectoryKeyInfo>,
+) -> Option<String> {
+    let identity = cleaned_key_text(identity)?;
+    if let Some(name) = key_directory
+        .get(&identity)
+        .and_then(|info| info.name.clone())
+    {
+        return Some(name);
+    }
+    if let Some(name) = key_directory.iter().find_map(|(label, info)| {
+        (label == &identity || masked_labels_compatible(label, &identity))
+            .then(|| info.name.clone())
+            .flatten()
+    }) {
+        return Some(name);
+    }
+    if is_masked_openrouter_key_label(&identity) {
+        return None;
+    }
+    Some(identity)
+}
+
+/// Two masked labels refer to the same key when one head/tail is a prefix/suffix
+/// of the other (OpenRouter may show more or fewer visible characters than we do).
+fn masked_labels_compatible(left: &str, right: &str) -> bool {
+    let Some((left_head, left_tail)) = left.split_once("...") else {
+        return false;
+    };
+    let Some((right_head, right_tail)) = right.split_once("...") else {
+        return false;
+    };
+    if left_head.is_empty()
+        || left_tail.is_empty()
+        || right_head.is_empty()
+        || right_tail.is_empty()
+    {
+        return false;
+    }
+    (left_head.starts_with(right_head) || right_head.starts_with(left_head))
+        && (left_tail.ends_with(right_tail) || right_tail.ends_with(left_tail))
+}
+
+fn cleaned_key_text(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+}
+
+fn is_masked_openrouter_key_label(label: &str) -> bool {
+    let trimmed = label.trim();
+    trimmed.starts_with("sk-or-") && trimmed.contains("...")
+}
+
+/// Collapses a secret into a short fingerprint. Never returns the full key.
+fn collapse_api_key(value: &str) -> Option<String> {
+    let key = value.trim();
+    if key.is_empty() {
+        return None;
+    }
+    const HEAD: usize = 10;
+    const TAIL: usize = 3;
+    if key.len() <= HEAD + TAIL + 3 {
+        // Too short to safely show ends — obscure everything after a tiny prefix.
+        let prefix: String = key.chars().take(4).collect();
+        return Some(format!("{prefix}..."));
+    }
+    let head: String = key.chars().take(HEAD).collect();
+    let tail: String = key
+        .chars()
+        .rev()
+        .take(TAIL)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect();
+    Some(format!("{head}...{tail}"))
+}
+
+fn money_value(value: Option<f64>, field: &str) -> Result<Option<u64>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if !value.is_finite() || value < 0.0 {
+        bail!("OpenRouter {field} is not a valid non-negative amount")
+    }
+    let micros = value * 1_000_000.0;
+    if micros > u64::MAX as f64 {
+        bail!("OpenRouter {field} is too large")
+    }
+    Ok(Some(micros.round() as u64))
+}
+
+/// Returns the current UTC period start, reset boundary, and exact duration.
+fn period_bounds(
+    now: DateTime<Utc>,
+    reset_kind: &str,
+) -> Option<(DateTime<Utc>, DateTime<Utc>, u32)> {
+    let date = now.date_naive();
+    let start_date = match reset_kind {
+        "daily" => date,
+        "weekly" => date - ChronoDuration::days(i64::from(date.weekday().num_days_from_monday())),
+        "monthly" => NaiveDate::from_ymd_opt(date.year(), date.month(), 1)?,
+        _ => return None,
+    };
+    let reset_date = match reset_kind {
+        "daily" => start_date + ChronoDuration::days(1),
+        "weekly" => start_date + ChronoDuration::days(7),
+        "monthly" => {
+            if date.month() == 12 {
+                NaiveDate::from_ymd_opt(date.year().checked_add(1)?, 1, 1)?
+            } else {
+                NaiveDate::from_ymd_opt(date.year(), date.month() + 1, 1)?
+            }
+        }
+        _ => return None,
+    };
+    let start = Utc.from_utc_datetime(&start_date.and_hms_opt(0, 0, 0)?);
+    let reset = Utc.from_utc_datetime(&reset_date.and_hms_opt(0, 0, 0)?);
+    let minutes = u32::try_from((reset - start).num_minutes()).ok()?;
+    Some((start, reset, minutes))
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+    use crate::providers::registry::ProviderKind;
+
+    #[test]
+    fn secret_hint_errors_are_retried_and_never_cached_as_missing() {
+        let mut cache = HashMap::new();
+        assert!(read_secret_hint(&mut cache, "key", || bail!("transient read failure")).is_err());
+        assert!(!cache.contains_key("key"));
+        let hint = read_secret_hint(&mut cache, "key", || Ok(Some("fixture-1234".into()))).unwrap();
+        assert_eq!(hint.as_deref(), Some("…1234"));
+        assert_eq!(
+            read_secret_hint(&mut cache, "key", || panic!("must use cache")).unwrap(),
+            hint
+        );
+        cache.remove("key");
+        assert_eq!(
+            read_secret_hint(&mut cache, "key", || Ok(None)).unwrap(),
+            None
+        );
+        assert!(cache.contains_key("key"));
+    }
+
+    fn sampled_at() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap()
+    }
+
+    fn key(id: &str, raw: &str) -> OpenRouterApiKeySnapshot {
+        let parsed = parse_key_response(raw, sampled_at()).unwrap();
+        OpenRouterApiKeySnapshot {
+            id: id.into(),
+            label: parsed.account_name,
+            spending: parsed.spending,
+            has_live_usage: true,
+            ..Default::default()
+        }
+    }
+
+    fn account(
+        id: &str,
+        api_keys: Vec<OpenRouterApiKeySnapshot>,
+        balance_microusd: Option<u64>,
+    ) -> OpenRouterAccountSnapshot {
+        OpenRouterAccountSnapshot {
+            id: id.into(),
+            name: id.into(),
+            api_keys,
+            balance_microusd,
+            ..Default::default()
+        }
+    }
+
+    /// One account with one key, read the way the worker publishes it.
+    fn sample(raw: &str) -> RateLimits {
+        rate_limits_from_accounts(
+            vec![account("account", vec![key("key", raw)], None)],
+            sampled_at(),
+        )
+    }
+
+    fn key_label(limits: &RateLimits) -> Option<&str> {
+        limits.openrouter_accounts[0].api_keys[0].label.as_deref()
+    }
+
+    #[test]
+    fn maps_a_monthly_capped_key_to_a_spending_window() {
+        let limits = sample(
+            r#"{"data":{"label":"Build key","usage":25.5,"limit":100,"limit_remaining":74.5,"limit_reset":"monthly"}}"#,
+        );
+        assert_eq!(limits.primary.used_percent, Some(26));
+        assert_eq!(limits.primary.duration_minutes, Some(31 * 24 * 60));
+        assert_eq!(
+            limits.primary.resets_at,
+            Some(Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap())
+        );
+        let spending = limits.spending.as_ref().unwrap();
+        assert_eq!(spending.used_microusd, 25_500_000);
+        assert_eq!(spending.limit_microusd, Some(100_000_000));
+        assert_eq!(spending.remaining_microusd, Some(74_500_000));
+        assert_eq!(key_label(&limits), Some("Build key"));
+    }
+
+    #[test]
+    fn supports_daily_and_weekly_reset_boundaries() {
+        let daily = sample(r#"{"data":{"usage":1,"limit":10,"limit_reset":"daily"}}"#);
+        assert_eq!(daily.primary.duration_minutes, Some(24 * 60));
+        assert_eq!(
+            daily.primary.resets_at,
+            Some(Utc.with_ymd_and_hms(2026, 8, 20, 0, 0, 0).unwrap())
+        );
+
+        let weekly = sample(r#"{"data":{"usage":1,"limit":10,"limit_reset":"weekly"}}"#);
+        assert_eq!(weekly.primary.duration_minutes, Some(7 * 24 * 60));
+        assert_eq!(
+            weekly.primary.resets_at,
+            Some(Utc.with_ymd_and_hms(2026, 8, 24, 0, 0, 0).unwrap())
+        );
+    }
+
+    #[test]
+    fn preserves_usage_when_a_key_has_no_spending_limit() {
+        let limits = sample(r#"{"data":{"usage":4.25,"limit":null,"limit_remaining":null}}"#);
+        assert!(limits.primary.is_empty());
+        assert_eq!(limits.spending.unwrap().used_microusd, 4_250_000);
+    }
+
+    #[test]
+    fn derives_remaining_and_rejects_invalid_amounts() {
+        let limits = sample(r#"{"data":{"usage":3,"limit":10}}"#);
+        assert_eq!(limits.spending.unwrap().remaining_microusd, Some(7_000_000));
+        assert!(parse_key_response(r#"{"data":{"usage":-1}}"#, Utc::now()).is_err());
+        assert!(parse_key_response("{}", Utc::now()).is_err());
+    }
+
+    #[test]
+    fn collapses_api_keys_without_exposing_the_secret() {
+        let collapsed =
+            collapse_api_key("sk-or-v1-a35b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1").unwrap();
+        assert!(collapsed.contains("..."));
+        assert!(!collapsed.contains("a35b9c8d7e6f5a4b3c2d1e0f9a8b7c6d5e4f3a2b1"));
+        assert!(collapsed.starts_with("sk-or-v1-a"));
+        assert!(collapse_api_key("   ").is_none());
+    }
+
+    #[test]
+    fn merge_keeps_cached_metadata_but_never_cached_usage() {
+        let sampled_at = sampled_at();
+        let cached = CachedOpenRouterKey {
+            label: Some("Test Key".into()),
+            limit_microusd: Some(1_000_000),
+            reset_kind: Some("daily".into()),
+            ..Default::default()
+        };
+        let live = SpendingSummary {
+            used_microusd: 250_000,
+            limit_microusd: Some(1_000_000),
+            remaining_microusd: Some(750_000),
+            resets_at: None,
+            reset_kind: Some("daily".into()),
+            balance_microusd: None,
+        };
+        let merged = merge_key_spending(Some(&live), &cached, sampled_at, true);
+        assert_eq!(merged.used_microusd, 250_000);
+        assert_eq!(merged.limit_microusd, Some(1_000_000));
+        assert!(merged.resets_at.is_some());
+
+        let placeholder = merge_key_spending(None, &cached, sampled_at, false);
+        assert_eq!(placeholder.used_microusd, 0);
+        assert_eq!(placeholder.limit_microusd, Some(1_000_000));
+        assert!(placeholder.resets_at.is_some());
+    }
+
+    #[test]
+    fn legacy_key_cache_is_accepted_but_a_present_mismatched_fingerprint_is_rejected() {
+        let legacy = CachedOpenRouterKey {
+            label: Some("Existing key".into()),
+            masked_key: None,
+            ..Default::default()
+        };
+        assert!(cached_key_matches_mask(
+            &legacy,
+            Some("sk-or-v1-current...1234")
+        ));
+
+        let fingerprinted = CachedOpenRouterKey {
+            masked_key: Some("sk-or-v1-old...9876".into()),
+            ..Default::default()
+        };
+        assert!(!cached_key_matches_mask(
+            &fingerprinted,
+            Some("sk-or-v1-current...1234")
+        ));
+    }
+
+    #[test]
+    fn prefers_key_name_over_masked_label() {
+        let limits = sample(
+            r#"{"data":{"name":"Leon Flame","label":"sk-or-v1-a35...26a","usage":0,"limit":1}}"#,
+        );
+        assert_eq!(key_label(&limits), Some("Leon Flame"));
+    }
+
+    #[test]
+    fn resolves_display_names_from_management_directory() {
+        let names = parse_keys_directory(
+            r#"{"data":[{"label":"sk-or-v1-a35...26a","name":"Leon Flame"},{"label":"sk-or-v1-bbb...ccc","name":""}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_key_display_name(Some("sk-or-v1-a35...26a"), &names).as_deref(),
+            Some("Leon Flame")
+        );
+        assert_eq!(
+            resolve_key_display_name(Some("sk-or-v1-unknown...zzz"), &names),
+            None
+        );
+        assert_eq!(
+            resolve_key_display_name(Some("Build key"), &HashMap::new()).as_deref(),
+            Some("Build key")
+        );
+    }
+
+    #[test]
+    fn detects_expired_api_key_error_body() {
+        assert!(body_indicates_expired_api_key(
+            r#"{"error":{"message":"API key expired.","code":401,"metadata":{"headers":{"WWW-Authenticate":"Bearer error=\"invalid_token\", error_description=\"API key expired\""}}}}"#
+        ));
+        assert!(!body_indicates_expired_api_key(
+            r#"{"error":{"message":"User not found.","code":401}}"#
+        ));
+        assert!(!body_indicates_expired_api_key(""));
+    }
+
+    #[test]
+    fn parses_expires_at_from_key_and_directory() {
+        let parsed = parse_key_response(
+            r#"{"data":{"usage":1,"limit":10,"expires_at":"2026-08-19T10:00:00Z"}}"#,
+            sampled_at(),
+        )
+        .unwrap();
+        assert_eq!(
+            parsed.expires_at,
+            Some(Utc.with_ymd_and_hms(2026, 8, 19, 10, 0, 0).unwrap())
+        );
+
+        let directory = parse_keys_directory(
+            r#"{"data":[{"label":"sk-or-v1-a35...26a","name":"TEST","expires_at":"2026-08-18T15:30:00Z","disabled":true}]}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            directory["sk-or-v1-a35...26a"].expires_at,
+            Some(Utc.with_ymd_and_hms(2026, 8, 18, 15, 30, 0).unwrap())
+        );
+        assert!(directory["sk-or-v1-a35...26a"].disabled);
+    }
+
+    #[test]
+    fn matches_directory_labels_against_full_secrets_despite_mask_length() {
+        let secret = "sk-or-v1-c0123456789abcdef0123456789abcdef0123456789abcdef0123456789ef0";
+        let directory = parse_keys_directory(
+            r#"{"data":[{"label":"sk-or-v1-c012...ef0","name":"TEST","expires_at":"2026-01-01T00:00:00Z","disabled":true}]}"#,
+        )
+        .unwrap();
+        // Local collapse uses a shorter head than OpenRouter's label.
+        let local_mask = collapse_api_key(secret);
+        assert_eq!(local_mask.as_deref(), Some("sk-or-v1-c...ef0"));
+        assert!(!directory.contains_key("sk-or-v1-c...ef0"));
+
+        let matched = find_directory_entry(secret, local_mask.as_deref(), &directory).unwrap();
+        assert_eq!(matched.name.as_deref(), Some("TEST"));
+        assert!(matched.disabled);
+        assert_eq!(
+            matched.expires_at,
+            Some(Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap())
+        );
+        assert!(masked_label_matches_secret("sk-or-v1-c012...ef0", secret));
+        assert!(!masked_label_matches_secret("sk-or-v1-d012...ef0", secret));
+    }
+
+    #[test]
+    fn parses_account_credit_balance_from_total_credits_and_usage() {
+        let balance =
+            parse_credits_response(r#"{"data":{"total_credits":100.5,"total_usage":25.75}}"#)
+                .unwrap();
+        assert_eq!(balance.balance_microusd, 74_750_000);
+        assert_eq!(balance.total_credits_microusd, 100_500_000);
+    }
+
+    #[test]
+    fn clamps_account_balance_when_usage_exceeds_credits() {
+        let balance =
+            parse_credits_response(r#"{"data":{"total_credits":1,"total_usage":2}}"#).unwrap();
+        assert_eq!(balance.balance_microusd, 0);
+        assert_eq!(balance.total_credits_microusd, 1_000_000);
+        assert!(
+            parse_credits_response(r#"{"data":{"total_credits":-1,"total_usage":0}}"#).is_err()
+        );
+    }
+
+    #[test]
+    fn keeps_multiple_accounts_and_aggregates_their_key_limits() {
+        let first = key(
+            "key-one",
+            r#"{"data":{"label":"first-key","usage":10,"limit":100,"limit_remaining":90,"limit_reset":"monthly"}}"#,
+        );
+        let second = key(
+            "key-two",
+            r#"{"data":{"label":"second-key","usage":20,"limit":100,"limit_remaining":80,"limit_reset":"monthly"}}"#,
+        );
+        let limits = rate_limits_from_accounts(
+            vec![
+                account("account-one", vec![first], Some(50_000_000)),
+                account("account-two", vec![second], Some(75_000_000)),
+            ],
+            sampled_at(),
+        );
+
+        assert_eq!(limits.openrouter_accounts.len(), 2);
+        assert_eq!(limits.primary.used_percent, Some(15));
+        let spending = limits.spending.unwrap();
+        assert_eq!(spending.used_microusd, 30_000_000);
+        assert_eq!(spending.limit_microusd, Some(200_000_000));
+        assert_eq!(spending.remaining_microusd, Some(170_000_000));
+        assert_eq!(spending.balance_microusd, Some(125_000_000));
+        assert!(limits.account_name.is_none());
+    }
+
+    #[test]
+    fn never_moves_api_keys_between_account_snapshots() {
+        let leon_key = key(
+            "test2",
+            r#"{"data":{"name":"TEST2","label":"sk-or-v1-f12...662","usage":9,"limit":10,"limit_remaining":1,"limit_reset":"daily"}}"#,
+        );
+        let pixel_key = key(
+            "key-1",
+            r#"{"data":{"name":"KEY 1","label":"sk-or-v1-a12...1f8","usage":0.04,"limit":null}}"#,
+        );
+        let limits = rate_limits_from_accounts(
+            vec![
+                account("leon-flame", vec![leon_key], None),
+                account("pixelscan", vec![pixel_key], Some(38_960_000)),
+            ],
+            sampled_at(),
+        );
+
+        assert_eq!(limits.openrouter_accounts[0].id, "leon-flame");
+        assert_eq!(
+            limits.openrouter_accounts[0].api_keys[0].label.as_deref(),
+            Some("TEST2")
+        );
+        assert_eq!(limits.openrouter_accounts[1].id, "pixelscan");
+        assert_eq!(
+            limits.openrouter_accounts[1].api_keys[0].label.as_deref(),
+            Some("KEY 1")
+        );
+        assert!(
+            limits.openrouter_accounts[1]
+                .api_keys
+                .iter()
+                .all(|key| key.id != "test2"),
+            "TEST2 must stay under Leon Flame and never appear under Pixelscan"
+        );
+    }
+
+    #[test]
+    fn applies_renamed_account_names_onto_a_live_snapshot() {
+        let mut settings = ProviderInstance::primary(ProviderKind::OpenRouter);
+        settings.openrouter = Some(OpenRouterAccount {
+            id: "acc".into(),
+            name: "TESTdfwfwer".into(),
+            api_key_ids: vec!["key".into()],
+            api_key_names: Default::default(),
+        });
+        let mut limits = RateLimits::default();
+        limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
+            id: "acc".into(),
+            name: "TEST".into(),
+            ..Default::default()
+        });
+        limits.account_name = Some("TEST".into());
+
+        assert!(apply_account_names(&mut limits, &settings));
+        assert_eq!(limits.openrouter_accounts[0].name, "TESTdfwfwer");
+        assert_eq!(limits.account_name.as_deref(), Some("TESTdfwfwer"));
+        assert!(!apply_account_names(&mut limits, &settings));
+    }
+
+    #[test]
+    fn failed_key_or_credits_fetch_is_a_provider_error_even_with_partial_success() {
+        for failure in [
+            "API key: connection timed out",
+            "Account credits: HTTP 500",
+            "Key directory: HTTP 401",
+        ] {
+            let accounts = vec![
+                AccountFetchResult {
+                    name: "Healthy account".into(),
+                    credits: Some(AccountCredits {
+                        balance_microusd: 23_350_000,
+                        total_credits_microusd: 39_000_000,
+                    }),
+                    ..Default::default()
+                },
+                AccountFetchResult {
+                    name: "Failed account".into(),
+                    errors: vec![failure.into()],
+                    ..Default::default()
+                },
+            ];
+            let error = validate_account_fetches(&accounts)
+                .expect_err("Failed reads must not publish a successful placeholder snapshot");
+            assert!(error.to_string().contains(failure));
+        }
+        assert!(validate_account_fetches(&[AccountFetchResult::default()]).is_ok());
+    }
+
+    #[test]
+    fn local_key_names_survive_polls_and_clear_without_losing_remote_names() {
+        let mut account = OpenRouterAccount::new("Personal");
+        let key_id = account.api_key_ids[0].clone();
+        account
+            .api_key_names
+            .insert(key_id.clone(), "Local name".into());
+        let mut settings = ProviderInstance::primary(ProviderKind::OpenRouter);
+        settings.openrouter = Some(account.clone());
+        let mut limits = RateLimits::default();
+        limits.openrouter_accounts.push(OpenRouterAccountSnapshot {
+            id: account.id.clone(),
+            api_keys: vec![OpenRouterApiKeySnapshot {
+                id: key_id.clone(),
+                label: Some("Remote name".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        assert!(apply_account_names(&mut limits, &settings));
+        let key = &limits.openrouter_accounts[0].api_keys[0];
+        assert_eq!(key.local_name.as_deref(), Some("Local name"));
+        assert_eq!(key.label.as_deref(), Some("Remote name"));
+        assert!(!apply_account_names(&mut limits, &settings));
+
+        // Adding/replacing a management key restarts the worker at a new
+        // credential revision. Its directory can now return a different name,
+        // but the saved user override must still win on the fresh snapshot.
+        settings.credentials_revision += 1;
+        limits.openrouter_accounts[0].api_keys[0] = OpenRouterApiKeySnapshot {
+            id: key_id.clone(),
+            label: Some("Name from management directory".into()),
+            ..Default::default()
+        };
+        assert!(apply_account_names(&mut limits, &settings));
+        let key = &limits.openrouter_accounts[0].api_keys[0];
+        assert_eq!(
+            key.local_name.as_deref().or(key.label.as_deref()),
+            Some("Local name")
+        );
+        assert_eq!(
+            settings.openrouter.as_ref().unwrap().api_key_names[&key_id],
+            "Local name"
+        );
+
+        // Fresh worker snapshots contain only remote metadata.
+        limits.openrouter_accounts[0].api_keys[0].local_name = None;
+        assert!(apply_account_names(&mut limits, &settings));
+        settings.openrouter.as_mut().unwrap().api_key_names.clear();
+        assert!(apply_account_names(&mut limits, &settings));
+        let key = &limits.openrouter_accounts[0].api_keys[0];
+        assert!(key.local_name.is_none());
+        assert_eq!(key.label.as_deref(), Some("Name from management directory"));
+
+        let old: OpenRouterAccount =
+            serde_json::from_str(r#"{"id":"old","name":"Personal","api_key_ids":["key"]}"#)
+                .unwrap();
+        assert!(old.api_key_names.is_empty());
+        settings
+            .openrouter
+            .as_mut()
+            .unwrap()
+            .api_key_names
+            .insert(key_id.clone(), "Saved name".into());
+        let saved = toml::to_string(&settings).unwrap();
+        let restored: ProviderInstance = toml::from_str(&saved).unwrap();
+        assert_eq!(
+            restored.openrouter.as_ref().unwrap().api_key_names[&key_id],
+            "Saved name"
+        );
+    }
+}

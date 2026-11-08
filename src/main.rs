@@ -6,43 +6,47 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
     app::AppState,
-    app_event::AppEvent,
-    app_paths, logger, notifications,
-    provider::start_enabled_workers,
-    provider_status, reset_feed,
-    scheduler::ActivationState,
-    settings_runtime,
-    single_instance::{self, SingleInstance},
-    store, troubleshoot,
-    updater::{self, UpdateController},
+    app::event::AppEvent,
+    app::single_instance::{self, SingleInstance},
+    app::troubleshoot,
+    platform::logger,
+    platform::paths,
+    providers::scheduler::ActivationState,
+    providers::start_enabled_workers,
+    providers::status,
+    quota::reset_feed,
+    settings::runtime,
+    store,
+    surfaces::notifications,
+    update::{self, UpdateController},
 };
 
 fn run() -> Result<()> {
-    codex_minibar::banked_reset::mark_process_start();
+    codex_minibar::quota::banked_reset::mark_process_start();
     codex_minibar::app::install_notification_host();
     notifications::initialize();
-    updater::sync_installed_display_version();
-    let path = app_paths::settings()?;
-    if app_paths::fake_sandbox() {
-        codex_minibar::fake::seed_settings()?;
+    update::sync_installed_display_version();
+    let path = paths::settings()?;
+    if paths::fake_sandbox() {
+        codex_minibar::providers::fake::seed_settings()?;
     }
     // Bootstrap order: logger, settings and every process-wide effect of
     // them (language first), then workers, then windows.
-    logger::initialize(&app_paths::log()?)?;
-    if let Err(error) = codex_minibar::claude::cleanup_abandoned_logins() {
+    logger::initialize(&paths::log()?)?;
+    if let Err(error) = codex_minibar::providers::claude::cleanup_abandoned_logins() {
         logger::info(format!(
             "could not clean abandoned Claude sign-in directories: {error:#}"
         ));
     }
-    if let Err(error) = codex_minibar::codex::cleanup_abandoned_logins() {
+    if let Err(error) = codex_minibar::providers::codex::cleanup_abandoned_logins() {
         logger::info(format!(
             "could not clean abandoned Codex sign-in directories: {error:#}"
         ));
     }
-    if let Err(error) = codex_minibar::pricing::initialize() {
+    if let Err(error) = codex_minibar::usage::pricing::initialize() {
         logger::info(format!("failed to hydrate pricing catalog: {error:#}"));
     }
-    let settings = settings_runtime::load_at_startup(&path)?;
+    let settings = runtime::load_at_startup(&path)?;
     let hydrated_limits = store::shared()
         .and_then(|shared| {
             let store = shared
@@ -59,18 +63,18 @@ fn run() -> Result<()> {
             Default::default()
         });
     // Settings start the taskbar widgets; they open on the stored quotas.
-    codex_minibar::taskbar::publish_limits(&hydrated_limits);
+    codex_minibar::surfaces::taskbar::publish_limits(&hydrated_limits);
     let (settings_tx, settings_rx) = mpsc::channel();
-    settings_runtime::start(&settings, settings_tx);
-    updater::finish_startup();
+    runtime::start(&settings, settings_tx);
+    update::finish_startup();
     std::thread::spawn(|| {
-        if let Err(error) = codex_minibar::codex::discovery::cleanup() {
+        if let Err(error) = codex_minibar::providers::codex::discovery::cleanup() {
             logger::info(format!(
                 "Codex CLI startup cache cleanup deferred: {error:#}"
             ));
         }
     });
-    let activation_path = app_paths::activation_state()?;
+    let activation_path = paths::activation_state()?;
     let last_activation_at: Option<DateTime<Utc>> =
         match ActivationState::load_or_default(&activation_path) {
             Ok(state) => state.last_attempt_at,
@@ -81,14 +85,14 @@ fn run() -> Result<()> {
         };
 
     let (worker_events_tx, worker_events_rx) = mpsc::channel::<AppEvent>();
-    let reset_feed_worker = reset_feed::start_worker(&settings, app_paths::reset_feed_cache()?, {
+    let reset_feed_worker = reset_feed::start_worker(&settings, paths::reset_feed_cache()?, {
         let events = worker_events_tx.clone();
         move |snapshot| {
             let _ = events.send(AppEvent::ForcedResetsUpdated(snapshot));
         }
     });
     let provider_status_worker =
-        provider_status::start_worker(&settings, app_paths::provider_status_cache()?, {
+        status::start_worker(&settings, paths::provider_status_cache()?, {
             let events = worker_events_tx.clone();
             move |snapshot| {
                 let _ = events.send(AppEvent::ProviderStatusUpdated(snapshot));
@@ -126,15 +130,15 @@ fn run() -> Result<()> {
         usage_actions_rx: Mutex::new(Some(usage_actions_rx)),
         updates: Arc::clone(&updates),
     });
-    codex_minibar::updater::install_runtime(Arc::clone(&updates), {
+    codex_minibar::update::install_runtime(Arc::clone(&updates), {
         let state = Arc::clone(&state);
         move || state.shutdown_worker()
     });
 
     codex_minibar::app::start(Arc::clone(&state));
-    codex_minibar::whats_new::start(&state.settings);
+    codex_minibar::update::whats_new::start(&state.settings);
     if onboarding_needed {
-        codex_minibar::settings_window::open_onboarding();
+        codex_minibar::ui::settings_window::open_onboarding();
     }
     // The GPUI thread owns every window and the bridge thread owns the tray;
     // both exit the process directly, so the main thread only stays alive.
@@ -146,7 +150,7 @@ fn run() -> Result<()> {
 fn show_error(message: &str) {
     #[cfg(windows)]
     {
-        use codex_minibar::win32::wide;
+        use codex_minibar::platform::win32::wide;
         use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
         let text = wide(message);

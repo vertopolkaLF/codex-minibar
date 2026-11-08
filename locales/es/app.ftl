@@ -115,13 +115,13 @@ group-tokens-or-cost-by-model = Agrupar tokens o coste por modelo
 
 model = Modelo
 
-# src/popup_window/ui/usage.rs
+# src/ui/popup_window/ui/usage.rs
 project = Proyecto
 
-# src/usage_overview.rs
+# src/usage/overview.rs
 unknown-project = Proyecto desconocido
 
-# src/popup_window/ui/usage.rs
+# src/ui/popup_window/ui/usage.rs
 no-project-usage = No hay datos de proyectos en este periodo
 
 tokens = Tokens
@@ -197,7 +197,7 @@ updated = Actualizado{ " " }
 
 refresh-last-updated-relative = Actualizar · Última actualización { $relative }
 
-# src/popup_window/ui/footer.rs
+# src/ui/popup_window/ui/footer.rs
 popup-pin = Fijar encima y mantener abierto
 popup-unpin = Desfijar y cerrar al perder el foco
 
@@ -693,10 +693,10 @@ msg-1-hour = 1 hora
 
 msg-3-hours = 3 horas
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 msg-2-hours = 2 horas
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 msg-5-hours = 5 horas
 
 msg-6-hours = 6 horas
@@ -825,10 +825,10 @@ found-an-official-grok-cli-sign-in-on-this-pc = Se encontró un inicio de sesió
 
 not-found-run-grok-login-before-enabling-it = No encontrado. Ejecuta grok login antes de activarlo.
 
-# src/settings_window/onboarding.rs
+# src/ui/settings_window/onboarding.rs
 found-an-official-command-code-cli-sign-in-on-this-pc = Se encontró un inicio de sesión oficial de Command Code CLI en este PC.
 
-# src/settings_window/onboarding.rs
+# src/ui/settings_window/onboarding.rs
 not-found-run-cmdc-login-before-enabling-it = No encontrado. Ejecuta cmdc login antes de activarlo.
 
 found-kiro-ide-kiro-crew-or-a-signed-in-kiro-cli = Se encontró Kiro IDE, Kiro Crew o una Kiro CLI con sesión iniciada.
@@ -1249,7 +1249,7 @@ cursor-app-folder = Carpeta de la aplicación Cursor
 
 grok-cli-folder = Carpeta de Grok CLI
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 command-code-cli-folder = Carpeta de Command Code CLI
 
 kiro-ide-folder = Carpeta de Kiro IDE
@@ -1274,7 +1274,7 @@ reads-subscription-quota-from-your-existing-official-agy-windows = Lee la cuota 
 
 reads-supergrok-subscription-credits-from-your-existing-official = Lee los créditos de la suscripción SuperGrok desde tu inicio de sesión oficial actual de Grok CLI.
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 reads-command-code-5h-weekly-and-monthly-credits-from-your-existin = Lee los créditos de 5 horas, semanales y mensuales de Command Code desde tu inicio de sesión oficial actual de la CLI.
 
 fetches-kiro-s-live-monthly-credits-with-its-shared-sign-in-recog = Obtiene los créditos mensuales actuales de Kiro con su inicio de sesión compartido; reconoce instalaciones de IDE, Crew y CLI.
@@ -1293,7 +1293,7 @@ antigravity-app = Aplicación Antigravity
 
 grok-cli = Grok CLI
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 command-code-cli = Command Code CLI
 
 kiro-ide = Kiro IDE
@@ -1514,7 +1514,7 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Carpeta con 
 
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Carpeta con grok.exe, grok.cmd o grok.ps1. Déjalo vacío para encontrarla automáticamente.
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Carpeta con cmdc.cmd o cmdc.ps1. Déjalo vacío para encontrarla automáticamente.
 
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Carpeta con Kiro.exe o el propio ejecutable. Déjalo vacío para encontrarlo automáticamente.
@@ -1704,10 +1704,10 @@ openrouter-keys-untrack-message = Minibar olvida esta clave. Seguirá funcionand
 openrouter-keys-tracked-here = Minibar sigue esta clave.
 openrouter-keys-manage-hint = Añade una clave de administración en Configuración para crear, editar y eliminar claves.
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notification-sounds = Sonidos de notificación
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 plays-a-short-sound-with-each-notification = Reproduce un sonido breve con cada notificación
 
 use-reset = Usar reinicio
@@ -1727,97 +1727,97 @@ reset-sign-in-again = Vuelve a iniciar sesión en Claude para usar reinicios.
 reset-cli-login-required = Usa el inicio de sesión de Claude CLI de la misma cuenta para aplicar reinicios.
 reset-invalid-grant = Claude devolvió un reinicio inválido.
 
-# src/updater.rs
+# src/update.rs
 update-downloading = Descargando actualización
 
-# src/updater.rs
+# src/update.rs
 update-download-progress = { $downloaded } de { $total }
 
-# src/updater.rs
+# src/update.rs
 update-downloaded = { $downloaded } descargados
 
-# src/updater.rs
+# src/update.rs
 update-installing = Instalando actualización
 
-# src/updater.rs
+# src/update.rs
 update-unpacking = Descomprimiendo archivos…
 
-# src/updater.rs
+# src/update.rs
 update-restarting = Reiniciando Codex Minibar
 
-# src/updater.rs
+# src/update.rs
 update-restarting-body = La aplicación se volverá a abrir en un momento.
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 provider-status = Estado de los proveedores
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 show-provider-incidents = Mostrar incidentes de los proveedores
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 show-provider-incidents-description = Consulta las páginas de estado públicas de Codex, Claude y Cursor cada 5 minutos y muestra los incidentes en curso en la ventana emergente
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 notify-about-new-incidents = Notificar nuevos incidentes
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 notify-about-new-incidents-description = Muestra una notificación cuando una página de estado informa de un nuevo incidente de un proveedor activado
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 open-status-page = Abrir página de estado
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 provider-incident-title = { $provider }: { $impact }
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 status-since = Desde { $time }
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-maintenance = Mantenimiento
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-degraded = Rendimiento degradado
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-partial-outage = Interrupción parcial
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-major-outage = Interrupción grave
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-investigating = Investigando
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-identified = Identificado
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-monitoring = Supervisando
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-in-progress = En curso
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 news-and-status = Novedades y estado
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 no-summary-for-this-version = Aún no hay un resumen para esta versión. Las notas completas están en GitHub.
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 couldn-t-load-what-s-new = No se pudieron cargar las novedades. Revisa la conexión o lee las notas en GitHub.
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 full-release-notes = Notas completas
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 show-what-s-new-after-updating = Mostrar novedades al actualizar
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 a-short-summary-of-the-release-once-it-s-installed = Un breve resumen de la versión, tras instalarla.
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 view = Ver
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 popup-shortcut = Atajo del popup
 popup-shortcut-description = Púlsalo en cualquier lugar de Windows para mostrar u ocultar el popup.
 shortcut-not-set = Sin definir
@@ -1882,19 +1882,19 @@ taskbar-click-nearest = Inicio, o la pestaña si no está en Inicio
 taskbar-click-tab = Pestaña del proveedor
 taskbar-click-home = Inicio
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 follow-do-not-disturb = Pausar con No molestar
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 follow-do-not-disturb-description = Mientras No molestar o Concentración de Windows esté activo, se omiten las notificaciones y los sonidos quedan apagados. Los resultados de tus acciones se siguen mostrando.
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 performance = Rendimiento
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 game-mode = Modo juego
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 game-mode-description = Consulta límites y uso con menos frecuencia, se ejecuta con prioridad baja y pausa las notificaciones. Automático lo activa cuando un juego pasa a primer plano y lo mantiene hasta que se cierra.
 
 # src/settings.rs
@@ -1906,127 +1906,127 @@ game-mode-automatic = Automático
 # src/settings.rs
 game-mode-always = Siempre
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notify-game-mode-changes = Cambios del modo juego
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notify-game-mode-changes-description = Avisa cuando el modo juego se activa o se desactiva
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-title = Modo juego activado
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-body = Se consultan los límites con menos frecuencia y se pausan las notificaciones
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-game-body = { $game } está en ejecución. Se consultan los límites con menos frecuencia y se pausan las notificaciones
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 not-a-game = No es un juego
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 add-a-game = Añadir un juego
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 add-a-game-description = Los juegos que conoce Windows Game Bar y los de Steam, Epic, GOG y Xbox se detectan solos. Añade aquí cualquier otro programa.
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 never-a-game-path = Nunca es un juego · { $path }
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-off-title = Modo juego desactivado
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-off-body = Vuelven las consultas y notificaciones normales
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 command-palette = Command Palette
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 stream-deck = Stream Deck
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 install = Instalar
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-extension = Extensión de Command Palette
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-description = Añade Minibar a la Command Palette de PowerToys: escribe un proveedor para ver sus límites o ancla bandas al Dock. La instalación requiere aprobación de administrador.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installed-hint = Instalada. Escribe «minibar» o el nombre de un proveedor en Command Palette, o ancla bandas desde Editar Dock.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-downloading = Descargando la extensión…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installing = Esperando al instalador. Aprueba la solicitud de administrador para continuar.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installing-short = Instalando…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-removing = Quitando la extensión…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-failed = No se pudo instalar ni quitar la extensión.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-reinstall = Reinstalar
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-dock-bands = Bandas del Dock
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-dock-bands-caption = Cada banda aparece en la configuración del Dock de Command Palette. Ánclala desde Editar Dock y elige su posición.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-no-bands = No hay bandas
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-no-bands-description = Añade una banda para anclar los límites de un proveedor al Dock.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-add-band = Añadir banda
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-band = Banda { $v0 }
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-band-removed = Banda quitada
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-remove-band = Quitar banda
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-content-hint = El Dock muestra una banda como un título sobre un subtítulo.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-indicators-hint = Hasta 2 cuotas: una ocupa el título y el subtítulo; dos, una línea cada una.
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 tibo-banked-reset = Tibo Banked Reset™
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 banked-reset-credit = Restablecimiento guardado
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 before-when = Antes de { $when }
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 time-ago = hace { $time }
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 new-codex-banked-reset-info = Nueva información de restablecimiento guardado de Codex
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 a-possible-codex-reset-is-expected-before-when-within-countdown = Se espera un posible restablecimiento de Codex antes de { $when } (en menos de { $countdown })
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 label-possible-reset-before-when-within-countdown = { $label }: posible restablecimiento antes de { $when } (en menos de { $countdown })
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 time-late = { $time } de retraso
 
 # Floating usage panel
@@ -2043,44 +2043,44 @@ popup-close = Cerrar panel
 show-popup-action-bar = Mostrar barra de acciones del panel emergente
 show-popup-action-bar-description = Mostrar el título y las acciones en el panel emergente normal. Los paneles flotantes siempre muestran esta barra.
 
-# src/settings_window/activation.rs
+# src/ui/settings_window/activation.rs
 use-banked-resets-automatically = Usar restablecimientos acumulados automáticamente
 
-# src/settings_window/activation.rs
+# src/ui/settings_window/activation.rs
 spends-a-banked-reset-shortly-before-it-expires = Aplica un restablecimiento acumulado poco antes de que caduque para no perderlo. Se omite mientras los límites no tengan nada que borrar.
 
-# src/settings_window/activation.rs
+# src/ui/settings_window/activation.rs
 use-before-expiry = Usar antes de caducar
 
-# src/settings_window/activation.rs
+# src/ui/settings_window/activation.rs
 how-long-before-a-banked-reset-expires-it-is-applied = Cuánto tiempo antes de caducar se aplica un restablecimiento acumulado.
 
-# src/settings_window/providers/page.rs
+# src/ui/settings_window/providers/page.rs
 automatic-resets = Restablecimientos automáticos
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 banked-reset-applied-automatically = Restablecimiento acumulado aplicado automáticamente
 
-# src/instances.rs
+# src/providers/instances.rs
 this-provider-has-no-banked-resets = Este proveedor no tiene restablecimientos acumulados.
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 banked-reset-applies-in-minutes = El restablecimiento acumulado se aplicará en { $minutes } min
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 before-an-automatic-reset = Antes de un restablecimiento automático
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 warns-before-a-banked-reset-is-applied-automatically = Avisa 10 minutos antes de aplicar automáticamente un restablecimiento acumulado.
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 apply-reset-now = Aplicar ahora
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 skip-automatic-reset = Cancelar
 
-# src/popup_window/auto_reset.rs
+# src/ui/popup_window/auto_reset.rs
 banked-reset-applied = Restablecimiento acumulado aplicado
 
-# src/settings_window/providers/page.rs
+# src/ui/settings_window/providers/page.rs
 claude-other-account-needs-cli = Las cuentas adicionales de Claude necesitan la CLI de Claude Code. La copia integrada en la app de Claude solo sirve a la cuenta de la propia app.

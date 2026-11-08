@@ -1,3 +1,6 @@
+pub mod choice;
+pub mod runtime;
+
 use std::{
     collections::BTreeMap,
     fs,
@@ -17,9 +20,9 @@ pub(crate) use migration::finish_instance_migration;
 use migration::{TASKBAR_DEFAULT_VERSION, heal_legacy_tray_widgets, migrate};
 pub(crate) mod unknown;
 
-pub use crate::choice::Choice;
-pub use crate::instances::{BadgeColor, InstanceSource, ProviderId, ProviderInstance};
-use crate::provider_registry::ProviderKind;
+pub use crate::providers::instances::{BadgeColor, InstanceSource, ProviderId, ProviderInstance};
+use crate::providers::registry::ProviderKind;
+pub use crate::settings::choice::Choice;
 
 /// 255 until `TimeFormat::apply` runs so first paint can still follow Windows.
 static TIME_FORMAT: AtomicU8 = AtomicU8::new(u8::MAX);
@@ -380,7 +383,8 @@ fn windows_time_format() -> Option<TimeFormat> {
 #[cfg(windows)]
 fn read_international_value(name: &str) -> Option<String> {
     use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
-    let key = crate::win32::RegKey::open(HKEY_CURRENT_USER, r"Control Panel\International")?;
+    let key =
+        crate::platform::win32::RegKey::open(HKEY_CURRENT_USER, r"Control Panel\International")?;
     Some(key.string(name)?.to_string_lossy().trim().to_string())
 }
 
@@ -419,7 +423,7 @@ impl Choice for LimitRefreshInterval {
 
 impl LimitRefreshInterval {
     pub fn default_for(driver: ProviderKind) -> Self {
-        let seconds = crate::provider_registry::descriptor(driver).default_refresh_seconds;
+        let seconds = crate::providers::registry::descriptor(driver).default_refresh_seconds;
         Self::ALL
             .iter()
             .copied()
@@ -964,8 +968,8 @@ pub struct PopupVisibility {
 
 impl PopupVisibility {
     pub fn default_brick_visibility(brick_id: &str) -> PopupSurfaceVisibility {
-        let hidden = crate::provider_registry::provider_for_metric(brick_id)
-            .and_then(|provider| crate::provider_registry::metric(provider, brick_id))
+        let hidden = crate::providers::registry::provider_for_metric(brick_id)
+            .and_then(|provider| crate::providers::registry::metric(provider, brick_id))
             .is_some_and(|metric| !metric.visible_by_default);
         if hidden {
             PopupSurfaceVisibility::both(false)
@@ -979,7 +983,7 @@ impl PopupVisibility {
     pub fn build_defaults() -> Self {
         let mut bricks = BTreeMap::new();
         for provider in ProviderKind::ALL {
-            for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+            for brick_id in crate::providers::registry::catalog_brick_ids(provider) {
                 bricks.insert(brick_id.clone(), Self::default_brick_visibility(&brick_id));
             }
         }
@@ -1066,10 +1070,13 @@ impl PopupVisibility {
         }
     }
 
-    pub fn absorb_discovered_bricks(&mut self, limits: &crate::limits::ProviderLimits) -> bool {
+    pub fn absorb_discovered_bricks(
+        &mut self,
+        limits: &crate::quota::limits::ProviderLimits,
+    ) -> bool {
         let mut changed = false;
         for (provider, snapshot) in limits.iter() {
-            for (brick_id, _) in crate::provider_registry::discovered_additional_brick_labels(
+            for (brick_id, _) in crate::providers::registry::discovered_additional_brick_labels(
                 provider.kind(),
                 snapshot,
             ) {
@@ -1085,8 +1092,8 @@ impl PopupVisibility {
 
     /// Whether any of a driver's cards is shown on Home at all.
     pub fn driver_visible_on_home(&self, provider: ProviderKind) -> bool {
-        let prefix = format!("{}.", crate::provider_registry::descriptor(provider).id);
-        crate::provider_registry::catalog_brick_ids(provider)
+        let prefix = format!("{}.", crate::providers::registry::descriptor(provider).id);
+        crate::providers::registry::catalog_brick_ids(provider)
             .iter()
             .chain(self.bricks.keys().filter(|id| id.starts_with(&prefix)))
             .any(|brick_id| self.visibility_for(brick_id).all_tab)
@@ -1094,8 +1101,8 @@ impl PopupVisibility {
 
     /// Whether any of an instance's cards is shown on Home at all.
     pub fn instance_visible_on_home(&self, instance_id: &str, provider: ProviderKind) -> bool {
-        let prefix = format!("{}.", crate::provider_registry::descriptor(provider).id);
-        crate::provider_registry::catalog_brick_ids(provider)
+        let prefix = format!("{}.", crate::providers::registry::descriptor(provider).id);
+        crate::providers::registry::catalog_brick_ids(provider)
             .iter()
             .chain(self.bricks.keys().filter(|id| id.starts_with(&prefix)))
             .any(|brick_id| self.instance_visibility_for(instance_id, brick_id).all_tab)
@@ -1123,7 +1130,7 @@ impl PopupVisibility {
     pub fn normalize(&mut self) -> bool {
         let mut changed = false;
         for provider in ProviderKind::ALL {
-            for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+            for brick_id in crate::providers::registry::catalog_brick_ids(provider) {
                 if !self.bricks.contains_key(&brick_id) {
                     self.bricks
                         .insert(brick_id.clone(), Self::default_brick_visibility(&brick_id));
@@ -1133,7 +1140,7 @@ impl PopupVisibility {
         }
         let known: std::collections::HashSet<String> = ProviderKind::ALL
             .into_iter()
-            .flat_map(crate::provider_registry::catalog_brick_ids)
+            .flat_map(crate::providers::registry::catalog_brick_ids)
             .collect();
         let stale: Vec<String> = self
             .bricks
@@ -1143,7 +1150,7 @@ impl PopupVisibility {
                     && !ProviderKind::ALL.iter().any(|provider| {
                         id.starts_with(&format!(
                             "{}.",
-                            crate::provider_registry::descriptor(*provider).id
+                            crate::providers::registry::descriptor(*provider).id
                         ))
                     })
             })
@@ -1447,7 +1454,7 @@ impl TrayWidget {
     }
 
     pub fn for_provider(provider: ProviderId) -> Self {
-        let descriptor = crate::provider_registry::descriptor(provider.kind());
+        let descriptor = crate::providers::registry::descriptor(provider.kind());
         if descriptor.default_tray_metrics.is_empty() {
             return Self::app_icon();
         }
@@ -1465,7 +1472,7 @@ impl TrayWidget {
     }
 
     pub fn custom_for_provider(provider: ProviderId) -> Self {
-        let descriptor = crate::provider_registry::descriptor(provider.kind());
+        let descriptor = crate::providers::registry::descriptor(provider.kind());
         if descriptor.default_tray_metrics.is_empty() {
             return Self::app_icon();
         }
@@ -1676,7 +1683,7 @@ pub struct TaskbarWidget {
 impl TaskbarWidget {
     /// The provider preset: its first default tray metrics as a Glance.
     pub fn for_provider(provider: ProviderId) -> Self {
-        let descriptor = crate::provider_registry::descriptor(provider.kind());
+        let descriptor = crate::providers::registry::descriptor(provider.kind());
         let style = TaskbarWidgetStyle::Glance;
         Self {
             id: new_taskbar_widget_id(),
@@ -1985,7 +1992,7 @@ pub struct Settings {
     pub popup_position: Option<PopupPosition>,
     /// System-wide shortcut that shows or hides the popup. None leaves every
     /// key combination to other applications.
-    pub popup_hotkey: Option<crate::hotkey::Hotkey>,
+    pub popup_hotkey: Option<crate::app::hotkey::Hotkey>,
     pub tray_widgets: Vec<TrayWidget>,
     /// Widgets drawn inside the Windows taskbar.
     pub taskbar: TaskbarSettings,
@@ -2095,7 +2102,7 @@ impl Settings {
         if self.taskbar.widgets.is_empty()
             && let Some(instance) = self.instances.iter().find(|instance| {
                 instance.enabled
-                    && !crate::provider_registry::descriptor(instance.driver)
+                    && !crate::providers::registry::descriptor(instance.driver)
                         .default_tray_metrics
                         .is_empty()
             })
@@ -2132,18 +2139,20 @@ impl Settings {
             // Instances rewrite provider settings wholesale and older builds
             // cannot read the result. Keep the original next to it.
             if let Err(error) = backup_before_migration(path, original_version) {
-                crate::logger::info(format!("failed to back up settings: {error:#}"));
+                crate::platform::logger::info(format!("failed to back up settings: {error:#}"));
             }
         }
         let (mut settings, dirty) = match Self::decode_raw(&raw) {
             Ok((settings, dirty)) => (settings, dirty),
             Err(error) => {
-                crate::logger::info(format!(
+                crate::platform::logger::info(format!(
                     "settings at {} could not be decoded ({error:#}); recreating usable defaults",
                     path.display()
                 ));
                 if let Err(error) = backup_corrupt_settings(path) {
-                    crate::logger::info(format!("failed to back up corrupt settings: {error:#}"));
+                    crate::platform::logger::info(format!(
+                        "failed to back up corrupt settings: {error:#}"
+                    ));
                 }
                 let mut settings = Self::salvage_raw(&raw).unwrap_or_else(Self::default);
                 settings.version = SETTINGS_VERSION;
@@ -2153,7 +2162,9 @@ impl Settings {
                 settings.repair_inplace();
                 settings.normalize_all();
                 if let Err(error) = settings.save(path) {
-                    crate::logger::info(format!("failed to save recovered settings: {error:#}"));
+                    crate::platform::logger::info(format!(
+                        "failed to save recovered settings: {error:#}"
+                    ));
                 }
                 return Ok(settings);
             }
@@ -2215,7 +2226,7 @@ impl Settings {
                 if !unknown.is_empty()
                     && let Ok(mut settings) = pruned.try_into::<Self>()
                 {
-                    crate::logger::info(format!(
+                    crate::platform::logger::info(format!(
                         "settings entries this build cannot read were skipped and will be kept ({error}): {}",
                         unknown.describe().join(", ")
                     ));
@@ -2228,7 +2239,7 @@ impl Settings {
                     .as_table_mut()
                     .is_some_and(|root| root.remove("time_format").is_some());
                 if stripped_time_format && let Ok(settings) = document.clone().try_into::<Self>() {
-                    crate::logger::info(format!(
+                    crate::platform::logger::info(format!(
                         "settings time_format was invalid ({error}); using the Windows clock"
                     ));
                     return Ok((settings, true));
@@ -2246,7 +2257,7 @@ impl Settings {
                 }
                 match document.try_into::<Self>() {
                     Ok(settings) => {
-                        crate::logger::info(format!(
+                        crate::platform::logger::info(format!(
                             "settings tray_widgets were invalid ({error}); resetting that section"
                         ));
                         Ok((settings, true))
@@ -2291,7 +2302,7 @@ impl Settings {
         let mut changed = false;
         let retention = self
             .history_retention_days
-            .clamp(1, crate::local_time::RETENTION_DAYS);
+            .clamp(1, crate::platform::local_time::RETENTION_DAYS);
         if retention != self.history_retention_days {
             self.history_retention_days = retention;
             changed = true;
@@ -2401,7 +2412,8 @@ impl Settings {
 
     pub fn validate(&self) -> Result<()> {
         anyhow::ensure!(
-            (1..=crate::local_time::RETENTION_DAYS).contains(&self.history_retention_days),
+            (1..=crate::platform::local_time::RETENTION_DAYS)
+                .contains(&self.history_retention_days),
             crate::i18n::tr("history-retention-must-be-between-1-and-365-days")
         );
         anyhow::ensure!(
@@ -2811,7 +2823,7 @@ mod tests {
             .openrouter
             .clone()
             .unwrap();
-        assert!(!crate::openrouter::has_management_key(
+        assert!(!crate::providers::openrouter::has_management_key(
             std::slice::from_ref(&account)
         ));
         assert!(!settings.usage_stats_collection_enabled(openrouter));
@@ -2979,7 +2991,7 @@ show_usage_stats = false
         let mut visibility = PopupVisibility::build_defaults();
         assert!(visibility.is_visible("codex.session", PopupSurface::HomeTab, true));
         assert!(visibility.driver_visible_on_home(ProviderKind::Codex));
-        for brick in crate::provider_registry::catalog_brick_ids(ProviderKind::Codex) {
+        for brick in crate::providers::registry::catalog_brick_ids(ProviderKind::Codex) {
             let tab = visibility.visibility_for(&brick).provider_tab;
             visibility.set_brick(brick, false, tab);
         }
@@ -3014,19 +3026,19 @@ show_usage_stats = false
     #[test]
     fn absorbs_runtime_additional_limits_into_popup_visibility() {
         let mut settings = Settings::default();
-        let brick_id = crate::provider_registry::additional_limit_brick_id(
+        let brick_id = crate::providers::registry::additional_limit_brick_id(
             ProviderKind::Claude,
             "seven_day_runtime_lane",
         );
         assert!(!settings.popup_visibility.bricks.contains_key(&brick_id));
 
-        let limits = crate::limits::ProviderLimits::from_entries([(
+        let limits = crate::quota::limits::ProviderLimits::from_entries([(
             id(ProviderKind::Claude),
-            crate::limits::RateLimits {
-                additional_limits: vec![crate::limits::AdditionalLimit {
+            crate::quota::limits::RateLimits {
+                additional_limits: vec![crate::quota::limits::AdditionalLimit {
                     id: "seven_day_runtime_lane".into(),
                     title: "Runtime Lane".into(),
-                    window: crate::limits::LimitWindow {
+                    window: crate::quota::limits::LimitWindow {
                         used_percent: Some(1),
                         ..Default::default()
                     },

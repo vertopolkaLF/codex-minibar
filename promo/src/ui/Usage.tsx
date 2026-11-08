@@ -1,4 +1,4 @@
-// Usage tab, after src/popup_window/ui/usage.rs.
+// Usage tab, after src/ui/popup_window/ui/usage.rs.
 import React from "react";
 import { Palette } from "./palette";
 import { ProviderMark, Segmented, T, cardStyle } from "./kit";

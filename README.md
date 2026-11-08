@@ -286,8 +286,8 @@ This produces architecture-specific portable ZIP files and NSIS installers under
 
 Every window is rendered with [GPUI](https://gpui.rs) on one dedicated UI thread: the tray
 popup, the Settings window and the first-launch onboarding. Settings controls (toggles,
-dropdowns, sliders, text inputs, dialogs) live in `src/settings_window/kit.rs` and
-`src/settings_window/input.rs`. No UI framework runtime is redistributed; the release
+dropdowns, sliders, text inputs, dialogs) live in `src/ui/settings_window/kit.rs` and
+`src/ui/settings_window/input.rs`. No UI framework runtime is redistributed; the release
 package is the executable plus its `assets` folder.
 CI checks formatting, lints, and tests on Windows.
 

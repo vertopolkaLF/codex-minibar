@@ -478,7 +478,7 @@ pub(crate) fn finish_instance_migration(
                 forget(&secret);
                 changed = true;
             }
-            Err(error) => crate::logger::info(format!(
+            Err(error) => crate::platform::logger::info(format!(
                 "Could not move the {} login for {} into its folder: {error:#}",
                 instance.driver.display_name(),
                 instance.display_name()
@@ -1118,7 +1118,7 @@ pub(super) fn migrate(document: &mut toml::Value, mut version: u32) -> Result<()
                     .unwrap_or(true);
                 let mut bricks = toml::map::Map::new();
                 for provider in MIGRATED_DRIVERS {
-                    for brick_id in crate::provider_registry::catalog_brick_ids(provider) {
+                    for brick_id in crate::providers::registry::catalog_brick_ids(provider) {
                         let (all_tab, provider_tab) = if brick_id.ends_with(".usage") {
                             (false, show_usage_stats)
                         } else if brick_id.ends_with(".resets") {

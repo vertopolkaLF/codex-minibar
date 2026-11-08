@@ -19,22 +19,22 @@ use super::{
     state::{AppState, Changes},
 };
 use crate::{
-    app_event::{AppEvent, ProviderEvent},
+    app::event::{AppEvent, ProviderEvent},
     format::format_reset_in,
-    instances::{ProviderId, ProviderInstance},
-    limits::{ProviderLimits, RateLimits},
-    notifications::{self, LimitNotificationTracker},
-    popup::{self, Origin},
-    popup_window::{
+    providers::instances::{ProviderId, ProviderInstance},
+    providers::registry::ProviderKind,
+    providers::worker::{UsageAction, WorkerCommand, WorkerEvent},
+    quota::limits::{ProviderLimits, RateLimits},
+    settings::{NotificationSettings, Settings, TimeFormat, TrayWidget},
+    surfaces::notifications::{self, LimitNotificationTracker},
+    surfaces::tray::{MenuCommand, TrayManager},
+    ui::popup::{self, Origin},
+    ui::popup_window::{
         PendingPopupView, UiState,
         formatting::{format_activation_at, format_last_activation},
         publish_ui,
     },
-    provider_registry::ProviderKind,
-    settings::{NotificationSettings, Settings, TimeFormat, TrayWidget},
-    tray::{MenuCommand, TrayManager},
-    updater::UpdatePhase,
-    worker::{UsageAction, WorkerCommand, WorkerEvent},
+    update::UpdatePhase,
 };
 
 /// Rejects queued output from a worker that was replaced, and from instances
@@ -67,7 +67,7 @@ fn usage_error_message(statistics: &crate::usage::UsageStatistics) -> Option<Str
     (!errors.is_empty()).then(|| errors.join("; "))
 }
 
-fn forced_reset_info_body(reset: &crate::reset_detection::AnnouncedReset) -> String {
+fn forced_reset_info_body(reset: &crate::quota::reset_detection::AnnouncedReset) -> String {
     let local = reset.reset_at.with_timezone(&Local);
     let when = format!(
         "{}, {}",
@@ -75,7 +75,7 @@ fn forced_reset_info_body(reset: &crate::reset_detection::AnnouncedReset) -> Str
         TimeFormat::current().format_hm(local)
     );
     let countdown = format_reset_in(Some(reset.reset_at));
-    let before = reset.timing == crate::reset_detection::ResetTiming::Before;
+    let before = reset.timing == crate::quota::reset_detection::ResetTiming::Before;
     let mut args = vec![("when", when), ("countdown", countdown)];
     match reset.label.as_deref() {
         Some(label) => {
@@ -104,7 +104,7 @@ fn forced_reset_info_body(reset: &crate::reset_detection::AnnouncedReset) -> Str
 /// unrelated to the API-driven `limits_changed` notification: the feed never
 /// proves that a reset actually happened at `reset_at`.
 fn notify_new_forced_reset_info(
-    resets: &[crate::reset_detection::AnnouncedReset],
+    resets: &[crate::quota::reset_detection::AnnouncedReset],
     notified_ids: &mut HashSet<String>,
     settings: &NotificationSettings,
     state: &AppState,
@@ -117,10 +117,10 @@ fn notify_new_forced_reset_info(
         if notified_ids.insert(reset.id.clone()) {
             notifications::show(
                 match reset.kind {
-                    crate::reset_detection::ResetKind::Forced => {
+                    crate::quota::reset_detection::ResetKind::Forced => {
                         crate::i18n::tr("new-codex-reset-info")
                     }
-                    crate::reset_detection::ResetKind::Banked => {
+                    crate::quota::reset_detection::ResetKind::Banked => {
                         crate::i18n::tr("new-codex-banked-reset-info")
                     }
                 },
@@ -133,7 +133,7 @@ fn notify_new_forced_reset_info(
 
 /// Notifies once per incident (never for maintenance) of a watched driver.
 fn notify_new_provider_incidents(
-    statuses: &[crate::provider_status::ProviderStatus],
+    statuses: &[crate::providers::status::ProviderStatus],
     notified_ids: &mut HashSet<String>,
     settings: &NotificationSettings,
     state: &AppState,
@@ -175,8 +175,8 @@ fn warn_login_expiry(provider: ProviderId, limits: &RateLimits) {
     warned.retain(|(warned, _)| *warned != provider);
     warned.push((provider, expires_at));
     let local = expires_at.with_timezone(&chrono::Local);
-    crate::notifications::show_kind(
-        crate::notifications::NotificationKind::Warning,
+    crate::surfaces::notifications::show_kind(
+        crate::surfaces::notifications::NotificationKind::Warning,
         &crate::i18n::format(
             "login-expires-soon",
             &[("v0", provider.qualified_name().to_string())],
@@ -224,11 +224,11 @@ fn send_refresh_intervals(
 ) {
     if let Some(instance) = settings.instance(provider) {
         let _ = commands.send(WorkerCommand::SetLimitRefreshInterval(
-            crate::provider::limit_refresh_interval(instance),
+            crate::providers::limit_refresh_interval(instance),
         ));
     }
     let _ = commands.send(WorkerCommand::SetUsageRefreshInterval(
-        crate::provider::usage_refresh_interval(settings),
+        crate::providers::usage_refresh_interval(settings),
     ));
 }
 
@@ -237,7 +237,7 @@ fn send_refresh_intervals(
 fn bridge_surface_active() -> bool {
     (popup::is_visible() && !popup::is_pinned())
         || popup::is_closing()
-        || crate::settings_window::is_open()
+        || crate::ui::settings_window::is_open()
 }
 
 /// Idle tick is short enough for the 250 ms system-theme check, stream deck
@@ -245,7 +245,7 @@ fn bridge_surface_active() -> bool {
 fn bridge_poll_interval(active: bool) -> Duration {
     Duration::from_millis(if active {
         16
-    } else if crate::game_mode::is_active() {
+    } else if crate::app::game_mode::is_active() {
         // Still meets the 250 ms theme check while waking less often.
         250
     } else {
@@ -300,14 +300,14 @@ struct Bridge {
     ui_changed: bool,
     tray: TrayManager,
     widgets: Vec<TrayWidget>,
-    hotkey: crate::hotkey::Registration,
+    hotkey: crate::app::hotkey::Registration,
     update_phase: UpdatePhase,
     events: Option<Receiver<AppEvent>>,
     /// The last wait delivered an event, so the next one does not wait.
     made_progress: bool,
     settings_rx: Option<Receiver<Settings>>,
     usage_actions_rx: Option<Receiver<UsageAction>>,
-    streamdeck_rx: Receiver<crate::streamdeck::Command>,
+    streamdeck_rx: Receiver<crate::surfaces::streamdeck::Command>,
     auto_reset: AutoReset,
     /// Keyed by instance id.
     limit_notifications: HashMap<String, LimitNotificationTracker>,
@@ -325,10 +325,10 @@ impl Bridge {
     fn new(state: Arc<AppState>) -> Self {
         let ui = UiState::initial(&state);
         let mut bridge = Self {
-            streamdeck_rx: crate::streamdeck::start_server(Arc::clone(&state)),
+            streamdeck_rx: crate::surfaces::streamdeck::start_server(Arc::clone(&state)),
             tray: TrayManager::new(),
             // Registered from this thread so WM_HOTKEY reaches its message pump.
-            hotkey: crate::hotkey::Registration::default(),
+            hotkey: crate::app::hotkey::Registration::default(),
             widgets: visible_widgets(&ui.settings),
             update_phase: state.updates.snapshot(),
             events: state.take_worker_events(),
@@ -347,7 +347,7 @@ impl Bridge {
             ui_changed: true,
             state,
         };
-        crate::taskbar::register_bridge_thread();
+        crate::surfaces::taskbar::register_bridge_thread();
         // Start from the hydrated store while the first network refresh is
         // in flight. Account names live in settings; overlay them before the
         // first paint.
@@ -395,7 +395,7 @@ impl Bridge {
         self.drain_settings();
         self.drain_updates();
         self.auto_reset.poll(&self.ui.settings, &self.state);
-        if crate::game_mode::take_transition() {
+        if crate::app::game_mode::take_transition() {
             for (provider, commands) in self.state.worker_commands() {
                 send_refresh_intervals(provider, &commands, &self.ui.settings);
             }
@@ -462,8 +462,8 @@ impl Bridge {
     fn sync_limits(&mut self) {
         let limits = self.state.current_limits();
         self.sync_tray(&limits);
-        crate::taskbar::publish_limits(&limits);
-        crate::settings_window::publish_limits(&limits);
+        crate::surfaces::taskbar::publish_limits(&limits);
+        crate::ui::settings_window::publish_limits(&limits);
         if self
             .ui
             .settings
@@ -482,7 +482,7 @@ impl Bridge {
     /// Explorer animate a remove/add sequence and causes a visible flash.
     fn sync_tray(&mut self, limits: &ProviderLimits) {
         let update_available = matches!(self.update_phase, UpdatePhase::Available(_));
-        crate::taskbar::set_update_available(update_available);
+        crate::surfaces::taskbar::set_update_available(update_available);
         if let Err(error) = self.tray.sync(&self.widgets, limits, update_available) {
             self.ui.set_popup_error(error.to_string());
         }
@@ -558,13 +558,13 @@ impl Bridge {
         state.mark(Changes::LIMITS);
         for (provider, commands) in state.worker_commands() {
             let _ = commands.send(WorkerCommand::SetAutomaticActivation(
-                crate::provider::automatic_activation(provider, &settings),
+                crate::providers::automatic_activation(provider, &settings),
             ));
             let _ = commands.send(WorkerCommand::SetScheduledActivations(
-                crate::provider::schedules_for(provider, &settings),
+                crate::providers::schedules_for(provider, &settings),
             ));
             let _ = commands.send(WorkerCommand::SetAutoActivationPauses(
-                crate::provider::auto_activation_pauses_for(provider, &settings),
+                crate::providers::auto_activation_pauses_for(provider, &settings),
             ));
             send_refresh_intervals(provider, &commands, &settings);
             // The worker reloads the selected history range immediately, so
@@ -634,17 +634,17 @@ impl Bridge {
     fn drain_streamdeck(&mut self) {
         while let Ok(command) = self.streamdeck_rx.try_recv() {
             match command {
-                crate::streamdeck::Command::RefreshData => {
+                crate::surfaces::streamdeck::Command::RefreshData => {
                     self.state.refresh_all();
                 }
-                crate::streamdeck::Command::OpenPopup { provider } => {
-                    crate::popup_window::toggle(
+                crate::surfaces::streamdeck::Command::OpenPopup { provider } => {
+                    crate::ui::popup_window::toggle(
                         Origin::PrimaryMonitor,
                         Some(provider.map_or(PendingPopupView::Home, PendingPopupView::Provider)),
                     );
                 }
-                crate::streamdeck::Command::OpenCommandPaletteSettings => {
-                    crate::settings_window::open_command_palette();
+                crate::surfaces::streamdeck::Command::OpenCommandPaletteSettings => {
+                    crate::ui::settings_window::open_command_palette();
                 }
             }
         }
@@ -655,24 +655,24 @@ impl Bridge {
     fn pump_hotkey(&mut self) {
         // Settings releases the shortcut while it records a new one; the flag
         // cannot outlive the window that set it.
-        let recording = crate::hotkey::is_suspended() && crate::settings_window::is_open();
+        let recording = crate::app::hotkey::is_suspended() && crate::ui::settings_window::is_open();
         if self
             .hotkey
             .sync(self.ui.settings.popup_hotkey.filter(|_| !recording))
         {
-            crate::settings_window::refresh_hotkey_status();
+            crate::ui::settings_window::refresh_hotkey_status();
         }
-        if crate::hotkey::take_pressed() && !recording {
-            crate::popup_window::toggle(Origin::Cursor, None);
+        if crate::app::hotkey::take_pressed() && !recording {
+            crate::ui::popup_window::toggle(Origin::Cursor, None);
         }
     }
 
     /// Clicks and menu choices from the taskbar widgets. Returns whether the
     /// app should exit.
     fn pump_taskbar_actions(&mut self) -> bool {
-        for action in crate::taskbar::take_actions() {
+        for action in crate::surfaces::taskbar::take_actions() {
             match action {
-                crate::taskbar::Action::Open {
+                crate::surfaces::taskbar::Action::Open {
                     provider,
                     anchor,
                     page,
@@ -685,25 +685,25 @@ impl Bridge {
                         (Some(provider), TaskbarClick::Tab) => PendingPopupView::Provider(provider),
                         _ => PendingPopupView::Home,
                     };
-                    crate::popup_window::toggle(
+                    crate::ui::popup_window::toggle(
                         Origin::TaskbarWidget(anchor.0, anchor.1),
                         Some(view),
                     );
                 }
-                crate::taskbar::Action::Edit(id) => {
+                crate::surfaces::taskbar::Action::Edit(id) => {
                     show_settings_preview();
-                    crate::settings_window::open_taskbar_widget(id);
+                    crate::ui::settings_window::open_taskbar_widget(id);
                 }
-                crate::taskbar::Action::Settings => {
+                crate::surfaces::taskbar::Action::Settings => {
                     show_settings_preview();
-                    crate::settings_window::open_taskbar();
+                    crate::ui::settings_window::open_taskbar();
                 }
-                crate::taskbar::Action::Hide => {
+                crate::surfaces::taskbar::Action::Hide => {
                     crate::settings::store::queue(|settings| {
                         settings.taskbar.enabled = false;
                     });
                 }
-                crate::taskbar::Action::App(command) => {
+                crate::surfaces::taskbar::Action::App(command) => {
                     if run_menu_command(command) {
                         return true;
                     }
@@ -729,7 +729,7 @@ impl Bridge {
             } = event
                 && self.tray.contains(&id)
             {
-                crate::popup_window::toggle(
+                crate::ui::popup_window::toggle(
                     Origin::Tray(position.x as i32, position.y as i32),
                     None,
                 );
@@ -745,7 +745,7 @@ impl Bridge {
         // Settings are a live editor for this surface. Treat the separate
         // settings window as part of the popup interaction so navigating or
         // toggling a setting cannot dismiss the preview beneath it.
-        if !crate::settings_window::is_open()
+        if !crate::ui::settings_window::is_open()
             && !popup::is_closing()
             && (popup::clicked_outside() || popup::escape_pressed())
         {
@@ -842,7 +842,7 @@ impl Bridge {
                 {
                     return;
                 }
-                crate::logger::info(format!(
+                crate::platform::logger::info(format!(
                     "{name} usage received: today={} tokens, history={} tokens",
                     usage.today.total_tokens(),
                     usage.history.total_tokens()
@@ -860,7 +860,7 @@ impl Bridge {
                 }
             }
             WorkerEvent::UsageLoadedFromCache(usage) => {
-                crate::logger::info(format!(
+                crate::platform::logger::info(format!(
                     "{name} usage cache loaded: today={} tokens, history={} tokens",
                     usage.today.total_tokens(),
                     usage.history.total_tokens()
@@ -873,7 +873,7 @@ impl Bridge {
                 if !self.ui.settings.usage_stats_collection_enabled(provider) {
                     return;
                 }
-                crate::logger::info(format!("{name} usage refresh failed: {error}"));
+                crate::platform::logger::info(format!("{name} usage refresh failed: {error}"));
                 // Usage/analytics failures use the same provider-scoped
                 // presentation as quota failures. The state keeps the source
                 // separate so a successful quota poll does not clear an
@@ -901,11 +901,11 @@ impl Bridge {
                 return;
             }
             WorkerEvent::ActivationStarted => {
-                crate::logger::info(format!("{name} activation started"));
+                crate::platform::logger::info(format!("{name} activation started"));
                 return;
             }
             WorkerEvent::ActivationSucceeded => {
-                crate::logger::info(format!("{name} activation succeeded"));
+                crate::platform::logger::info(format!("{name} activation succeeded"));
                 self.ui.last_activation = crate::i18n::format(
                     "succeeded-at",
                     &[
@@ -915,7 +915,7 @@ impl Bridge {
                 );
                 let settings = &self.ui.settings;
                 let combine_activation_notification =
-                    crate::provider::automatic_activation(provider, settings)
+                    crate::providers::automatic_activation(provider, settings)
                         && settings.notifications.limits_changed
                         && settings.notifications.activation_success;
                 if combine_activation_notification {
@@ -926,7 +926,7 @@ impl Bridge {
             }
             WorkerEvent::ActivationFailed(error) => {
                 self.pending_auto_activation_successes.remove(&provider);
-                crate::logger::info(format!("{name} activation failed: {error}"));
+                crate::platform::logger::info(format!("{name} activation failed: {error}"));
                 self.ui.last_activation = crate::i18n::format(
                     "failed-at-error",
                     &[
@@ -937,7 +937,7 @@ impl Bridge {
                 );
             }
             WorkerEvent::PollFailed(error) => {
-                crate::logger::info(format!("{name} polling failed: {error}"));
+                crate::platform::logger::info(format!("{name} polling failed: {error}"));
                 self.ui.set_provider_error(provider, error);
             }
         }
@@ -945,7 +945,7 @@ impl Bridge {
     }
 
     fn limits_updated(&mut self, provider: ProviderId, limits: RateLimits) {
-        crate::logger::info(format!(
+        crate::platform::logger::info(format!(
             "{} limits received: session used={:?}%, reset={:?}; weekly used={:?}%, reset={:?}",
             provider.display_name(),
             limits.primary.used_percent,
@@ -963,7 +963,7 @@ impl Bridge {
             .instance(provider)
             .filter(|instance| instance.driver == ProviderKind::OpenRouter)
         {
-            crate::openrouter::apply_account_names(&mut limits, instance);
+            crate::providers::openrouter::apply_account_names(&mut limits, instance);
         }
         self.state.replace_limits(provider, limits);
         // The tray repaint in this pass's flush reports its own failure.
@@ -1006,7 +1006,7 @@ impl Bridge {
 /// Settings opened from the tray menu or a widget keep the popup up as a
 /// live preview, like Settings opened from the popup's footer.
 fn show_settings_preview() {
-    crate::popup_window::ensure_shown(Origin::Cursor);
+    crate::ui::popup_window::ensure_shown(Origin::Cursor);
 }
 
 /// The app's own menu commands, from a tray icon or a taskbar widget.
@@ -1015,11 +1015,11 @@ fn run_menu_command(command: MenuCommand) -> bool {
     match command {
         MenuCommand::Update => {
             // Failures are reported on the update card.
-            let _ = crate::updater::apply_pending_update();
+            let _ = crate::update::apply_pending_update();
         }
         MenuCommand::Settings => {
             show_settings_preview();
-            crate::settings_window::open();
+            crate::ui::settings_window::open();
         }
         MenuCommand::Exit => return true,
     }
@@ -1076,7 +1076,7 @@ mod tests {
             settings_rx: Mutex::new(None),
             usage_actions_rx: Mutex::new(Some(usage_actions_rx)),
             usage_actions_tx,
-            updates: crate::updater::UpdateController::new(),
+            updates: crate::update::UpdateController::new(),
         }
     }
 
@@ -1186,7 +1186,7 @@ mod tests {
 
     #[test]
     fn only_read_relevant_changes_restart_an_instance_worker() {
-        let before = crate::popup_window::tests::instance_fixture().instances;
+        let before = crate::ui::popup_window::tests::instance_fixture().instances;
         let mut after = before.clone();
         for instance in after.iter_mut().chain(&mut before.clone()) {
             instance.enabled = true;

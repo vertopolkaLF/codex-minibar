@@ -3,7 +3,8 @@
 //! All of them block on the settings writer: call them off the UI thread.
 
 use crate::{
-    instances::ProviderInstance, openrouter::AccountSecretChange, settings::OpenRouterAccount,
+    providers::instances::ProviderInstance, providers::openrouter::AccountSecretChange,
+    settings::OpenRouterAccount,
 };
 
 /// The OpenRouter instance that owns `account_id`.
@@ -42,7 +43,7 @@ pub(crate) fn persist_openrouter_account(
             .as_mut()
             .expect("OpenRouter instance has an account");
         mutate(account)?;
-        let after = crate::openrouter::has_management_key(std::slice::from_ref(account));
+        let after = crate::providers::openrouter::has_management_key(std::slice::from_ref(account));
         if bump_credentials {
             instance.credentials_revision = instance.credentials_revision.wrapping_add(1);
         }
@@ -63,8 +64,8 @@ pub(crate) fn persist_openrouter_credentials(
 ) -> anyhow::Result<()> {
     // Availability depends only on the protected store, so no settings read
     // (and no race with queued writes) is needed to know the previous state.
-    let before = crate::openrouter::management_key_is_configured(&account_id);
-    let rollback = crate::openrouter::apply_account_secret_changes(&changes)?;
+    let before = crate::providers::openrouter::management_key_is_configured(&account_id);
+    let rollback = crate::providers::openrouter::apply_account_secret_changes(&changes)?;
     if let Err(error) = persist_openrouter_account(account_id, true, Some(before), mutate) {
         return match rollback.restore() {
             Ok(()) => Err(error),
@@ -117,6 +118,9 @@ pub(crate) fn untrack_openrouter_api_key(account_id: String, key_id: String) -> 
 /// OpenRouter; a failure only shows a notification.
 pub(crate) fn forget_openrouter_api_key(account_id: String, key_id: String) {
     if let Err(error) = untrack_openrouter_api_key(account_id, key_id) {
-        crate::notifications::show_error("OpenRouter key not removed", &format!("{error:#}"));
+        crate::surfaces::notifications::show_error(
+            "OpenRouter key not removed",
+            &format!("{error:#}"),
+        );
     }
 }

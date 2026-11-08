@@ -1,6 +1,8 @@
 //! Display strings shared by the popup, tray, taskbar, Command Palette and
 //! notifications.
 
+pub mod money;
+
 use chrono::{DateTime, Utc};
 
 /// `1234567` → `1,234,567`; keeps a leading minus sign.
@@ -35,7 +37,7 @@ pub fn format_cents(cents: u64) -> String {
 }
 
 pub fn format_micro_usd(micros: u64) -> String {
-    format_cents(crate::money::to_cents(micros))
+    format_cents(crate::format::money::to_cents(micros))
 }
 
 pub fn format_token_count(tokens: u64) -> String {

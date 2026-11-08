@@ -32,10 +32,10 @@ use rusqlite::params;
 
 use super::ProviderStore;
 use crate::{
-    instances::ProviderId,
-    pricing::{self, RequestTokens},
-    provider_registry::ProviderKind,
+    providers::instances::ProviderId,
+    providers::registry::ProviderKind,
     usage,
+    usage::pricing::{self, RequestTokens},
 };
 
 /// `(provider, model, tokens)` to `(cost, cache savings)`; `None` while the

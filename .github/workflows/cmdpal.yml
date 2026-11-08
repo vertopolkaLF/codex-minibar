@@ -1,6 +1,6 @@
 name: Command Palette extension
 
-# The app installs the extension from data/ on main (see src/cmdpal.rs), so
+# The app installs the extension from data/ on main (see src/surfaces/cmdpal.rs), so
 # packages are rebuilt and committed whenever the manifest version changes.
 on:
   push:

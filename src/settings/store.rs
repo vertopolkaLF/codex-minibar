@@ -44,7 +44,9 @@ static WRITER: LazyLock<Mutex<Sender<Job>>> = LazyLock::new(|| {
                 // error.
                 let reply = std::panic::catch_unwind(std::panic::AssertUnwindSafe(job))
                     .unwrap_or_else(|_| {
-                        crate::logger::info("a settings write panicked; the writer keeps running");
+                        crate::platform::logger::info(
+                            "a settings write panicked; the writer keeps running",
+                        );
                         Box::new(|| {})
                     });
                 if PENDING.fetch_sub(1, Ordering::SeqCst) == 1 {
@@ -54,7 +56,7 @@ static WRITER: LazyLock<Mutex<Sender<Job>>> = LazyLock::new(|| {
             }
         });
     if let Err(error) = spawned {
-        crate::logger::info(format!("could not start the settings writer: {error}"));
+        crate::platform::logger::info(format!("could not start the settings writer: {error}"));
     }
     Mutex::new(tx)
 });
@@ -62,7 +64,7 @@ static WRITER: LazyLock<Mutex<Sender<Job>>> = LazyLock::new(|| {
 /// Installs the one listener that receives every committed snapshot.
 pub fn listen(listener: impl Fn(Settings) + Send + Sync + 'static) {
     if LISTENER.set(Box::new(listener)).is_err() {
-        crate::logger::info("the settings listener was already installed");
+        crate::platform::logger::info("the settings listener was already installed");
     }
 }
 
@@ -86,7 +88,7 @@ fn submit(job: impl FnOnce() -> Reply + Send + 'static) {
         .unwrap_or(false);
     if !sent {
         PENDING.fetch_sub(1, Ordering::SeqCst);
-        crate::logger::info("failed to queue a settings change: writer unavailable");
+        crate::platform::logger::info("failed to queue a settings change: writer unavailable");
     }
 }
 
@@ -101,7 +103,7 @@ pub fn queue(edit: impl FnOnce(&mut Settings) + Send + 'static) {
 fn queue_result(update: impl FnOnce(&mut Settings) -> Result<()> + Send + 'static) {
     submit(move || {
         if let Err(error) = commit(update) {
-            crate::logger::info(format!("failed to save settings: {error:#}"));
+            crate::platform::logger::info(format!("failed to save settings: {error:#}"));
         }
         Box::new(|| {})
     });
@@ -118,7 +120,9 @@ pub fn edit_snapshot(local: &mut Settings, edit: impl FnOnce(&mut Settings)) -> 
     match Patch::between(&before, local) {
         Ok(patch) if patch.0.is_empty() => {}
         Ok(patch) => queue_result(move |settings| patch.apply(settings)),
-        Err(error) => crate::logger::info(format!("failed to queue a settings edit: {error:#}")),
+        Err(error) => {
+            crate::platform::logger::info(format!("failed to queue a settings edit: {error:#}"))
+        }
     }
     before
 }
@@ -201,10 +205,10 @@ pub fn has_pending() -> bool {
 
 /// The settings file as it is now, for a window that opens. Never writes.
 pub fn read() -> Settings {
-    match crate::app_paths::settings().and_then(|path| Settings::read(&path)) {
+    match crate::platform::paths::settings().and_then(|path| Settings::read(&path)) {
         Ok(settings) => settings,
         Err(error) => {
-            crate::logger::info(format!("failed to read settings: {error:#}"));
+            crate::platform::logger::info(format!("failed to read settings: {error:#}"));
             Settings::default()
         }
     }
@@ -213,7 +217,7 @@ pub fn read() -> Settings {
 /// Runs on the writer thread only. Saving the file is the transaction
 /// boundary: once it succeeds the change counts, whatever its listeners do.
 fn commit<T>(update: impl FnOnce(&mut Settings) -> Result<T>) -> Result<T> {
-    let path = crate::app_paths::settings()?;
+    let path = crate::platform::paths::settings()?;
     let mut settings = Settings::load_or_create(&path)?;
     let value = update(&mut settings)?;
     settings.normalize_all();

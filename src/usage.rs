@@ -1,3 +1,7 @@
+pub mod overview;
+pub mod pricing;
+pub(crate) mod projects;
+
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
     fs::{self, File},
@@ -10,9 +14,11 @@ use chrono::{DateTime, Duration, Local, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::local_time::{HOURLY_WINDOW_HOURS, RETENTION_DAYS, hourly_window_start, truncate_hour};
-use crate::pricing::{self, RequestTokens};
-use crate::{instances::ProviderId, provider_registry::ProviderKind, store};
+use crate::platform::local_time::{
+    HOURLY_WINDOW_HOURS, RETENTION_DAYS, hourly_window_start, truncate_hour,
+};
+use crate::{providers::instances::ProviderId, providers::registry::ProviderKind, store};
+use pricing::RequestTokens;
 
 // A different version rebuilds every Codex daily total from the logs. Bump it
 // when the scan rules change; they follow T3/ccusage: the first session_meta
@@ -52,7 +58,7 @@ impl TokenUsage {
     /// API-rate value is an estimate, not the user's subscription bill.
     pub fn estimated_api_value_usd(&self) -> Option<f64> {
         (self.requests > 0 && self.priced_requests > 0)
-            .then(|| crate::money::to_usd(self.estimated_cost_microusd))
+            .then(|| crate::format::money::to_usd(self.estimated_cost_microusd))
     }
 
     pub(crate) fn add(&mut self, other: &Self) {
@@ -600,7 +606,7 @@ fn read_codex_cwd(path: &Path) -> Option<String> {
             return event
                 .pointer("/payload/cwd")
                 .and_then(Value::as_str)
-                .map(crate::usage_projects::normalize_cwd);
+                .map(crate::usage::projects::normalize_cwd);
         }
     }
     None
@@ -725,7 +731,7 @@ fn ingest_codex_line(
             cached.session_id = id.to_owned();
         }
         if let Some(cwd) = payload.get("cwd").and_then(Value::as_str) {
-            cached.set_cwd(crate::usage_projects::normalize_cwd(cwd));
+            cached.set_cwd(crate::usage::projects::normalize_cwd(cwd));
         }
         if let Some(timestamp_ms) = parse_line_timestamp_ms(&event)
             && is_forked_session_meta(payload)
@@ -745,7 +751,7 @@ fn ingest_codex_line(
         if cached.cwd.as_deref().is_none_or(str::is_empty)
             && let Some(cwd) = payload.get("cwd").and_then(Value::as_str)
         {
-            cached.set_cwd(crate::usage_projects::normalize_cwd(cwd));
+            cached.set_cwd(crate::usage::projects::normalize_cwd(cwd));
         }
         return None;
     }
@@ -1001,7 +1007,7 @@ fn claude_project_folder(path: &str) -> Option<&str> {
 /// log without its own `cwd` (deleted, or no conversation line yet) shares
 /// the project of its siblings in the same project folder.
 pub(crate) fn claude_rollup(cache: &ClaudeUsageCache) -> Rollup {
-    let projects = crate::usage_projects::LogProjects::new(
+    let projects = crate::usage::projects::LogProjects::new(
         cache
             .files
             .iter()
@@ -1167,7 +1173,7 @@ fn claude_cwd_from_line(line: &[u8]) -> Option<String> {
         return None;
     }
     let event: CwdLine = serde_json::from_slice(line).ok()?;
-    let cwd = crate::usage_projects::normalize_cwd(event.cwd.as_ref()?.as_str()?);
+    let cwd = crate::usage::projects::normalize_cwd(event.cwd.as_ref()?.as_str()?);
     (!cwd.is_empty()).then_some(cwd)
 }
 
@@ -1276,7 +1282,7 @@ pub(crate) fn parse_claude_line(line: &[u8]) -> Option<ClaudeLine> {
         .as_ref()
         .and_then(Value::as_f64)
         .filter(|cost| cost.is_finite() && *cost >= 0.0)
-        .map(crate::money::from_usd);
+        .map(crate::format::money::from_usd);
     Some(ClaudeLine {
         timestamp,
         message_id: message

@@ -1326,7 +1326,7 @@ mod tests {
         let yesterday = today - Duration::days(1);
         let old = event(90, 100).usage;
         db.replace_usage_daily(
-            crate::instances::ProviderId::from(ProviderKind::Codex),
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
             &[DailyTokenUsage {
                 date: yesterday,
                 usage: old.clone(),
@@ -1334,13 +1334,13 @@ mod tests {
         )
         .unwrap();
         db.replace_usage_model_daily(
-            crate::instances::ProviderId::from(ProviderKind::Codex),
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
             &[("model-a".into(), yesterday, old.clone())],
         )
         .unwrap();
         let hour = truncate_hour(Local::now() - Duration::hours(2));
         db.replace_usage_hourly(
-            crate::instances::ProviderId::from(ProviderKind::Codex),
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
             &[(hour, old.clone())],
         )
         .unwrap();
@@ -1350,10 +1350,16 @@ mod tests {
         assert_eq!(state.historical_owner, "only-account");
         // The scanner no longer finds the original file, so the old raw cache
         // is rebuilt empty. Its migration snapshot must still be visible.
-        db.replace_usage_daily(crate::instances::ProviderId::from(ProviderKind::Codex), &[])
-            .unwrap();
-        db.replace_usage_model_daily(crate::instances::ProviderId::from(ProviderKind::Codex), &[])
-            .unwrap();
+        db.replace_usage_daily(
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
+            &[],
+        )
+        .unwrap();
+        db.replace_usage_model_daily(
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
+            &[],
+        )
+        .unwrap();
         db.save_account_events(&[], &state, &state.observed, &state.observed, Utc::now())
             .unwrap();
         assert_eq!(
@@ -1400,7 +1406,7 @@ mod tests {
         db.migrate().unwrap();
         let day = Local::now().date_naive();
         db.replace_usage_daily(
-            crate::instances::ProviderId::from(ProviderKind::Codex),
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
             &[DailyTokenUsage {
                 date: day,
                 usage: event(90, 100).usage,
@@ -1493,7 +1499,7 @@ mod tests {
         tail.timestamp = now - Duration::seconds(10);
         tail.offset = 300;
         db.replace_usage_daily(
-            crate::instances::ProviderId::from(ProviderKind::Codex),
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
             &[DailyTokenUsage {
                 date: day,
                 usage: old.usage.clone(),
@@ -1501,7 +1507,7 @@ mod tests {
         )
         .unwrap();
         db.replace_usage_model_daily(
-            crate::instances::ProviderId::from(ProviderKind::Codex),
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
             &[(old.model.clone(), day, old.usage.clone())],
         )
         .unwrap();
@@ -1913,7 +1919,7 @@ mod tests {
         let mut frozen = old_a.usage.clone();
         frozen.add(&old_b.usage);
         db.replace_usage_daily(
-            crate::instances::ProviderId::from(ProviderKind::Codex),
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
             &[DailyTokenUsage {
                 date: day,
                 usage: frozen.clone(),
@@ -1921,7 +1927,7 @@ mod tests {
         )
         .unwrap();
         db.replace_usage_model_daily(
-            crate::instances::ProviderId::from(ProviderKind::Codex),
+            crate::providers::instances::ProviderId::from(ProviderKind::Codex),
             &[("model-a".into(), day, frozen)],
         )
         .unwrap();

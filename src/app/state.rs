@@ -13,16 +13,16 @@ use chrono::{DateTime, Utc};
 
 use super::limits_persist::LimitsPersister;
 use crate::{
-    app_event::AppEvent,
-    instances::ProviderId,
-    limits::{ProviderLimits, RateLimits},
-    provider_registry::ProviderKind,
-    provider_status::{ProviderStatus, ProviderStatusCommand, ProviderStatusWorker},
-    reset_detection::AnnouncedReset,
-    reset_feed::{ResetFeedCommand, ResetFeedWorker},
+    app::event::AppEvent,
+    providers::instances::ProviderId,
+    providers::registry::ProviderKind,
+    providers::status::{ProviderStatus, ProviderStatusCommand, ProviderStatusWorker},
+    providers::worker::{UsageAction, WorkerCommand},
+    quota::limits::{ProviderLimits, RateLimits},
+    quota::reset_detection::AnnouncedReset,
+    quota::reset_feed::{ResetFeedCommand, ResetFeedWorker},
     settings::Settings,
-    updater::UpdateController,
-    worker::{UsageAction, WorkerCommand},
+    update::UpdateController,
 };
 
 fn limits_persister() -> &'static LimitsPersister {
@@ -77,7 +77,7 @@ pub struct AppState {
     /// Bits of [`Changes`] not yet fanned out by the bridge.
     pub changes: AtomicU8,
     pub commands: Mutex<HashMap<ProviderId, Sender<WorkerCommand>>>,
-    pub workers: Mutex<crate::provider::ProviderWorkers>,
+    pub workers: Mutex<crate::providers::ProviderWorkers>,
     pub worker_events_rx: Mutex<Option<Receiver<AppEvent>>>,
     pub worker_events_tx: Sender<AppEvent>,
     /// Independent public-feed worker for announced Codex forced resets.
@@ -131,7 +131,10 @@ impl AppState {
             .filter(|instance| instance.driver == ProviderKind::OpenRouter)
         {
             let provider = instance.provider_id();
-            if crate::openrouter::apply_account_names(current.get_mut(provider), instance) {
+            if crate::providers::openrouter::apply_account_names(
+                current.get_mut(provider),
+                instance,
+            ) {
                 renamed.push((provider, current.get(provider).clone()));
             }
         }
@@ -258,7 +261,7 @@ impl AppState {
 
     pub(crate) fn sync_provider_status(&self, settings: &Settings) {
         self.send_provider_status(ProviderStatusCommand::Watch(
-            crate::provider_status::watched_kinds(settings),
+            crate::providers::status::watched_kinds(settings),
         ));
     }
 
@@ -288,7 +291,9 @@ impl AppState {
         }
         let previous = self.current_limits().get(provider).clone();
         for limits in [&previous, current] {
-            if let Some(observation) = crate::reset_detection::Observation::from_limits(limits) {
+            if let Some(observation) =
+                crate::quota::reset_detection::Observation::from_limits(limits)
+            {
                 self.send_reset_feed(ResetFeedCommand::Observe(
                     provider.id().to_owned(),
                     Box::new(observation),
@@ -358,7 +363,7 @@ impl AppState {
             {
                 continue;
             }
-            match crate::provider::start_provider_worker(
+            match crate::providers::start_provider_worker(
                 provider,
                 settings,
                 self.activation_path.clone(),

@@ -13,10 +13,10 @@ use std::{
 use chrono::{DateTime, Utc};
 
 use super::state::AppState;
-use crate::app_event::AppEvent;
-use crate::banked_reset::{AutoResetChoice, Outcome};
-use crate::instances::{Capabilities, ProviderId, ProviderInstance};
-use crate::limits::{ProviderLimits, RateLimits};
+use crate::app::event::AppEvent;
+use crate::providers::instances::{Capabilities, ProviderId, ProviderInstance};
+use crate::quota::banked_reset::{AutoResetChoice, Outcome};
+use crate::quota::limits::{ProviderLimits, RateLimits};
 use crate::settings::{AutoResetLead, Settings};
 
 /// The bridge ticks every 16–250 ms; quota snapshots change far less often.
@@ -88,10 +88,10 @@ impl AutoReset {
     pub(super) fn new() -> Self {
         let dry_run = dry_run_requested();
         if dry_run {
-            crate::logger::info("Automatic resets: dry run, no credit will be redeemed");
+            crate::platform::logger::info("Automatic resets: dry run, no credit will be redeemed");
         }
         Self {
-            started_at: crate::banked_reset::process_started_at(),
+            started_at: crate::quota::banked_reset::process_started_at(),
             next_check: Instant::now(),
             last_attempt: HashMap::new(),
             running: Arc::default(),
@@ -182,7 +182,7 @@ impl AutoReset {
             return;
         }
         let name = provider.qualified_name();
-        crate::logger::info(match at {
+        crate::platform::logger::info(match at {
             Some(at) => format!(
                 "{name} automatic reset planned at {} (dry run)",
                 at.with_timezone(&chrono::Local).format("%Y-%m-%d %H:%M")
@@ -193,12 +193,12 @@ impl AutoReset {
 
     /// Applies the answers given on the warning notification.
     fn apply_choices(&mut self, settings: &Settings, state: &Arc<AppState>) {
-        for choice in crate::banked_reset::take_choices() {
+        for choice in crate::quota::banked_reset::take_choices() {
             match choice {
                 AutoResetChoice::Skip(provider) => {
                     let limits = state.current_limits();
                     if let Some(expires_at) = limits.get(provider).next_reset_credit_expiration() {
-                        crate::logger::info(format!(
+                        crate::platform::logger::info(format!(
                             "{} automatic reset skipped for the credit expiring at {expires_at}",
                             provider.qualified_name()
                         ));
@@ -241,15 +241,15 @@ impl AutoReset {
         let warnings = self.take_warnings(settings, &limits, utc_now);
         if settings.notifications.auto_reset_upcoming {
             for (provider, minutes) in warnings {
-                use crate::notifications::{
+                use crate::surfaces::notifications::{
                     LimitFocus, Notification, NotificationAction, NotificationKind,
                 };
-                crate::logger::info(format!(
+                crate::platform::logger::info(format!(
                     "{} automatic reset in {minutes} min",
                     provider.qualified_name()
                 ));
                 // The quotas show what the reset is about to clear.
-                crate::notifications::notify(
+                crate::surfaces::notifications::notify(
                     Notification::limit(
                         NotificationKind::Warning,
                         &crate::i18n::format(
@@ -280,7 +280,7 @@ impl AutoReset {
     /// Redeems off-thread. `manual` attempts come from "Apply now" and report
     /// every outcome; scheduled ones stay quiet unless the reset applied.
     fn spawn_attempt(&self, instance: ProviderInstance, state: &Arc<AppState>, manual: bool) {
-        use crate::notifications::{NotificationKind, show_kind};
+        use crate::surfaces::notifications::{NotificationKind, show_kind};
         let provider = instance.provider_id();
         let running = Arc::clone(&self.running);
         let state = Arc::clone(state);
@@ -293,7 +293,7 @@ impl AutoReset {
         thread::spawn(move || {
             let name = provider.qualified_name();
             if dry_run {
-                crate::logger::info(format!("{name} reset would apply now (dry run)"));
+                crate::platform::logger::info(format!("{name} reset would apply now (dry run)"));
                 show_kind(
                     NotificationKind::Info,
                     &format!("[Dry run] {applied_title}"),
@@ -302,27 +302,29 @@ impl AutoReset {
                 running.lock().unwrap().remove(&provider);
                 return;
             }
-            crate::logger::info(if manual {
+            crate::platform::logger::info(if manual {
                 format!("{name} applying banked reset from the notification")
             } else {
                 format!("{name} banked reset expires soon; applying it automatically")
             });
-            let result = crate::drivers::consume_reset(&instance);
+            let result = crate::providers::drivers::consume_reset(&instance);
             match &result {
                 Ok((Outcome::Reset, _)) => {
-                    crate::logger::info(format!("{name} banked reset applied"));
+                    crate::platform::logger::info(format!("{name} banked reset applied"));
                     state.record_banked_reset_use(provider);
                     show_kind(NotificationKind::Reset, applied_title, &name);
                 }
                 Ok((outcome, _)) => {
                     let message = crate::i18n::tr(outcome.message_key());
-                    crate::logger::info(format!("{name} banked reset not applied: {message}"));
+                    crate::platform::logger::info(format!(
+                        "{name} banked reset not applied: {message}"
+                    ));
                     if manual {
                         show_kind(NotificationKind::Warning, &name, message);
                     }
                 }
                 Err(error) => {
-                    crate::logger::info(format!("{name} banked reset failed: {error}"));
+                    crate::platform::logger::info(format!("{name} banked reset failed: {error}"));
                     if manual {
                         show_kind(NotificationKind::Error, &name, &error.to_string());
                     }
@@ -347,9 +349,9 @@ impl AutoReset {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::instances::InstanceSource;
-    use crate::limits::{LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary};
-    use crate::provider_registry::ProviderKind;
+    use crate::providers::instances::InstanceSource;
+    use crate::providers::registry::ProviderKind;
+    use crate::quota::limits::{LimitWindow, RateLimitResetCredit, RateLimitResetCreditsSummary};
 
     fn limits(used: u8, expires_in: chrono::Duration, now: DateTime<Utc>) -> RateLimits {
         RateLimits {

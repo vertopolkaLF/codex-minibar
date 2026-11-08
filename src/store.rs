@@ -16,13 +16,15 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::limits::{ProviderLimits, RateLimits};
-use crate::local_time::{HOURLY_WINDOW_HOURS, RETENTION_DAYS, start_of_local_day, truncate_hour};
+use crate::platform::local_time::{
+    HOURLY_WINDOW_HOURS, RETENTION_DAYS, start_of_local_day, truncate_hour,
+};
+use crate::quota::limits::{ProviderLimits, RateLimits};
 use crate::usage::{
     CachedClaudeSessionFile, CachedClaudeUsageEntry, CachedSessionFile, ClaudeUsageCache,
     DailyTokenUsage, Rollup, TokenUsage, UsageCache, UsageStatistics, statistics_from_daily,
 };
-use crate::{instances::ProviderId, provider_registry::ProviderKind};
+use crate::{providers::instances::ProviderId, providers::registry::ProviderKind};
 
 pub(crate) mod codex_accounts;
 pub(crate) mod repricing;
@@ -56,7 +58,7 @@ pub struct ProviderStore {
 
 impl ProviderStore {
     pub fn open() -> Result<Self> {
-        let path = crate::app_paths::store_db()?;
+        let path = crate::platform::paths::store_db()?;
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("create provider store dir {}", parent.display()))?;
@@ -1702,7 +1704,7 @@ impl ProviderStore {
              )",
             params![
                 provider.id(),
-                crate::local_time::hourly_window_start(Local::now())
+                crate::platform::local_time::hourly_window_start(Local::now())
                     .with_timezone(&Utc)
                     .to_rfc3339()
             ],
@@ -1744,7 +1746,7 @@ impl ProviderStore {
     /// multi-gigabyte rescan of local session logs. Malformed caches remain on
     /// disk and the normal scanner can recover without losing their evidence.
     fn migrate_legacy_json_caches(&self) {
-        let Ok(config) = crate::app_paths::config_dir() else {
+        let Ok(config) = crate::platform::paths::config_dir() else {
             return;
         };
 
@@ -1832,7 +1834,7 @@ impl ProviderStore {
         let Ok(cache) = serde_json::from_slice::<LegacyCursorUsageCache>(&bytes) else {
             return Ok(false);
         };
-        if cache.version != crate::cursor::USAGE_CACHE_VERSION {
+        if cache.version != crate::providers::cursor::USAGE_CACHE_VERSION {
             return Ok(false);
         }
         let cursor = ProviderId::primary(ProviderKind::Cursor);
@@ -2244,7 +2246,7 @@ mod tests {
             .unwrap();
         let rows = store
             .load_model_daily(
-                crate::instances::ProviderId::from(ProviderKind::Codex),
+                crate::providers::instances::ProviderId::from(ProviderKind::Codex),
                 day,
                 day + Duration::days(1),
             )
@@ -2341,7 +2343,7 @@ mod tests {
         assert_eq!(
             store
                 .load_usage_daily(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     30
                 )
                 .unwrap()
@@ -2407,7 +2409,7 @@ mod tests {
         assert_eq!(
             store
                 .load_usage_daily(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     30
                 )
                 .unwrap()
@@ -2418,7 +2420,7 @@ mod tests {
         assert!(
             store
                 .load_model_breakdown(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     day.date,
                     day.date
                 )
@@ -2428,7 +2430,7 @@ mod tests {
         assert!(
             store
                 .load_model_daily(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     day.date,
                     day.date
                 )
@@ -2458,7 +2460,7 @@ mod tests {
         assert_eq!(
             store
                 .load_usage_daily(
-                    crate::instances::ProviderId::from(ProviderKind::OpenRouter),
+                    crate::providers::instances::ProviderId::from(ProviderKind::OpenRouter),
                     30
                 )
                 .unwrap()
@@ -2488,9 +2490,9 @@ mod tests {
             .unwrap();
         store
             .set_usage_fetched_at(
-                crate::instances::ProviderId::from(ProviderKind::Cursor),
+                crate::providers::instances::ProviderId::from(ProviderKind::Cursor),
                 Utc::now(),
-                crate::cursor::USAGE_CACHE_VERSION,
+                crate::providers::cursor::USAGE_CACHE_VERSION,
             )
             .unwrap();
 
@@ -2498,14 +2500,19 @@ mod tests {
 
         assert!(
             store
-                .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Cursor), 30)
+                .load_usage_daily(
+                    crate::providers::instances::ProviderId::from(ProviderKind::Cursor),
+                    30
+                )
                 .unwrap()
                 .daily
                 .is_empty()
         );
         assert!(
             store
-                .usage_fetched_at(crate::instances::ProviderId::from(ProviderKind::Cursor))
+                .usage_fetched_at(crate::providers::instances::ProviderId::from(
+                    ProviderKind::Cursor
+                ))
                 .unwrap()
                 .is_none()
         );
@@ -2687,7 +2694,10 @@ mod tests {
         );
         assert_eq!(
             store
-                .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Codex), 30)
+                .load_usage_daily(
+                    crate::providers::instances::ProviderId::from(ProviderKind::Codex),
+                    30
+                )
                 .unwrap()
                 .history
                 .requests,
@@ -2820,7 +2830,7 @@ mod tests {
         assert_eq!(
             store
                 .count_session_paths(
-                    crate::instances::ProviderId::from(ProviderKind::Claude),
+                    crate::providers::instances::ProviderId::from(ProviderKind::Claude),
                     today,
                     today
                 )
@@ -2847,7 +2857,7 @@ mod tests {
         let today = Local::now().date_naive();
         let models = store
             .load_model_breakdown(
-                crate::instances::ProviderId::from(ProviderKind::Codex),
+                crate::providers::instances::ProviderId::from(ProviderKind::Codex),
                 today,
                 today,
             )

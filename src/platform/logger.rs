@@ -1,0 +1,217 @@
+//! Small, dependency-free application log used by the in-app Log tab.
+
+use std::{
+    collections::VecDeque,
+    fs::{self, OpenOptions},
+    io::{BufRead, BufReader, Write},
+    path::{Path, PathBuf},
+    sync::OnceLock,
+};
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, Local};
+
+static LOG_PATH: OnceLock<PathBuf> = OnceLock::new();
+const MAX_ARCHIVED_LOGS: usize = 10;
+
+/// Archives the preceding log at `path`, creates a clean one, and starts a new session.
+pub fn initialize(path: &Path) -> Result<PathBuf> {
+    let path = path.to_path_buf();
+    // Logging starts before Settings::load_or_create on a fresh install.
+    // Rotation enumerates the directory, so it must already exist here.
+    if let Some(directory) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(directory)
+            .with_context(|| format!("create log directory {}", directory.display()))?;
+    }
+    rotate_log(&path)?;
+    OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)
+        .with_context(|| format!("open {}", path.display()))?;
+    let _ = LOG_PATH.set(path.clone());
+    info("Codex Minibar started");
+    info(format!("Log file: {}", path.display()));
+    Ok(path)
+}
+
+fn rotate_log(path: &Path) -> Result<()> {
+    if path.exists() {
+        let archive = next_archive_path(path, Local::now())?;
+        fs::rename(path, &archive)
+            .with_context(|| format!("archive {} as {}", path.display(), archive.display()))?;
+    }
+    prune_archived_logs(path)?;
+    Ok(())
+}
+
+fn next_archive_path(path: &Path, now: DateTime<Local>) -> Result<PathBuf> {
+    let directory = path.parent().context("log path has no parent")?;
+    let timestamp = now.format("%Y-%m-%d_%H-%M-%S");
+    let mut suffix = 0usize;
+    loop {
+        let name = if suffix == 0 {
+            format!("{timestamp}-log.txt")
+        } else {
+            format!("{timestamp}-{suffix}-log.txt")
+        };
+        let candidate = directory.join(name);
+        if !candidate.exists() {
+            return Ok(candidate);
+        }
+        suffix += 1;
+    }
+}
+
+fn prune_archived_logs(path: &Path) -> Result<()> {
+    let directory = path.parent().context("log path has no parent")?;
+    let mut archives = fs::read_dir(directory)
+        .with_context(|| format!("list {}", directory.display()))?
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()))
+        .filter(|entry| is_archive_name(&entry.file_name().to_string_lossy()))
+        .collect::<Vec<_>>();
+    archives.sort_by_key(|entry| entry.file_name());
+    let excess = archives.len().saturating_sub(MAX_ARCHIVED_LOGS);
+    for archive in archives.into_iter().take(excess) {
+        fs::remove_file(archive.path())
+            .with_context(|| format!("remove old log archive {}", archive.path().display()))?;
+    }
+    Ok(())
+}
+
+fn is_archive_name(name: &str) -> bool {
+    name.ends_with("-log.txt") && name.len() >= "0000-00-00_00-00-00-log.txt".len()
+}
+
+pub fn path() -> Option<&'static Path> {
+    LOG_PATH.get().map(PathBuf::as_path)
+}
+
+/// Appends one timestamped event. Logging must never disrupt provider polling.
+pub fn info(message: impl AsRef<str>) {
+    let Some(path) = path() else {
+        return;
+    };
+    let line = format!(
+        "[{}] {}\n",
+        Local::now().format("%Y-%m-%d %H:%M:%S"),
+        message.as_ref()
+    );
+    if let Err(error) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(line.as_bytes()))
+    {
+        eprintln!("failed to write {}: {error}", path.display());
+    }
+}
+
+/// Reads only the requested tail, keeping the UI responsive even after a long run.
+pub fn tail_lines(max_lines: usize) -> Result<String> {
+    let Some(path) = path() else {
+        return Ok("Log is not initialized yet.".into());
+    };
+    let file = match fs::File::open(path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(String::new()),
+        Err(error) => return Err(error).with_context(|| format!("read {}", path.display())),
+    };
+    let mut lines = VecDeque::with_capacity(max_lines);
+    for line in BufReader::new(file).lines() {
+        let line = line.with_context(|| format!("read {}", path.display()))?;
+        if lines.len() == max_lines {
+            lines.pop_front();
+        }
+        lines.push_back(line);
+    }
+    Ok(lines.into_iter().collect::<Vec<_>>().join("\n"))
+}
+
+pub fn open() -> Result<()> {
+    let path = path().context("log path is not initialized")?;
+    crate::platform::shell::open_url(&path.to_string_lossy())
+}
+
+/// Opens the directory that contains the current and archived application logs.
+pub fn open_folder() -> Result<()> {
+    let path = path().context("log path is not initialized")?;
+    let directory = path.parent().context("log path has no parent")?;
+    crate::platform::shell::open_url(&directory.to_string_lossy())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fresh_install_creates_log_directory_before_settings_exist() {
+        let directory = tempfile::tempdir().unwrap();
+        let settings = directory
+            .path()
+            .join("nested")
+            .join("config")
+            .join("settings.toml");
+        assert!(!settings.parent().unwrap().exists());
+
+        let log = initialize(&settings.with_file_name("log.txt")).unwrap();
+
+        assert!(log.is_file());
+        assert!(!settings.exists());
+        assert!(
+            fs::read_to_string(&log)
+                .unwrap()
+                .contains("Codex Minibar started")
+        );
+        // A subsequent launch still archives its predecessor and preserves settings.
+        fs::write(&settings, "version = 36\n").unwrap();
+        initialize(&settings.with_file_name("log.txt")).unwrap();
+        assert_eq!(fs::read_to_string(&settings).unwrap(), "version = 36\n");
+        let archives = fs::read_dir(log.parent().unwrap())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| is_archive_name(&entry.file_name().to_string_lossy()))
+            .count();
+        assert_eq!(archives, 1);
+    }
+
+    #[test]
+    fn startup_reports_an_unusable_log_directory() {
+        let directory = tempfile::tempdir().unwrap();
+        let blocked = directory.path().join("config");
+        fs::write(&blocked, "existing file").unwrap();
+        assert!(initialize(&blocked.join("log.txt")).is_err());
+        assert_eq!(fs::read_to_string(blocked).unwrap(), "existing file");
+    }
+
+    #[test]
+    fn startup_archives_the_previous_log_and_keeps_ten_archives() {
+        let directory = tempfile::tempdir().unwrap();
+        let log = directory.path().join("log.txt");
+        fs::write(&log, "previous session").unwrap();
+        for second in 0..10 {
+            fs::write(
+                directory
+                    .path()
+                    .join(format!("2026-07-28_23-00-{second:02}-log.txt")),
+                "old",
+            )
+            .unwrap();
+        }
+
+        rotate_log(&log).unwrap();
+
+        assert!(!log.exists());
+        let archives = fs::read_dir(directory.path())
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| is_archive_name(&entry.file_name().to_string_lossy()))
+            .count();
+        assert_eq!(archives, MAX_ARCHIVED_LOGS);
+    }
+}

@@ -29,7 +29,7 @@ public sealed class BridgeUnavailableException : Exception
 }
 
 /// <summary>
-/// Client for the loopback bridge in `src/streamdeck.rs`: one JSON line per
+/// Client for the loopback bridge in `src/surfaces/streamdeck.rs`: one JSON line per
 /// request, one JSON line back, authenticated by the endpoint file's token.
 /// </summary>
 public static class MinibarBridge
