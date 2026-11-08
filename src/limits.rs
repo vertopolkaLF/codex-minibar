@@ -449,41 +449,21 @@ mod tests {
     }
 
     #[test]
-    fn one_hour_left_of_five_is_twenty_percent_remaining_pace() {
-        let (window, now) = window_with_hour_left(40);
-        assert!((window.expected_used_percent(now).unwrap() - 80.0).abs() < 0.01);
-        let tip = window.pace_tip(false, now).unwrap();
-        assert!((tip.percent - 20.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn pace_tip_uses_expected_used_when_showing_used() {
-        let (window, now) = window_with_hour_left(40);
-        let tip = window.pace_tip(true, now).unwrap();
-        assert!((tip.percent - 80.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn pace_tip_still_shown_when_on_track() {
-        let (window, now) = window_with_hour_left(80);
-        let tip = window.pace_tip(false, now).unwrap();
-        assert!((tip.percent - 20.0).abs() < 0.01);
-        assert_eq!(tip.summary(), "On pace");
-    }
-
-    #[test]
-    fn pace_tip_summarizes_reserve_and_deficit_like_codexbar() {
-        let (reserve, now) = window_with_hour_left(70);
-        assert_eq!(
-            reserve.pace_tip(false, now).unwrap().summary(),
-            "10% in reserve"
-        );
-
-        let (deficit, now) = window_with_hour_left(92);
-        assert_eq!(
-            deficit.pace_tip(false, now).unwrap().summary(),
-            "12% in deficit"
-        );
+    fn pace_tip_compares_usage_with_elapsed_time() {
+        // One hour of five is left: 80% of the window is expected to be used.
+        let cases = [
+            (40, false, 20.0, "40% in reserve"),
+            (40, true, 80.0, "40% in reserve"),
+            (70, false, 20.0, "10% in reserve"),
+            (80, false, 20.0, "On pace"),
+            (92, false, 20.0, "12% in deficit"),
+        ];
+        for (used, show_used, percent, summary) in cases {
+            let (window, now) = window_with_hour_left(used);
+            let tip = window.pace_tip(show_used, now).unwrap();
+            assert!((tip.percent - percent).abs() < 0.01, "{used}% used");
+            assert_eq!(tip.summary(), summary, "{used}% used");
+        }
     }
 
     #[test]
@@ -494,44 +474,31 @@ mod tests {
             resets_at: Some(now + chrono::Duration::days(3)),
             duration_minutes: Some(10_080),
         };
+        // Three of seven days are left.
         let tip = weekly.pace_tip(false, now).unwrap();
-        assert!((tip.percent - (100.0 - weekly.expected_used_percent(now).unwrap())).abs() < 0.01);
+        assert!((tip.percent - 300.0 / 7.0).abs() < 0.01);
     }
 
     #[test]
-    fn detects_codex_unactivated_five_hour_placeholder() {
+    fn only_an_unused_fresh_five_hour_window_looks_unactivated() {
         let sampled_at = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
-        let window = LimitWindow {
-            used_percent: Some(0),
-            resets_at: Some(sampled_at + Duration::hours(5)),
-            duration_minutes: Some(300),
-        };
-
-        assert!(window.looks_like_unactivated_five_hour(sampled_at));
-    }
-
-    #[test]
-    fn weekly_placeholder_is_not_a_five_hour_placeholder() {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
-        let window = LimitWindow {
-            used_percent: Some(0),
-            resets_at: Some(sampled_at + Duration::days(7)),
-            duration_minutes: Some(10_080),
-        };
-
-        assert!(!window.looks_like_unactivated_five_hour(sampled_at));
-    }
-
-    #[test]
-    fn used_five_hour_window_is_not_a_placeholder() {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 7, 12, 15, 0, 0).unwrap();
-        let window = LimitWindow {
-            used_percent: Some(2),
-            resets_at: Some(sampled_at + Duration::hours(5)),
-            duration_minutes: Some(300),
-        };
-
-        assert!(!window.looks_like_unactivated_five_hour(sampled_at));
+        let cases = [
+            ("unused 5h", 0, Duration::hours(5), 300, true),
+            ("weekly placeholder", 0, Duration::days(7), 10_080, false),
+            ("used 5h", 2, Duration::hours(5), 300, false),
+        ];
+        for (name, used, resets_in, duration, expected) in cases {
+            let window = LimitWindow {
+                used_percent: Some(used),
+                resets_at: Some(sampled_at + resets_in),
+                duration_minutes: Some(duration),
+            };
+            assert_eq!(
+                window.looks_like_unactivated_five_hour(sampled_at),
+                expected,
+                "{name}"
+            );
+        }
     }
 
     #[test]

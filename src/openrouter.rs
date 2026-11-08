@@ -1372,29 +1372,45 @@ mod tests {
         assert!(cache.contains_key("key"));
     }
 
-    fn sample(raw: &str) -> RateLimits {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
-        let parsed = parse_key_response(raw, sampled_at).unwrap();
-        let used_percent = parsed.spending.limit_microusd.and_then(|limit| {
-            (limit > 0).then(|| {
-                ((parsed.spending.used_microusd.min(limit) as f64 / limit as f64) * 100.0)
-                    .round()
-                    .clamp(0.0, 100.0) as u8
-            })
-        });
-        RateLimits {
-            primary: LimitWindow {
-                used_percent,
-                resets_at: parsed.spending.resets_at,
-                duration_minutes: parsed.spending.reset_kind.as_deref().and_then(|kind| {
-                    period_bounds(sampled_at, kind).map(|(_, _, minutes)| minutes)
-                }),
-            },
-            sampled_at,
-            account_name: parsed.account_name,
-            spending: Some(parsed.spending),
-            ..RateLimits::default()
+    fn sampled_at() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap()
+    }
+
+    fn key(id: &str, raw: &str) -> OpenRouterApiKeySnapshot {
+        let parsed = parse_key_response(raw, sampled_at()).unwrap();
+        OpenRouterApiKeySnapshot {
+            id: id.into(),
+            label: parsed.account_name,
+            spending: parsed.spending,
+            has_live_usage: true,
+            ..Default::default()
         }
+    }
+
+    fn account(
+        id: &str,
+        api_keys: Vec<OpenRouterApiKeySnapshot>,
+        balance_microusd: Option<u64>,
+    ) -> OpenRouterAccountSnapshot {
+        OpenRouterAccountSnapshot {
+            id: id.into(),
+            name: id.into(),
+            api_keys,
+            balance_microusd,
+            ..Default::default()
+        }
+    }
+
+    /// One account with one key, read the way the worker publishes it.
+    fn sample(raw: &str) -> RateLimits {
+        rate_limits_from_accounts(
+            vec![account("account", vec![key("key", raw)], None)],
+            sampled_at(),
+        )
+    }
+
+    fn key_label(limits: &RateLimits) -> Option<&str> {
+        limits.openrouter_accounts[0].api_keys[0].label.as_deref()
     }
 
     #[test]
@@ -1408,11 +1424,11 @@ mod tests {
             limits.primary.resets_at,
             Some(Utc.with_ymd_and_hms(2026, 9, 1, 0, 0, 0).unwrap())
         );
-        let spending = limits.spending.unwrap();
+        let spending = limits.spending.as_ref().unwrap();
         assert_eq!(spending.used_microusd, 25_500_000);
         assert_eq!(spending.limit_microusd, Some(100_000_000));
         assert_eq!(spending.remaining_microusd, Some(74_500_000));
-        assert_eq!(limits.account_name.as_deref(), Some("Build key"));
+        assert_eq!(key_label(&limits), Some("Build key"));
     }
 
     #[test]
@@ -1459,7 +1475,7 @@ mod tests {
 
     #[test]
     fn merge_keeps_cached_metadata_but_never_cached_usage() {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
+        let sampled_at = sampled_at();
         let cached = CachedOpenRouterKey {
             label: Some("Test Key".into()),
             limit_microusd: Some(1_000_000),
@@ -1512,7 +1528,7 @@ mod tests {
         let limits = sample(
             r#"{"data":{"name":"Leon Flame","label":"sk-or-v1-a35...26a","usage":0,"limit":1}}"#,
         );
-        assert_eq!(limits.account_name.as_deref(), Some("Leon Flame"));
+        assert_eq!(key_label(&limits), Some("Leon Flame"));
     }
 
     #[test]
@@ -1548,10 +1564,9 @@ mod tests {
 
     #[test]
     fn parses_expires_at_from_key_and_directory() {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
         let parsed = parse_key_response(
             r#"{"data":{"usage":1,"limit":10,"expires_at":"2026-08-19T10:00:00Z"}}"#,
-            sampled_at,
+            sampled_at(),
         )
         .unwrap();
         assert_eq!(
@@ -1615,49 +1630,20 @@ mod tests {
 
     #[test]
     fn keeps_multiple_accounts_and_aggregates_their_key_limits() {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
-        let first = sample(
+        let first = key(
+            "key-one",
             r#"{"data":{"label":"first-key","usage":10,"limit":100,"limit_remaining":90,"limit_reset":"monthly"}}"#,
         );
-        let second = sample(
+        let second = key(
+            "key-two",
             r#"{"data":{"label":"second-key","usage":20,"limit":100,"limit_remaining":80,"limit_reset":"monthly"}}"#,
         );
         let limits = rate_limits_from_accounts(
             vec![
-                OpenRouterAccountSnapshot {
-                    id: "account-one".into(),
-                    name: "First account".into(),
-                    api_keys: vec![OpenRouterApiKeySnapshot {
-                        local_name: None,
-                        id: "key-one".into(),
-                        label: first.account_name,
-                        masked_key: Some("sk-or-v1-aaa...111".into()),
-                        spending: first.spending.unwrap(),
-                        has_live_usage: true,
-                        expires_at: None,
-                        disabled: false,
-                    }],
-                    balance_microusd: Some(50_000_000),
-                    total_credits_microusd: None,
-                },
-                OpenRouterAccountSnapshot {
-                    id: "account-two".into(),
-                    name: "Second account".into(),
-                    api_keys: vec![OpenRouterApiKeySnapshot {
-                        local_name: None,
-                        id: "key-two".into(),
-                        label: second.account_name,
-                        masked_key: Some("sk-or-v1-bbb...222".into()),
-                        spending: second.spending.unwrap(),
-                        has_live_usage: true,
-                        expires_at: None,
-                        disabled: false,
-                    }],
-                    balance_microusd: Some(75_000_000),
-                    total_credits_microusd: None,
-                },
+                account("account-one", vec![first], Some(50_000_000)),
+                account("account-two", vec![second], Some(75_000_000)),
             ],
-            sampled_at,
+            sampled_at(),
         );
 
         assert_eq!(limits.openrouter_accounts.len(), 2);
@@ -1672,49 +1658,20 @@ mod tests {
 
     #[test]
     fn never_moves_api_keys_between_account_snapshots() {
-        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 19, 12, 30, 0).unwrap();
-        let leon_key = sample(
+        let leon_key = key(
+            "test2",
             r#"{"data":{"name":"TEST2","label":"sk-or-v1-f12...662","usage":9,"limit":10,"limit_remaining":1,"limit_reset":"daily"}}"#,
         );
-        let pixel_key = sample(
+        let pixel_key = key(
+            "key-1",
             r#"{"data":{"name":"KEY 1","label":"sk-or-v1-a12...1f8","usage":0.04,"limit":null}}"#,
         );
         let limits = rate_limits_from_accounts(
             vec![
-                OpenRouterAccountSnapshot {
-                    id: "leon-flame".into(),
-                    name: "Leon Flame".into(),
-                    api_keys: vec![OpenRouterApiKeySnapshot {
-                        local_name: None,
-                        id: "test2".into(),
-                        label: leon_key.account_name,
-                        masked_key: Some("sk-or-v1-f12...662".into()),
-                        spending: leon_key.spending.unwrap(),
-                        has_live_usage: true,
-                        expires_at: None,
-                        disabled: false,
-                    }],
-                    balance_microusd: None,
-                    total_credits_microusd: None,
-                },
-                OpenRouterAccountSnapshot {
-                    id: "pixelscan".into(),
-                    name: "Pixelscan".into(),
-                    api_keys: vec![OpenRouterApiKeySnapshot {
-                        local_name: None,
-                        id: "key-1".into(),
-                        label: pixel_key.account_name,
-                        masked_key: Some("sk-or-v1-a12...1f8".into()),
-                        spending: pixel_key.spending.unwrap(),
-                        has_live_usage: true,
-                        expires_at: None,
-                        disabled: false,
-                    }],
-                    balance_microusd: Some(38_960_000),
-                    total_credits_microusd: None,
-                },
+                account("leon-flame", vec![leon_key], None),
+                account("pixelscan", vec![pixel_key], Some(38_960_000)),
             ],
-            sampled_at,
+            sampled_at(),
         );
 
         assert_eq!(limits.openrouter_accounts[0].id, "leon-flame");

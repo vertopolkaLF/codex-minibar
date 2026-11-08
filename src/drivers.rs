@@ -273,13 +273,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reset_support_matches_the_registry() {
+    fn every_driver_agrees_with_its_registry_entry() {
+        use crate::provider_registry::{BankedResets, descriptor};
         for kind in ProviderKind::ALL {
+            let descriptor = descriptor(kind);
+            let copy = settings_copy(kind);
+            let keeps_secrets = copy.manual_credential || copy.credential != Credential::Login;
             assert_eq!(
                 driver(kind).consume_reset.is_some(),
-                crate::provider_registry::descriptor(kind).banked_resets
-                    != crate::provider_registry::BankedResets::Unsupported,
-                "{kind:?}"
+                descriptor.banked_resets != BankedResets::Unsupported,
+                "{kind:?} reset support"
+            );
+            // Removing an instance must be able to delete what it stored.
+            assert_eq!(
+                driver(kind).forget_secrets.is_some(),
+                keeps_secrets,
+                "{kind:?} secrets"
+            );
+            // Several instances need an isolating folder or credential.
+            assert!(
+                !descriptor.supports_multiple_instances
+                    || descriptor.config_folder
+                    || keeps_secrets,
+                "{kind:?} instances"
+            );
+            assert_eq!(
+                descriptor.config_folder,
+                !copy.config_env.is_empty(),
+                "{kind:?} config folder"
             );
         }
     }

@@ -376,12 +376,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn korean_summary_uses_its_catalog_tag() {
+    fn summaries_use_their_catalog_tags() {
         assert_eq!(locale_tag(Language::Korean), "ko-KR");
-    }
-
-    #[test]
-    fn turkish_summary_uses_its_catalog_tag() {
         assert_eq!(locale_tag(Language::Turkish), "tr");
     }
 

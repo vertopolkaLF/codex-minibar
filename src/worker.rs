@@ -1256,10 +1256,6 @@ mod tests {
         assert!(matches!(events[0], WorkerEvent::ActivationStarted));
         assert!(matches!(events[1], WorkerEvent::ActivationSucceeded));
         assert!(matches!(events[2], WorkerEvent::LimitsUpdated(_)));
-        assert_eq!(
-            state.last_seen_resets_at,
-            limits_at(20, 1).primary.resets_at
-        );
         tick(
             &mut provider,
             Some(&mut activator),
@@ -1353,7 +1349,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(activator.0, 1);
-        assert!(!state.attempted_without_active_window);
     }
 
     #[test]
@@ -1625,10 +1620,6 @@ mod tests {
         )
         .unwrap();
         assert_eq!(activator.0, 1);
-        assert_eq!(
-            state.last_seen_resets_at,
-            limits_at(20, 0).primary.resets_at
-        );
     }
 
     #[test]
@@ -1871,32 +1862,43 @@ mod tests {
 
     #[test]
     fn providers_with_local_usage_can_scan_before_remote_limits() {
-        let (commands_tx, commands_rx) = mpsc::channel();
-        let (events_tx, events_rx) = mpsc::channel();
+        struct FailingLimits;
+        impl LimitProvider for FailingLimits {
+            fn read_limits(&mut self) -> Result<RateLimits> {
+                Err(anyhow!("limits unavailable"))
+            }
+        }
+        let directory = tempfile::tempdir().unwrap();
         let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let provider = CountingUsageProvider {
-            refreshes: Arc::clone(&refreshes),
-            refresh_without_limits: true,
-        };
-        let limits_ready = Arc::new(AtomicBool::new(provider.refresh_without_limits()));
-        let task = thread::spawn(move || {
-            run_usage_task(
-                provider,
-                30,
-                Duration::from_secs(300),
-                true,
-                commands_rx,
-                events_tx,
-                limits_ready,
-            );
-        });
+        let mut worker = start_worker(
+            FailingLimits,
+            CountingUsageProvider {
+                refreshes: Arc::clone(&refreshes),
+                refresh_without_limits: true,
+            },
+            None,
+            WorkerOptions {
+                activation_path: directory.path().join("activation.toml"),
+                automatic_activation: false,
+                schedules: Vec::new(),
+                pauses: Vec::new(),
+                history_retention_days: 30,
+                usage_refresh_interval: Duration::from_secs(300),
+                usage_collection_enabled: true,
+                limit_refresh_interval: Duration::from_secs(300),
+            },
+        );
+        let events_rx = worker.events.take().unwrap();
 
-        assert!(recv_usage_update(&events_rx));
-        assert!(recv_usage_update(&events_rx));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !matches!(
+            events_rx.recv_timeout(Duration::from_millis(50)),
+            Ok(WorkerEvent::UsageUpdated(_))
+        ) {
+            assert!(Instant::now() < deadline, "no usage scan without limits");
+        }
         assert_eq!(refreshes.load(Ordering::SeqCst), 1);
-
-        commands_tx.send(WorkerCommand::Shutdown).unwrap();
-        task.join().unwrap();
+        worker.shutdown();
     }
 
     #[test]

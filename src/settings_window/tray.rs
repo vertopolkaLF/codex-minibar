@@ -342,8 +342,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn previews_encode_as_png() {
+    fn previews_encode_only_square_rgba_icons() {
         let pixels = vec![255_u8; 32 * 32 * 4];
         assert!(encode_png(&pixels).is_some_and(|png| png.starts_with(&[0x89, b'P', b'N', b'G'])));
+        assert!(encode_png(&[]).is_none());
+        assert!(encode_png(&vec![255_u8; 32 * 16 * 4]).is_none());
     }
 }

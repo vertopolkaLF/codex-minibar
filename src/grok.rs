@@ -405,41 +405,35 @@ mod tests {
     }
 
     #[test]
-    fn expired_session_uses_the_owner_cli_result_once() {
-        let initial = test_credentials("2000-01-01T00:00:00Z");
-        let mut calls = 0;
-        let refreshed = recover_stale_credentials(initial, || {
-            calls += 1;
-            Ok(test_credentials("2099-01-01T00:00:00Z"))
-        })
-        .unwrap();
-        assert_eq!(calls, 1);
-        assert!(!session_is_stale(refreshed.expires_at));
-    }
-
-    #[test]
-    fn fresh_session_does_not_start_the_owner_cli() {
-        let initial = test_credentials("2099-01-01T00:00:00Z");
-        let mut calls = 0;
-        recover_stale_credentials(initial, || {
-            calls += 1;
-            Ok(test_credentials("2099-01-01T00:00:00Z"))
-        })
-        .unwrap();
-        assert_eq!(calls, 0);
-    }
-
-    #[test]
-    fn still_expired_owner_result_keeps_the_manual_login_message() {
-        let error = recover_stale_credentials(test_credentials("2000-01-01T00:00:00Z"), || {
-            Ok(test_credentials("2000-01-01T00:00:00Z"))
-        })
-        .err()
-        .expect("stale refreshed credentials should fail");
-        assert_eq!(
-            error.to_string(),
-            "Grok session expired; run `grok login` to refresh it"
-        );
+    fn stale_session_asks_the_owner_cli_once_and_only_when_needed() {
+        const PAST: &str = "2000-01-01T00:00:00Z";
+        const FUTURE: &str = "2099-01-01T00:00:00Z";
+        // (initial expiry, owner CLI result expiry, expected CLI calls, recovers)
+        for (initial, refreshed, expected_calls, recovers) in [
+            (FUTURE, FUTURE, 0, true),
+            (PAST, FUTURE, 1, true),
+            (PAST, PAST, 1, false),
+        ] {
+            let mut calls = 0;
+            let result = recover_stale_credentials(test_credentials(initial), || {
+                calls += 1;
+                Ok(test_credentials(refreshed))
+            });
+            assert_eq!(calls, expected_calls, "{initial} -> {refreshed}");
+            match result {
+                Ok(credentials) => {
+                    assert!(recovers);
+                    assert!(!session_is_stale(credentials.expires_at));
+                }
+                Err(error) => {
+                    assert!(!recovers);
+                    assert_eq!(
+                        error.to_string(),
+                        "Grok session expired; run `grok login` to refresh it"
+                    );
+                }
+            }
+        }
     }
 
     fn test_credentials(expiry: &str) -> GrokCredentials {

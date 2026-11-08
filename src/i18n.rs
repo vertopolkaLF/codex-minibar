@@ -774,17 +774,6 @@ mod tests {
     }
 
     #[test]
-    fn traditional_chinese_display_languages_do_not_use_simplified_chinese() {
-        for tag in ["zh-TW", "zh_HK.UTF-8", "zh-MO", "zh-Hant", "ZH-hant-TW"] {
-            assert_eq!(
-                language_from_tag(tag),
-                Language::TraditionalChinese,
-                "{tag}"
-            );
-        }
-    }
-
-    #[test]
     fn windows_display_language_preserves_chinese_script() {
         for langid in [0x0404, 0x0c04, 0x1404, 0x7c04] {
             assert_eq!(
@@ -819,6 +808,11 @@ mod tests {
             ("zh-Hans", Language::SimplifiedChinese),
             ("zh-Hans-HK", Language::SimplifiedChinese),
             ("zh-Hant-CN", Language::TraditionalChinese),
+            ("zh-TW", Language::TraditionalChinese),
+            ("zh_HK.UTF-8", Language::TraditionalChinese),
+            ("zh-MO", Language::TraditionalChinese),
+            ("zh-Hant", Language::TraditionalChinese),
+            ("ZH-hant-TW", Language::TraditionalChinese),
             ("ru_RU", Language::Russian),
             ("ja-JP", Language::Japanese),
             ("ja_JP.UTF-8", Language::Japanese),

@@ -560,21 +560,15 @@ mod tests {
                 dpi,
                 ..monitor(rect(40, 0, 1920, 1032))
             };
+            let width = |two_columns| super::floating_host_rect(monitor, 0, 0, two_columns).width();
+            assert!(width(true) > width(false));
             for (x, y) in [(-8000, -3000), (8000, 3000), (1900, 1000), (700, 300)] {
                 for two_columns in [false, true] {
                     let host = super::floating_host_rect(monitor, x, y, two_columns);
                     assert_eq!(host.left + crate::popup::EDGE_MARGIN_PX, x);
                     assert_eq!(host.top, y);
-                    let width = if two_columns {
-                        crate::popup::POPUP_WIDE_WIDTH
-                    } else {
-                        crate::popup::POPUP_WIDTH
-                    };
-                    assert_eq!(
-                        host.width(),
-                        (f64::from(width) * monitor.scale()).round() as i32
-                            + crate::popup::EDGE_MARGIN_PX
-                    );
+                    // Edges never squeeze the panel.
+                    assert_eq!(host.width(), width(two_columns));
                 }
             }
         }

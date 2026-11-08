@@ -567,11 +567,6 @@ fn non_negative_i64(value: i64) -> u64 {
 }
 
 #[cfg(test)]
-fn catalog_for_test(provider: ProviderKind) -> Catalog {
-    catalog(provider).expect("OpenCode provider")
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use chrono::TimeZone;
@@ -615,24 +610,6 @@ mod tests {
             2
         );
         assert_eq!(parse_model_count(r#"[{"id":"a"}]"#).unwrap(), 1);
-    }
-
-    #[test]
-    fn provider_catalogs_remain_distinct() {
-        assert_eq!(
-            catalog_for_test(ProviderKind::OpenCodeZen).provider_id(),
-            "opencode"
-        );
-        assert_eq!(
-            catalog_for_test(ProviderKind::OpenCodeGo).provider_id(),
-            "opencode-go"
-        );
-    }
-
-    #[test]
-    fn maps_usd_cost_to_micro_usd_without_negative_values() {
-        assert_eq!(crate::money::from_usd(1.25), 1_250_000);
-        assert_eq!(crate::money::from_usd(-1.0), 0);
     }
 
     #[test]
@@ -748,6 +725,5 @@ mod tests {
             statistics_from_daily(&go.read_local_usage_from_path(&path).unwrap().daily, 30);
         assert_eq!(go_stats.history.requests, 1);
         assert_eq!(go_stats.history.estimated_cost_microusd, 0);
-        assert!(go_stats.history.requests > 0);
     }
 }

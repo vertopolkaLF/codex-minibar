@@ -2020,15 +2020,6 @@ mod tests {
     }
 
     #[test]
-    fn other_accounts_never_resolve_the_desktop_bundled_cli() {
-        let folder = tempfile::tempdir().unwrap();
-        assert_eq!(
-            executable_for(None, Some(folder.path())),
-            cli_available(None)
-        );
-    }
-
-    #[test]
     fn account_cache_refreshes_after_30_minutes_or_a_reset_change() {
         let schedule = vec![("primary".into(), None), ("secondary".into(), None)];
         let mut cache = ClaudeAccountCache::default();

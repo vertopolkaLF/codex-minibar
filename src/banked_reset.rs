@@ -217,17 +217,30 @@ mod tests {
             Ok(Outcome::Reset)
         })
         .unwrap();
-        assert!(attempt.pending.is_none());
+        // A settled claim starts the next one fresh.
+        redeem_attempt(&mut attempt, "c".into(), |key, grant| {
+            assert_ne!(key, first);
+            assert_eq!(grant, "c");
+            Ok(Outcome::Reset)
+        })
+        .unwrap();
     }
     #[test]
     fn settled_failure_clears_attempt() {
         let mut attempt = Attempt::default();
+        let mut first = String::new();
         assert!(
-            redeem_attempt(&mut attempt, "a".into(), |_, _| Err(settled(
-                "reset-cooldown"
-            )))
+            redeem_attempt(&mut attempt, "a".into(), |key, _| {
+                first = key.into();
+                Err(settled("reset-cooldown"))
+            })
             .is_err()
         );
-        assert!(attempt.pending.is_none());
+        redeem_attempt(&mut attempt, "b".into(), |key, grant| {
+            assert_ne!(key, first);
+            assert_eq!(grant, "b");
+            Ok(Outcome::Reset)
+        })
+        .unwrap();
     }
 }

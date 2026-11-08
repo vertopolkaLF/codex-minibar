@@ -23,18 +23,22 @@ fn every_sidebar_icon_is_embedded() {
 }
 
 #[test]
-fn provider_pages_are_keyed_by_instance() {
+fn page_keys_are_unique_per_tab_and_instance() {
     let work = crate::instances::ProviderId::new(ProviderKind::Claude, "claude-work");
-    assert_eq!(
-        Page::Provider(work).key(),
-        "settings-page-provider-claude-work"
-    );
-    assert_ne!(
-        Page::Provider(work).key(),
-        Page::Provider(ProviderKind::Claude.into()).key()
-    );
-    assert_eq!(Page::NoProviders.key(), "settings-page-no-providers");
-    assert_eq!(Page::Root(Tab::Popup).key(), "settings-page-customize");
+    let pages = Tab::ALL
+        .map(Page::Root)
+        .into_iter()
+        .chain([
+            Page::Provider(work),
+            Page::Provider(ProviderKind::Claude.into()),
+            Page::NoProviders,
+        ])
+        .collect::<Vec<_>>();
+    let keys = pages
+        .iter()
+        .map(|page| page.key())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(keys.len(), pages.len());
 }
 
 fn instances(mask: u32, extra_claude: bool) -> Vec<ProviderInstance> {

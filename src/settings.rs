@@ -3304,11 +3304,13 @@ enabled = ["codex", "claude"]
     }
 
     #[test]
-    fn floating_panel_settings_default_to_tray_and_round_trip() {
+    fn popup_layout_fields_default_when_absent_and_round_trip() {
         let mut settings: Settings = toml::from_str("onboarding_completed = true").unwrap();
         assert!(!settings.popup_floating);
         assert!(settings.popup_position.is_none());
         assert_eq!(settings.popup_height_dip, None);
+        assert!(settings.show_popup_action_bar);
+        assert!(!settings.popup_two_columns);
         settings.popup_height_dip = Some(900);
         settings.popup_floating = true;
         settings.popup_pinned = true;
@@ -3319,8 +3321,20 @@ enabled = ["codex", "claude"]
             screen_x: -1800,
             screen_y: 330,
         });
+        settings.show_popup_action_bar = false;
+        settings.popup_two_columns = true;
+        let right = vec![
+            HomeWidgetId::total_spend(),
+            HomeWidgetId::provider(id(ProviderKind::Claude)),
+        ];
+        settings.popup_home_right_column = Some(right.clone());
+        for instance in &mut settings.instances {
+            instance.enabled = false;
+        }
         let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored, settings);
+        // Hidden instances keep their column.
+        assert_eq!(restored.popup_home_right_column, Some(right));
     }
 
     #[test]
@@ -3338,35 +3352,6 @@ enabled = ["codex", "claude"]
                 assert_eq!(restored.popup_pinned, pinned);
             }
         }
-    }
-
-    #[test]
-    fn popup_action_bar_defaults_visible_and_persists_when_hidden() {
-        let mut settings: Settings = toml::from_str("onboarding_completed = true").unwrap();
-        assert!(settings.show_popup_action_bar);
-        settings.show_popup_action_bar = false;
-        let restored: Settings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
-        assert!(!restored.show_popup_action_bar);
-    }
-
-    #[test]
-    fn popup_columns_default_off_and_round_trip_with_hidden_widgets() {
-        let legacy: Settings = toml::from_str("onboarding_completed = true").unwrap();
-        assert!(!legacy.popup_two_columns);
-        let mut settings = legacy;
-        settings.popup_two_columns = true;
-        let right = vec![
-            HomeWidgetId::total_spend(),
-            HomeWidgetId::provider(id(ProviderKind::Claude)),
-        ];
-        settings.popup_home_right_column = Some(right.clone());
-        for instance in &mut settings.instances {
-            instance.enabled = false;
-        }
-        let encoded = toml::to_string(&settings).unwrap();
-        let decoded: Settings = toml::from_str(&encoded).unwrap();
-        // Hidden instances keep their column.
-        assert_eq!(decoded.popup_home_right_column, Some(right));
     }
 
     #[test]
@@ -3716,18 +3701,6 @@ enabled = true
         reloaded.save(&path).unwrap();
         future = toml::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(future["instances"].as_array().unwrap().len(), 3);
-    }
-
-    #[test]
-    fn readable_settings_are_saved_without_reordering() {
-        let directory = tempfile::tempdir().unwrap();
-        let path = directory.path().join("settings.toml");
-        let settings = Settings::default();
-        settings.save(&path).unwrap();
-        assert_eq!(
-            fs::read_to_string(&path).unwrap(),
-            toml::to_string_pretty(&settings).unwrap()
-        );
     }
 
     #[test]

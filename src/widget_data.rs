@@ -359,6 +359,82 @@ mod tests {
     const CODEX: ProviderId = ProviderId::primary(ProviderKind::Codex);
 
     #[test]
+    fn displayed_percent_shows_left_or_used_and_clamps_overruns() {
+        for (used, value, expected) in [
+            (Some(30), LimitValue::Remaining, Some(70)),
+            (Some(30), LimitValue::Used, Some(30)),
+            (Some(130), LimitValue::Remaining, Some(0)),
+            (Some(130), LimitValue::Used, Some(100)),
+            (None, LimitValue::Remaining, None),
+            (None, LimitValue::Used, None),
+        ] {
+            let window = LimitWindow {
+                used_percent: used,
+                ..Default::default()
+            };
+            assert_eq!(
+                displayed_percent(&window, value),
+                expected,
+                "{used:?} {value:?}"
+            );
+        }
+        assert_eq!(percent_text(Some(42)), "42%");
+        assert_eq!(percent_text(None), NO_VALUE);
+    }
+
+    #[test]
+    fn indicator_colors_follow_each_mode_and_status_thresholds() {
+        let palette = IndicatorPalette {
+            critical: [1, 0, 0],
+            warning: [2, 0, 0],
+            healthy: [3, 0, 0],
+            text: [4, 0, 0],
+            accent: [5, 0, 0],
+        };
+        let tint = [6, 0, 0];
+        let indicator = |color_mode| TrayIndicator {
+            color_mode,
+            fixed_color: crate::settings::TrayFixedColor {
+                red: 7,
+                green: 8,
+                blue: 9,
+            },
+            ..TrayIndicator::new(CODEX, "codex.session")
+        };
+        let status = indicator(TrayColorMode::Status);
+        for (remaining, expected) in [
+            (Some(0), ([1, 0, 0], true)),
+            (Some(15), ([1, 0, 0], true)),
+            (Some(16), ([2, 0, 0], true)),
+            (Some(50), ([2, 0, 0], true)),
+            (Some(51), ([3, 0, 0], true)),
+            (Some(100), ([3, 0, 0], true)),
+            (None, ([4, 0, 0], false)),
+        ] {
+            assert_eq!(
+                palette.color(&status, remaining, tint),
+                expected,
+                "{remaining:?}"
+            );
+        }
+        // Every other mode ignores how much is left.
+        for remaining in [Some(5), Some(90), None] {
+            for (mode, expected) in [
+                (TrayColorMode::Fixed, ([7, 8, 9], true)),
+                (TrayColorMode::Provider, (tint, true)),
+                (TrayColorMode::Accent, ([5, 0, 0], true)),
+                (TrayColorMode::Monochrome, ([4, 0, 0], false)),
+            ] {
+                assert_eq!(
+                    palette.color(&indicator(mode), remaining, tint),
+                    expected,
+                    "{mode:?} {remaining:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn instances_have_independent_metric_identities() {
         let work = ProviderId::new(ProviderKind::Claude, "claude-work");
         let primary = ProviderId::primary(ProviderKind::Claude);

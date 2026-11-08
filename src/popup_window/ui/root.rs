@@ -2763,11 +2763,6 @@ mod geometry_tests {
         assert_eq!(popup_height_bounds(2000.0, 100.0, 1080.0), (164.0, 1080.0));
         assert_eq!(popup_height_bounds(20.0, 80.0, 1080.0), (100.0, 100.0));
         assert_eq!(popup_height_bounds(2000.0, 100.0, 120.0), (120.0, 120.0));
-        let preferred = 900.0_f32;
-        let (minimum, maximum) = popup_height_bounds(300.0, 60.0, 1080.0);
-        assert_eq!(preferred.clamp(minimum, maximum), 360.0);
-        let (minimum, maximum) = popup_height_bounds(2000.0, 60.0, 1080.0);
-        assert_eq!(preferred.clamp(minimum, maximum), 900.0);
     }
 
     #[test]

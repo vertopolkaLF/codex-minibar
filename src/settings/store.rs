@@ -269,6 +269,19 @@ mod tests {
     }
 
     #[test]
+    fn a_toggle_lands_as_shown_even_when_the_commit_already_has_it() {
+        let before = Settings::default();
+        let mut window = before.clone();
+        window.popup_two_columns = !window.popup_two_columns;
+        let patch = Patch::between(&before, &window).unwrap();
+        // Another surface already committed the same toggle; re-running the
+        // edit would flip it back, the patch must not.
+        let mut committed = window.clone();
+        patch.apply(&mut committed).unwrap();
+        assert_eq!(committed.popup_two_columns, window.popup_two_columns);
+    }
+
+    #[test]
     fn a_panicking_job_reports_an_error_and_keeps_the_writer_alive() {
         let (reply, outcome) = mpsc::channel::<Result<()>>();
         submit(move || {

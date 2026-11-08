@@ -433,13 +433,33 @@ mod tests {
     }
 
     #[test]
-    fn activates_when_reset_moves_to_a_new_window() {
-        let mut state = ActivationState::default();
-        state.observe(&window_at(at(15, 0)), false, Utc::now());
-        assert_eq!(
-            state.decide(&window_at(at(15, 5)), false, Utc::now()),
-            Decision::ActivateNow
-        );
+    fn only_a_real_reset_advance_activates() {
+        let precise = |second, nanosecond| {
+            Utc.with_ymd_and_hms(2026, 7, 10, 15, 0, second)
+                .unwrap()
+                .with_nanosecond(nanosecond)
+                .unwrap()
+        };
+        let cases = [
+            ("new window", at(15, 0), at(15, 5), Decision::ActivateNow),
+            ("unchanged", at(15, 0), at(15, 0), Decision::Skip),
+            ("one-minute rounding", at(15, 0), at(15, 1), Decision::Skip),
+            (
+                "sub-minute jitter",
+                precise(42, 824_588_000),
+                precise(59, 965_796_000),
+                Decision::Skip,
+            ),
+        ];
+        for (name, previous, current, expected) in cases {
+            let mut state = ActivationState::default();
+            state.observe(&window_at(previous), false, Utc::now());
+            assert_eq!(
+                state.decide(&window_at(current), false, Utc::now()),
+                expected,
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -470,7 +490,10 @@ mod tests {
         state.observe(&primary, true, second_sample);
 
         assert!(!state.awaits_unactivated_confirmation());
-        assert_eq!(state.stable_unactivated_candidate_reset, Some(fixed_reset));
+        assert_eq!(
+            state.decide(&primary, true, second_sample + Duration::seconds(30)),
+            Decision::Skip
+        );
     }
 
     #[test]
@@ -586,16 +609,6 @@ mod tests {
     }
 
     #[test]
-    fn persisted_failed_attempt_does_not_block_after_restart() {
-        let sampled_at = at(15, 0);
-        let mut state = ActivationState::default();
-        state.record_attempt(sampled_at);
-        let restored: ActivationState =
-            toml::from_str(&toml::to_string(&state).expect("serialize")).expect("reload");
-        assert!(!restored.recently_attempted(sampled_at + Duration::minutes(1)));
-    }
-
-    #[test]
     fn weekly_placeholder_does_not_trigger_activation() {
         let sampled_at = at(15, 0);
         let primary = LimitWindow {
@@ -609,46 +622,6 @@ mod tests {
     }
 
     #[test]
-    fn skips_sub_minute_reset_jitter() {
-        let mut state = ActivationState::default();
-        let initial = Utc
-            .with_ymd_and_hms(2026, 7, 10, 15, 0, 42)
-            .unwrap()
-            .with_nanosecond(824_588_000)
-            .unwrap();
-        let jittered = Utc
-            .with_ymd_and_hms(2026, 7, 10, 15, 0, 59)
-            .unwrap()
-            .with_nanosecond(965_796_000)
-            .unwrap();
-        state.observe(&window_at(initial), false, Utc::now());
-        assert_eq!(
-            state.decide(&window_at(jittered), false, Utc::now()),
-            Decision::Skip
-        );
-    }
-
-    #[test]
-    fn skips_a_one_minute_rounding_boundary() {
-        let mut state = ActivationState::default();
-        state.observe(&window_at(at(15, 0)), false, Utc::now());
-        assert_eq!(
-            state.decide(&window_at(at(15, 1)), false, Utc::now()),
-            Decision::Skip
-        );
-    }
-
-    #[test]
-    fn skips_when_resets_at_is_unchanged() {
-        let mut state = ActivationState::default();
-        state.observe(&window_at(at(15, 0)), false, Utc::now());
-        assert_eq!(
-            state.decide(&window_at(at(15, 0)), false, Utc::now()),
-            Decision::Skip
-        );
-    }
-
-    #[test]
     fn reset_appearing_after_activation_attempt_is_confirmation() {
         let mut state = ActivationState::default();
         state.observe(&window_at(at(15, 0)), false, Utc::now());
@@ -659,8 +632,16 @@ mod tests {
             Decision::Skip
         );
         state.observe(&window_at(at(20, 0)), false, Utc::now());
-        assert_eq!(state.last_seen_resets_at, Some(at(20, 0)));
-        assert!(!state.attempted_without_active_window);
+        // The confirmed deadline is the new baseline and the next real advance
+        // activates again.
+        assert_eq!(
+            state.decide(&window_at(at(20, 0)), false, Utc::now()),
+            Decision::Skip
+        );
+        assert_eq!(
+            state.decide(&window_at(at(23, 0)), false, Utc::now()),
+            Decision::ActivateNow
+        );
     }
 
     #[test]
@@ -673,13 +654,17 @@ mod tests {
             state.decide(&LimitWindow::default(), false, Utc::now()),
             Decision::Skip
         );
+        // An absent window keeps the previous baseline.
+        state.observe(&LimitWindow::default(), false, Utc::now());
+        assert_eq!(
+            state.decide(&window_at(at(20, 0)), false, Utc::now()),
+            Decision::ActivateNow
+        );
         state.record_attempt(at(10, 0));
         assert_eq!(
             state.decide(&LimitWindow::default(), false, Utc::now()),
             Decision::Skip
         );
-        state.observe(&LimitWindow::default(), false, Utc::now());
-        assert_eq!(state.last_seen_resets_at, Some(at(15, 0)));
     }
 
     #[test]
@@ -705,13 +690,13 @@ mod tests {
         state.record_attempt(at(10, 0));
         state.save(&path).unwrap();
         let restored = ActivationState::load_or_default(&path).unwrap();
+        assert_eq!(restored.last_seen_resets_at, Some(at(15, 0)));
+        assert_eq!(restored.last_attempt_at, Some(at(10, 0)));
+        assert!(restored.attempted_without_active_window);
         assert!(
-            !restored.attempted_this_process,
+            !restored.recently_attempted(at(10, 1)),
             "cooldown is process-local and must not survive restart"
         );
-        let mut persisted = state.clone();
-        persisted.attempted_this_process = false;
-        assert_eq!(restored, persisted);
     }
 
     #[test]

@@ -845,122 +845,257 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn free_plan_suppresses_weekly_notifications() {
-        let limits = RateLimits {
-            plan_type: Some("free".into()),
-            ..Default::default()
-        };
+    static DELIVERED: std::sync::Mutex<Vec<Notification>> = std::sync::Mutex::new(Vec::new());
+    static GAME_MODE: AtomicBool = AtomicBool::new(false);
+    static ENGAGED: AtomicBool = AtomicBool::new(false);
+    static HOST_FLAGS: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-        assert!(!can_notify_weekly(&limits));
-        assert!(can_notify_weekly(&RateLimits::default()));
+    /// Installs a recording host and serializes the tests that flip its flags.
+    fn test_host() -> std::sync::MutexGuard<'static, ()> {
+        install_host(Host {
+            deliver: |notification| DELIVERED.lock().unwrap().push(notification),
+            user_engaged: || ENGAGED.load(Ordering::SeqCst),
+            game_mode_active: || GAME_MODE.load(Ordering::SeqCst),
+            run_action: |_| {},
+        });
+        // The developer's own Do Not Disturb state must not decide the result.
+        set_follow_do_not_disturb(false);
+        let guard = HOST_FLAGS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        GAME_MODE.store(false, Ordering::SeqCst);
+        ENGAGED.store(false, Ordering::SeqCst);
+        guard
+    }
+
+    /// Limit notifications delivered for the tracker named `name`.
+    fn delivered_for(name: &str) -> Vec<(NotificationKind, LimitFocus, String)> {
+        DELIVERED
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|notification| notification.body.starts_with(name))
+            .filter_map(|notification| {
+                let alert = notification.limits.as_ref()?;
+                Some((notification.kind, alert.focus, notification.title.clone()))
+            })
+            .collect()
+    }
+
+    fn at(day: u32, hour: u32) -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 7, day, hour, 0, 0).unwrap()
+    }
+
+    fn secondary(used: u8, resets_at: DateTime<Utc>) -> LimitWindow {
+        LimitWindow {
+            used_percent: Some(used),
+            resets_at: Some(resets_at),
+            duration_minutes: Some(10_080),
+        }
     }
 
     #[test]
-    fn exhausted_weekly_suppresses_five_hour_reset_notifications() {
-        let limits = RateLimits {
-            secondary: LimitWindow {
-                used_percent: Some(100),
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-
-        assert!(!can_notify_five_hour_reset(&limits));
-        assert!(can_notify_five_hour_reset(&RateLimits::default()));
-        assert!(can_notify_five_hour_reset(&RateLimits {
-            secondary: LimitWindow {
-                used_percent: Some(99),
-                ..Default::default()
-            },
-            ..Default::default()
-        }));
-    }
-
-    #[test]
-    fn named_secondary_limit_is_used_in_low_usage_label() {
-        let limits = RateLimits {
-            secondary_limit_name: Some("Cursor Models".into()),
-            ..Default::default()
-        };
-
-        let metric = provider_registry::metric(ProviderKind::Cursor, "cursor.auto").unwrap();
-        assert_eq!(
-            secondary_limit_label(metric, &limits, "Cursor"),
-            "Cursor Models"
-        );
-    }
-
-    #[test]
-    fn unnamed_secondary_limit_keeps_weekly_fallback() {
-        assert_eq!(
-            secondary_limit_label(
-                provider_registry::metric(ProviderKind::Codex, "codex.weekly").unwrap(),
-                &RateLimits::default(),
-                "Codex"
+    fn quiet_hours_hold_back_only_unsolicited_cards() {
+        let _host = test_host();
+        let plain = || Notification::new(NotificationKind::Info, "plain", "quiet-hours-test");
+        let cases = [
+            ("no quiet hours", false, false, plain(), false),
+            ("game mode", true, false, plain(), true),
+            (
+                "game mode announcement",
+                true,
+                false,
+                plain().keyed(GAME_MODE_KEY),
+                false,
             ),
-            "Codex weekly"
+            (
+                "update the user started",
+                true,
+                false,
+                plain().with_progress(Progress::Indeterminate),
+                false,
+            ),
+            (
+                "finished update",
+                true,
+                false,
+                plain().keyed(UPDATE_COMPLETE_KEY),
+                false,
+            ),
+            ("popup or Settings open", true, true, plain(), false),
+        ];
+        for (name, game_mode, engaged, notification, expected) in cases {
+            GAME_MODE.store(game_mode, Ordering::SeqCst);
+            ENGAGED.store(engaged, Ordering::SeqCst);
+            assert_eq!(held_back(&notification), expected, "{name}");
+        }
+
+        GAME_MODE.store(true, Ordering::SeqCst);
+        ENGAGED.store(false, Ordering::SeqCst);
+        notify(Notification::new(
+            NotificationKind::Info,
+            "held",
+            "quiet-hours-notify",
+        ));
+        assert!(
+            !DELIVERED
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|notification| notification.body == "quiet-hours-notify")
         );
     }
 
     #[test]
-    fn reset_requires_the_previous_deadline_to_have_elapsed() {
+    fn free_plan_suppresses_weekly_reset_and_low_usage_notifications() {
+        let _host = test_host();
+        let settings = NotificationSettings {
+            low_usage_enabled: false,
+            ..Default::default()
+        };
+        for (name, plan) in [("weekly-free", Some("free")), ("weekly-paid", None)] {
+            let limits = |used, resets_at| RateLimits {
+                secondary: secondary(used, resets_at),
+                plan_type: plan.map(Into::into),
+                ..Default::default()
+            };
+            let mut tracker = LimitNotificationTracker::default();
+            tracker.named(name.into());
+            let provider = ProviderId::primary(ProviderKind::Codex);
+            tracker.observe_at(
+                &limits(50, at(14, 12)),
+                &settings,
+                provider,
+                at(14, 11),
+                false,
+            );
+            tracker.observe_at(
+                &limits(90, at(21, 12)),
+                &settings,
+                provider,
+                at(14, 12),
+                false,
+            );
+
+            let delivered = delivered_for(name)
+                .into_iter()
+                .map(|(kind, focus, _)| (kind, focus))
+                .collect::<Vec<_>>();
+            let expected = if plan.is_some() {
+                Vec::new()
+            } else {
+                vec![
+                    (NotificationKind::Reset, LimitFocus::Secondary),
+                    (NotificationKind::Warning, LimitFocus::Secondary),
+                ]
+            };
+            assert_eq!(delivered, expected, "{name}");
+        }
+    }
+
+    #[test]
+    fn weekly_low_usage_title_names_the_window() {
+        let _host = test_host();
+        let settings = NotificationSettings::default();
+        let cases = [
+            (
+                "label-cursor",
+                ProviderKind::Cursor,
+                Some("Cursor Models"),
+                "Cursor Models",
+            ),
+            (
+                "label-codex",
+                ProviderKind::Codex,
+                None,
+                "label-codex weekly",
+            ),
+        ];
+        for (name, kind, limit_name, expected) in cases {
+            let limits = |used| RateLimits {
+                secondary: secondary(used, at(21, 12)),
+                secondary_limit_name: limit_name.map(Into::into),
+                ..Default::default()
+            };
+            let mut tracker = LimitNotificationTracker::default();
+            tracker.named(name.into());
+            let provider = ProviderId::primary(kind);
+            tracker.observe_at(&limits(50), &settings, provider, at(14, 12), false);
+            tracker.observe_at(&limits(90), &settings, provider, at(14, 13), false);
+
+            let delivered = delivered_for(name);
+            assert_eq!(delivered.len(), 1, "{name}");
+            let (kind, focus, title) = &delivered[0];
+            assert_eq!(
+                (*kind, *focus),
+                (NotificationKind::Warning, LimitFocus::Secondary)
+            );
+            assert!(title.contains(expected), "{name}: {title}");
+        }
+    }
+
+    #[test]
+    fn reset_needs_an_elapsed_deadline_and_a_real_advance() {
         let previous = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
         let next = Utc.with_ymd_and_hms(2026, 7, 14, 17, 0, 0).unwrap();
-
-        assert!(!reset_has_occurred(
-            Some(previous),
-            Some(next),
-            previous - chrono::Duration::seconds(1)
-        ));
-        assert!(reset_has_occurred(Some(previous), Some(next), previous));
-        assert!(!reset_has_occurred(
-            Some(previous),
-            Some(previous),
-            previous
-        ));
-        assert!(!reset_has_occurred(None, Some(next), previous));
-    }
-
-    #[test]
-    fn reset_rejects_a_new_deadline_that_is_already_stale() {
-        let previous = Utc.with_ymd_and_hms(2026, 7, 14, 12, 0, 0).unwrap();
-        let stale_replacement = Utc.with_ymd_and_hms(2026, 7, 14, 17, 0, 0).unwrap();
-        let now = Utc.with_ymd_and_hms(2026, 7, 14, 18, 0, 0).unwrap();
-
-        assert!(!reset_has_occurred(
-            Some(previous),
-            Some(stale_replacement),
-            now,
-        ));
-    }
-
-    #[test]
-    fn reset_ignores_sub_minute_deadline_corrections_after_expiry() {
-        let previous = Utc
+        let precise = Utc
             .with_ymd_and_hms(2026, 7, 14, 12, 0, 2)
             .unwrap()
             .with_nanosecond(100_000_000)
             .unwrap();
-        let corrected = previous.with_nanosecond(900_000_000).unwrap();
-
-        assert!(!reset_has_occurred(
-            Some(previous),
-            Some(corrected),
-            previous + chrono::Duration::minutes(1),
-        ));
-    }
-
-    #[test]
-    fn reset_ignores_a_one_minute_rounding_boundary() {
-        let previous = Utc.with_ymd_and_hms(2026, 7, 14, 12, 59, 0).unwrap();
-        let rounded = Utc.with_ymd_and_hms(2026, 7, 14, 13, 0, 0).unwrap();
-
-        assert!(!reset_has_occurred(
-            Some(previous),
-            Some(rounded),
-            previous + chrono::Duration::minutes(1),
-        ));
+        let minute = chrono::Duration::minutes(1);
+        let cases = [
+            (
+                "before the old deadline",
+                Some(previous),
+                Some(next),
+                previous - chrono::Duration::seconds(1),
+                false,
+            ),
+            (
+                "at the old deadline",
+                Some(previous),
+                Some(next),
+                previous,
+                true,
+            ),
+            (
+                "unchanged deadline",
+                Some(previous),
+                Some(previous),
+                previous,
+                false,
+            ),
+            ("deadline appears late", None, Some(next), previous, false),
+            (
+                "stale replacement",
+                Some(previous),
+                Some(next),
+                next + chrono::Duration::hours(1),
+                false,
+            ),
+            (
+                "sub-minute correction",
+                Some(precise),
+                Some(precise.with_nanosecond(900_000_000).unwrap()),
+                precise + minute,
+                false,
+            ),
+            (
+                "one-minute rounding",
+                Some(previous - minute),
+                Some(previous),
+                previous,
+                false,
+            ),
+        ];
+        for (name, previous, current, now, expected) in cases {
+            assert_eq!(
+                reset_has_occurred(previous, current, now),
+                expected,
+                "{name}"
+            );
+        }
     }
 
     #[test]
@@ -1070,7 +1205,9 @@ mod tests {
             },
             ..Default::default()
         };
+        let _host = test_host();
         let mut tracker = LimitNotificationTracker::default();
+        tracker.named("startup-low".into());
 
         tracker.observe_at(
             &initial,
@@ -1087,15 +1224,7 @@ mod tests {
             false,
         );
 
-        assert!(tracker.low_usage_notified_primary.is_none());
-    }
-
-    #[test]
-    fn startup_low_usage_suppression_only_applies_while_still_low() {
-        assert!(suppress_startup_low_usage(Some(true), Some(20), 20));
-        assert!(!suppress_startup_low_usage(Some(true), Some(21), 20));
-        assert!(!suppress_startup_low_usage(Some(false), Some(20), 20));
-        assert!(!suppress_startup_low_usage(None, Some(20), 20));
+        assert!(delivered_for("startup-low").is_empty());
     }
 
     #[test]

@@ -465,43 +465,47 @@ mod tests {
     }
 
     #[test]
-    fn due_only_inside_the_lead_window() {
+    fn due_only_for_a_used_quota_with_a_credit_inside_the_lead_window() {
         let now = Utc::now();
-        let lead = AutoResetLead::Minutes30;
-        assert!(due(
-            &limits(40, chrono::Duration::minutes(20), now),
-            lead,
-            now
-        ));
-        assert!(!due(
-            &limits(40, chrono::Duration::minutes(45), now),
-            lead,
-            now
-        ));
-        assert!(!due(
-            &limits(40, chrono::Duration::minutes(-1), now),
-            lead,
-            now
-        ));
-        assert!(due(
-            &limits(40, chrono::Duration::hours(20), now),
-            AutoResetLead::Hours24,
-            now
-        ));
-    }
-
-    #[test]
-    fn untouched_quota_or_no_credit_is_never_due() {
-        let now = Utc::now();
-        let lead = AutoResetLead::Hour1;
-        assert!(!due(
-            &limits(0, chrono::Duration::minutes(5), now),
-            lead,
-            now
-        ));
-        let mut spent = limits(40, chrono::Duration::minutes(5), now);
+        let minutes = chrono::Duration::minutes;
+        let mut spent = limits(40, minutes(5), now);
         spent.reset_credits.as_mut().unwrap().available_count = 0;
-        assert!(!due(&spent, lead, now));
+        let cases = [
+            (
+                "inside the lead",
+                limits(40, minutes(20), now),
+                AutoResetLead::Minutes30,
+                true,
+            ),
+            (
+                "before the lead",
+                limits(40, minutes(45), now),
+                AutoResetLead::Minutes30,
+                false,
+            ),
+            (
+                "credit expired",
+                limits(40, minutes(-1), now),
+                AutoResetLead::Minutes30,
+                false,
+            ),
+            (
+                "long lead",
+                limits(40, chrono::Duration::hours(20), now),
+                AutoResetLead::Hours24,
+                true,
+            ),
+            (
+                "untouched quota",
+                limits(0, minutes(5), now),
+                AutoResetLead::Hour1,
+                false,
+            ),
+            ("no credit left", spent, AutoResetLead::Hour1, false),
+        ];
+        for (name, limits, lead, expected) in cases {
+            assert_eq!(due(&limits, lead, now), expected, "{name}");
+        }
     }
 
     #[test]

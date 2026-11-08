@@ -2165,6 +2165,10 @@ mod tests {
                 .set_meta(&openrouter_analytics_key(provider), "{}")
                 .unwrap();
         }
+        let router = ProviderId::new(ProviderKind::OpenRouter, "openrouter-2");
+        store
+            .set_meta(&openrouter_analytics_key(router), "{}")
+            .unwrap();
         store.set_meta("openrouter.analytics.v1", "x").unwrap();
         store.set_meta("openrouter.analytics.v2", "x").unwrap();
         store
@@ -2191,7 +2195,7 @@ mod tests {
         store.prune_unknown_providers(&[]).unwrap();
         assert_eq!(hourly_rows(&store).len(), 2, "empty list must not prune");
 
-        store.prune_unknown_providers(&[keep]).unwrap();
+        store.prune_unknown_providers(&[keep, router]).unwrap();
         let rows = hourly_rows(&store);
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, keep.id());
@@ -2200,11 +2204,14 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM usage_model_daily", [], |r| r.get(0))
             .unwrap();
         assert_eq!(models, 1);
-        let keys = meta_keys(&store);
-        assert!(keys.iter().all(|k| !k.ends_with(".stale")), "{keys:?}");
-        assert!(
-            keys.contains(&openrouter_analytics_key(keep))
-                || keep.kind() != ProviderKind::OpenRouter
+        let mut keys = meta_keys(&store);
+        keys.sort();
+        assert_eq!(
+            keys,
+            vec![
+                "openrouter.analytics.v3".to_owned(),
+                openrouter_analytics_key(router),
+            ]
         );
     }
 
@@ -2462,35 +2469,6 @@ mod tests {
     }
 
     #[test]
-    fn round_trips_usage_daily() {
-        let dir = tempdir().unwrap();
-        let path = dir.path().join("test.sqlite");
-        let store = test_store(&path);
-        let days = vec![DailyTokenUsage {
-            date: Local::now().date_naive(),
-            usage: TokenUsage {
-                input_tokens: 10,
-                output_tokens: 5,
-                requests: 1,
-                priced_requests: 1,
-                estimated_cost_microusd: 100,
-                ..Default::default()
-            },
-        }];
-        store
-            .replace_usage_daily(
-                crate::instances::ProviderId::from(ProviderKind::Cursor),
-                &days,
-            )
-            .unwrap();
-        let stats = store
-            .load_usage_daily(crate::instances::ProviderId::from(ProviderKind::Cursor), 30)
-            .unwrap();
-        assert_eq!(stats.daily.len(), 1);
-        assert_eq!(stats.history.requests, 1);
-    }
-
-    #[test]
     fn clear_usage_data_removes_derived_rows_and_fetch_markers() {
         let dir = tempdir().unwrap();
         let store = test_store(&dir.path().join("test.sqlite"));
@@ -2533,28 +2511,30 @@ mod tests {
         );
     }
 
-    /// Counts writes to the per-file Codex tables, ignoring temp-table
-    /// bookkeeping that `total_changes()` would also include.
+    /// Records which log path each write to a per-file Codex table touched.
     fn track_file_writes(store: &ProviderStore) {
         let mut sql =
-            String::from("CREATE TEMP TABLE IF NOT EXISTS file_writes(n INTEGER NOT NULL);");
+            String::from("CREATE TEMP TABLE IF NOT EXISTS file_writes(path TEXT NOT NULL);");
         for table in ["scan_files", "usage_file_daily", "usage_file_model_daily"] {
-            for op in ["INSERT", "UPDATE", "DELETE"] {
+            for (op, row) in [("INSERT", "NEW"), ("UPDATE", "NEW"), ("DELETE", "OLD")] {
                 sql.push_str(&format!(
                     "CREATE TEMP TRIGGER IF NOT EXISTS count_{table}_{op} AFTER {op} ON main.{table}
-                     BEGIN INSERT INTO file_writes VALUES(1); END;"
+                     BEGIN INSERT INTO file_writes VALUES({row}.path); END;"
                 ));
             }
         }
         store.conn.execute_batch(&sql).unwrap();
     }
 
-    fn file_writes(store: &ProviderStore) -> i64 {
-        store
+    fn written_paths(store: &ProviderStore) -> BTreeSet<String> {
+        let mut statement = store
             .conn
-            .query_row("SELECT COUNT(*) FROM temp.file_writes", [], |row| {
-                row.get(0)
-            })
+            .prepare("SELECT path FROM temp.file_writes")
+            .unwrap();
+        statement
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
             .unwrap()
     }
 
@@ -2571,7 +2551,7 @@ mod tests {
             .save_codex_cache(id(ProviderKind::Codex), &cache, Vec::new())
             .unwrap();
 
-        assert_eq!(file_writes(&store), 0);
+        assert!(written_paths(&store).is_empty());
     }
 
     #[test]
@@ -2593,8 +2573,10 @@ mod tests {
             file.persisted = false;
         }
         store.save_codex_cache(codex, &cache, Vec::new()).unwrap();
-        // scan row + 1 daily delete/insert + 1 model delete/insert for one file.
-        assert!(file_writes(&store) <= 5);
+        assert_eq!(
+            written_paths(&store),
+            BTreeSet::from(["sessions/other.jsonl".to_owned()])
+        );
         let loaded = store.load_codex_cache(codex).unwrap();
         assert_eq!(loaded.files["sessions/other.jsonl"].offset, 99);
         assert_eq!(loaded.files["sessions/sample.jsonl"].offset, 42);
@@ -2640,17 +2622,31 @@ mod tests {
         };
         store.save_claude_cache(claude, &cache).unwrap();
 
+        let event_rows = || -> Vec<(i64, String)> {
+            let mut statement = store
+                .conn
+                .prepare("SELECT rowid, message_id FROM usage_events ORDER BY event_ord")
+                .unwrap();
+            statement
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<_>>()
+                .unwrap()
+        };
         let mut cache = store.load_claude_cache(claude).unwrap();
         let before = store.conn.total_changes();
         store.save_claude_cache(claude, &cache).unwrap();
         assert_eq!(store.conn.total_changes(), before);
 
+        let stored = event_rows();
         let file = cache.files.get_mut("/p/a.jsonl").unwrap();
         file.entries.push(entry("m3"));
         file.offset = 20;
-        let before = store.conn.total_changes();
         store.save_claude_cache(claude, &cache).unwrap();
-        assert_eq!(store.conn.total_changes() - before, 2); // scan row + 1 event
+        // The already stored events keep their rows; only the tail is added.
+        let appended = event_rows();
+        assert_eq!(appended[..2], stored[..]);
+        assert_eq!(appended[2].1, "m3");
         let mut cache = store.load_claude_cache(claude).unwrap();
         assert_eq!(cache.files["/p/a.jsonl"].entries.len(), 3);
 

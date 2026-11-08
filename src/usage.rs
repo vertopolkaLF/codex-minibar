@@ -1348,6 +1348,7 @@ fn collect_claude_session_files(roots: &[PathBuf]) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
 
     #[test]
     fn reads_per_request_token_usage() {
@@ -1360,17 +1361,6 @@ mod tests {
         assert_eq!(usage.total_tokens(), 16);
         assert_eq!(usage.requests, 1);
         assert_eq!(usage.priced_requests, 0);
-    }
-
-    #[test]
-    fn ignores_non_usage_events() {
-        assert!(
-            ingest_codex_line(
-                r#"{"type":"event_msg","payload":{"type":"task_started"}}"#,
-                &mut CachedSessionFile::default(),
-            )
-            .is_none()
-        );
     }
 
     #[test]
@@ -1661,11 +1651,73 @@ mod tests {
     }
 
     #[test]
-    fn skips_token_count_before_model_is_known() {
-        let mut cached = CachedSessionFile::default();
-        assert!(
-            ingest_codex_line(&token_count(10, 1, "2026-08-01T05:00:00.000Z"), &mut cached)
-                .is_none()
+    fn ignores_lines_that_are_not_a_priced_codex_request() {
+        let no_model = token_count(10, 1, "2026-08-01T05:00:00.000Z");
+        for line in [
+            r#"{"type":"event_msg","payload":{"type":"task_started"}}"#,
+            no_model.as_str(),
+        ] {
+            assert!(
+                ingest_codex_line(line, &mut CachedSessionFile::default()).is_none(),
+                "{line}"
+            );
+        }
+    }
+
+    #[test]
+    fn rollup_splits_events_by_hour_day_model_and_project() {
+        let now = Local.with_ymd_and_hms(2026, 8, 10, 12, 30, 0).unwrap();
+        let today = now.date_naive();
+        let old_day = today - Duration::days(5);
+        let tokens = |input_tokens| TokenUsage {
+            input_tokens,
+            requests: 1,
+            ..Default::default()
+        };
+        let mut builder = RollupBuilder::new(now);
+        builder.add(
+            now - Duration::minutes(25),
+            &tokens(1),
+            Some("a"),
+            Some("p"),
+        );
+        builder.add(
+            now + Duration::minutes(15),
+            &tokens(2),
+            Some("a"),
+            Some("p"),
+        );
+        builder.add(now - Duration::days(5), &tokens(4), Some("a"), None);
+        builder.add_on(today, &tokens(8), None, Some("q"));
+        let rollup = builder.finish();
+
+        let hour = Local.with_ymd_and_hms(2026, 8, 10, 12, 0, 0).unwrap();
+        let hourly = rollup
+            .hourly
+            .iter()
+            .map(|(at, usage)| (*at, usage.input_tokens))
+            .collect::<Vec<_>>();
+        // The five-day-old event is outside the hourly window; dated-only
+        // events never have an hour.
+        assert_eq!(hourly, vec![(hour, 3)]);
+        let daily = rollup
+            .daily
+            .iter()
+            .map(|day| (day.date, day.usage.input_tokens, day.usage.requests))
+            .collect::<Vec<_>>();
+        assert_eq!(daily, vec![(old_day, 4, 1), (today, 11, 3)]);
+        let keyed = |rows: &[(String, NaiveDate, TokenUsage)]| {
+            rows.iter()
+                .map(|(key, date, usage)| (key.clone(), *date, usage.input_tokens))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            keyed(&rollup.models),
+            vec![("a".into(), old_day, 4), ("a".into(), today, 3)]
+        );
+        assert_eq!(
+            keyed(&rollup.projects),
+            vec![("p".into(), today, 3), ("q".into(), today, 8)]
         );
     }
 

@@ -1215,47 +1215,37 @@ mod tests {
     }
 
     #[test]
-    fn cursor_grok_bot_maps_to_the_catalog_brick() {
-        assert_eq!(
-            additional_limit_brick_id(ProviderKind::Cursor, "cursor-grok-bot"),
-            "cursor.grokBot"
-        );
-        assert!(
-            catalog_brick_ids(ProviderKind::Cursor)
-                .iter()
-                .any(|id| id == "cursor.grokBot")
-        );
-        assert_eq!(
-            discovered_additional_brick_labels(
+    fn known_additional_limits_map_to_their_catalog_bricks() {
+        let cases = [
+            (ProviderKind::Cursor, "cursor-grok-bot", "cursor.grokBot"),
+            (
                 ProviderKind::Cursor,
-                &RateLimits {
-                    additional_limits: vec![crate::limits::AdditionalLimit {
-                        id: "cursor-grok-bot".into(),
-                        title: "Grok Bot".into(),
-                        window: LimitWindow {
-                            used_percent: Some(1),
-                            ..Default::default()
-                        },
-                    }],
-                    ..Default::default()
-                }
-            )
-            .len(),
-            0
-        );
-    }
-
-    #[test]
-    fn cursor_all_models_maps_to_the_catalog_brick() {
-        assert_eq!(
-            additional_limit_brick_id(ProviderKind::Cursor, "cursor-all-models"),
-            "cursor.allModels"
-        );
-        assert!(
-            catalog_brick_ids(ProviderKind::Cursor)
-                .iter()
-                .any(|id| id == "cursor.allModels")
-        );
+                "cursor-all-models",
+                "cursor.allModels",
+            ),
+            (ProviderKind::OpenCodeGo, "monthly", "opencode-go.monthly"),
+            (ProviderKind::Codex, "gpt-reserve", "codex.lunaReserve"),
+        ];
+        for (provider, source_id, brick) in cases {
+            assert_eq!(additional_limit_brick_id(provider, source_id), brick);
+            assert!(catalog_brick_ids(provider).iter().any(|id| id == brick));
+            // A catalog lane is never offered again as a discovered one.
+            let limits = RateLimits {
+                additional_limits: vec![crate::limits::AdditionalLimit {
+                    id: source_id.into(),
+                    title: "Live title".into(),
+                    window: LimitWindow {
+                        used_percent: Some(1),
+                        ..Default::default()
+                    },
+                }],
+                ..Default::default()
+            };
+            assert!(
+                discovered_additional_brick_labels(provider, &limits).is_empty(),
+                "{brick}"
+            );
+        }
     }
 
     #[test]
@@ -1304,24 +1294,6 @@ mod tests {
             settings_brick_label(ProviderKind::Claude, &extra_id, &labels),
             "Runtime Lane"
         );
-        assert_eq!(
-            discovered_additional_brick_labels(
-                ProviderKind::OpenCodeGo,
-                &RateLimits {
-                    additional_limits: vec![crate::limits::AdditionalLimit {
-                        id: "monthly".into(),
-                        title: "Monthly".into(),
-                        window: LimitWindow {
-                            used_percent: Some(4),
-                            ..Default::default()
-                        },
-                    }],
-                    ..Default::default()
-                }
-            )
-            .len(),
-            0
-        );
     }
 
     #[test]
@@ -1360,9 +1332,5 @@ mod tests {
         assert_eq!(weekly_label, crate::limits::LUNA_RESERVE_TITLE);
         assert_eq!(session_window.used_percent, Some(12));
         assert_eq!(weekly_window.used_percent, Some(12));
-        assert_eq!(
-            additional_limit_brick_id(ProviderKind::Codex, "gpt-reserve"),
-            "codex.lunaReserve"
-        );
     }
 }

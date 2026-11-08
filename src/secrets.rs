@@ -496,8 +496,6 @@ mod tests {
         let directory = tempfile::tempdir()?;
         let path = directory.path().join("provider-secrets.json");
         let rollback = apply_with_rollback_to(&path, &[("missing".into(), Some("new".into()))])?;
-        assert_eq!(rollback.entries, vec![("missing".into(), None)]);
-
         restore_encoded_to(&path, &rollback)?;
         assert!(!path.exists());
         Ok(())

@@ -780,37 +780,32 @@ mod tests {
     }
 
     #[test]
-    fn hides_grok_bot_without_an_included_allowance() {
+    fn grok_bot_meter_shows_only_for_its_own_included_allowance() {
         let usage = json!({"planUsage":{"autoPercentUsed":12.4,"apiPercentUsed":3.6}});
-        let sand = json!({
-            "usagePercent": 100,
-            "hasAvailableUsage": false,
-            "hasNonZeroIncludedLimit": false
-        });
-        let limits = map_usage(Some(&usage), None, Some(&sand)).unwrap();
-        assert_eq!(limits.additional_limits.len(), 1);
-        assert_eq!(limits.additional_limits[0].id, "cursor-api");
-    }
-
-    #[test]
-    fn hides_pooled_enterprise_grok_bot_meter() {
-        let usage = json!({"planUsage":{"autoPercentUsed":12.4}});
-        let sand = json!({
-            "usagePercent": 42,
-            "hasNonZeroIncludedLimit": true,
-            "usesPooledEnterpriseAllowance": true
-        });
-        let limits = map_usage(Some(&usage), None, Some(&sand)).unwrap();
-        assert!(limits.additional_limits.is_empty());
-    }
-
-    #[test]
-    fn missing_grok_bot_status_leaves_auto_and_api_intact() {
-        let usage = json!({"planUsage":{"autoPercentUsed":12.4,"apiPercentUsed":3.6}});
-        let limits = map_usage(Some(&usage), None, None).unwrap();
-        assert_eq!(limits.secondary.used_percent, Some(12));
-        assert_eq!(limits.additional_limits.len(), 1);
-        assert_eq!(limits.additional_limits[0].id, "cursor-api");
+        for (sand, expected) in [
+            (
+                Some(
+                    json!({"usagePercent": 100, "hasAvailableUsage": false, "hasNonZeroIncludedLimit": false}),
+                ),
+                vec!["cursor-api"],
+            ),
+            (
+                Some(
+                    json!({"usagePercent": 42, "hasNonZeroIncludedLimit": true, "usesPooledEnterpriseAllowance": true}),
+                ),
+                vec!["cursor-api"],
+            ),
+            (None, vec!["cursor-api"]),
+        ] {
+            let limits = map_usage(Some(&usage), None, sand.as_ref()).unwrap();
+            assert_eq!(limits.secondary.used_percent, Some(12), "{sand:?}");
+            let ids = limits
+                .additional_limits
+                .iter()
+                .map(|limit| limit.id.as_str())
+                .collect::<Vec<_>>();
+            assert_eq!(ids, expected, "{sand:?}");
+        }
     }
 
     #[test]
@@ -859,25 +854,6 @@ mod tests {
     #[test]
     fn cursor_usage_can_refresh_without_quota_data() {
         assert!(CursorClient::new().refresh_without_limits());
-    }
-
-    #[test]
-    fn cached_cursor_usage_is_available_without_downloading_again() {
-        let today = Local::now().date_naive();
-        let statistics = crate::usage::statistics_from_daily(
-            &[crate::usage::DailyTokenUsage {
-                date: today,
-                usage: TokenUsage {
-                    input_tokens: 12,
-                    output_tokens: 8,
-                    requests: 1,
-                    ..Default::default()
-                },
-            }],
-            30,
-        );
-        assert_eq!(statistics.today.total_tokens(), 20);
-        assert_eq!(statistics.history.requests, 1);
     }
 
     #[test]

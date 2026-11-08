@@ -585,7 +585,6 @@ mod tests {
         in_app.observe(sample(at(23, 18), 0, 0, at(30, 18), None));
 
         for track in [counted, in_app] {
-            assert_eq!(track.banked_uses.len(), 1);
             assert_eq!(received_at(&reset, &track, alone(&reset)), None);
         }
     }
@@ -639,10 +638,12 @@ mod tests {
     fn stale_and_replayed_samples_are_ignored_and_other_logins_restart_history() {
         let mut track = track([sample(at(23, 16), 40, 60, at(27, 12), None)]);
         assert!(!track.observe(sample(at(23, 15), 0, 0, at(30, 15), None)));
-        let mut other = sample(at(23, 18), 0, 0, at(30, 18), None);
+        // On the same login this drop would be a reset.
+        let mut other = sample(at(23, 18), 5, 5, at(30, 18), None);
         other.account = Some("grace".into());
         assert!(track.observe(other));
-        assert!(track.unscheduled_resets.is_empty());
+        let reset = forced(at(23, 17));
+        assert_eq!(received_at(&reset, &track, alone(&reset)), None);
     }
 
     #[test]
@@ -678,7 +679,6 @@ mod tests {
         let after = sample(at(23, 18), 0, 0, at(30, 18), Some(0));
         let track = track([before, after]);
 
-        assert!(track.banked_uses.is_empty());
         let reset = forced(at(23, 17));
         assert_eq!(received_at(&reset, &track, alone(&reset)), Some(at(23, 18)));
     }
