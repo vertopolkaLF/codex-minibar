@@ -115,7 +115,8 @@ jobs:
             pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev \
             libvulkan-dev libfontconfig-dev libfreetype-dev libdbus-1-dev \
-            libssl-dev libzstd-dev patchelf rpm
+            libssl-dev libzstd-dev patchelf rpm \
+            mesa-vulkan-drivers libvulkan1
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -131,6 +132,18 @@ jobs:
 
       - name: Build tarball, .deb, .rpm and AppImage
         run: ./build-linux.sh
+
+      # Updaters up to 1.5.x look for the old "-linux-x64" names. The release
+      # step uploads the renamed AppImage last, so the AppImage catalog (which
+      # picks the newest upload of AppImages that differ only in the name)
+      # tests that one. Drop these copies once 1.5.x installs have updated.
+      - name: Add copies under the old names
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          cd "dist/$VERSION"
+          cp "codex-minibar-$VERSION-x86_64.AppImage" "codex-minibar-$VERSION-linux-x64.AppImage"
+          cp "codex-minibar-$VERSION-x86_64.tar.gz" "codex-minibar-$VERSION-linux-x64.tar.gz"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
@@ -222,6 +235,14 @@ jobs:
           }
           Write-Host "Assets:"
           $assets | ForEach-Object { Write-Host "  $_" }
+          # The AppImage catalog tests the AppImage uploaded last, so the
+          # current one goes up after everything else, including the copy
+          # under its old name.
+          $appImage = @($assets | Where-Object { $_.EndsWith("-x86_64.AppImage") })
+          $assets = @($assets | Where-Object { -not $_.EndsWith("-x86_64.AppImage") })
+          if ($appImage.Count -ne 1) {
+            throw "Expected one x86_64 AppImage, found $($appImage.Count)"
+          }
 
           $existing = gh release view $tag --json isDraft 2>$null
           if ($LASTEXITCODE -eq 0 -and $existing) {
@@ -240,4 +261,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               throw "gh release create failed with exit code $LASTEXITCODE"
             }
+          }
+          gh release upload $tag @appImage --clobber
+          if ($LASTEXITCODE -ne 0) {
+            throw "gh release upload of the AppImage failed with exit code $LASTEXITCODE"
           }

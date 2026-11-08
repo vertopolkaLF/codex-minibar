@@ -112,7 +112,8 @@ jobs:
             pkg-config libxkbcommon-dev libxkbcommon-x11-dev libwayland-dev \
             libx11-dev libx11-xcb-dev libxcb1-dev libxcb-xkb-dev \
             libvulkan-dev libfontconfig-dev libfreetype-dev libdbus-1-dev \
-            libssl-dev libzstd-dev patchelf rpm
+            libssl-dev libzstd-dev patchelf rpm \
+            mesa-vulkan-drivers libvulkan1
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.95.0

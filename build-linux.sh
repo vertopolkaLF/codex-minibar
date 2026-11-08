@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # Builds the Linux release packages into dist/<version>/:
-#   codex-minibar-<version>-linux-<arch>.tar.gz  (binary, desktop entry, icons)
+#   codex-minibar-<version>-<arch>.tar.gz        (binary, desktop entry, icons)
 #   codex-minibar_<version>_<debarch>.deb        (Debian/Ubuntu package)
-#   codex-minibar-<version>-<rpmrelease>.<rpmarch>.rpm (Fedora/openSUSE package)
-#   codex-minibar-<version>-linux-<arch>.AppImage (portable, x64 only)
+#   codex-minibar-<version>-<rpmrelease>.<arch>.rpm (Fedora/openSUSE package)
+#   codex-minibar-<version>-<arch>.AppImage      (portable, x86_64 only)
 #   PKGBUILD                                     (Arch User Repository, for the tarball)
+# <arch> is `uname -m` (x86_64, aarch64). Every package is for Linux, so no
+# name says "linux".
 #
 # Usage: ./build-linux.sh [--skip-build]
 # Honors CARGO_TARGET_DIR for the release binary, including --skip-build.
-# Requires: cargo; dpkg-deb for the .deb; rpmbuild for the .rpm; patchelf and
-# curl for the AppImage.
+# Requires: cargo; dpkg-deb for the .deb; rpmbuild for the .rpm; patchelf,
+# curl and Mesa's lavapipe with the Vulkan loader (mesa-vulkan-drivers,
+# libvulkan1) for the AppImage.
 # A missing packaging tool skips its package, except in CI, where it fails.
 #
 # An AppImage runs on systems at least as new as the one that built it (glibc
@@ -37,8 +40,8 @@ cd "$root"
 
 version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
 case "$(uname -m)" in
-    x86_64) arch=x64 debarch=amd64 rpmarch=x86_64 ;;
-    aarch64) arch=arm64 debarch=arm64 rpmarch=aarch64 ;;
+    x86_64) arch=x86_64 debarch=amd64 ;;
+    aarch64) arch=aarch64 debarch=arm64 ;;
     *) echo "unsupported architecture: $(uname -m)" >&2; exit 1 ;;
 esac
 
@@ -92,7 +95,7 @@ install_tree() {
 tar_root="$stage/codex-minibar-$version"
 install_tree "$tar_root"
 install -m755 packaging/linux/install.sh "$tar_root/install.sh"
-tarball="$dist/codex-minibar-$version-linux-$arch.tar.gz"
+tarball="$dist/codex-minibar-$version-$arch.tar.gz"
 tar -C "$stage" -czf "$tarball" "codex-minibar-$version"
 echo "Built $tarball"
 
@@ -172,12 +175,12 @@ cp -a "$rpm_root/." "%{buildroot}/"
 /usr/share/gnome-shell/extensions/codex-minibar@vertopolkalf.github.io
 /usr/share/plasma/plasmoids/io.github.vertopolkalf.codexminibar
 SPEC
-    rpmbuild --quiet -bb --target "$rpmarch" \
+    rpmbuild --quiet -bb --target "$arch" \
         --define "_topdir $topdir" \
         --define "_build_id_links none" \
         "$topdir/SPECS/codex-minibar.spec" >/dev/null
-    local rpm="$dist/codex-minibar-$version-1.$rpmarch.rpm"
-    cp "$topdir/RPMS/$rpmarch/codex-minibar-$version-1.$rpmarch.rpm" "$rpm"
+    local rpm="$dist/codex-minibar-$version-1.$arch.rpm"
+    cp "$topdir/RPMS/$arch/codex-minibar-$version-1.$arch.rpm" "$rpm"
     echo "Built $rpm"
 }
 
@@ -213,34 +216,85 @@ fetch_tool() {
 # fontconfig are loaded at runtime, so they stay on the host too.
 appimage_host_libraries='^(ld-linux-x86-64|libc|libm|libdl|libpthread|librt|libresolv|libgcc_s|libstdc\+\+|libz|libxcb|libXau|libXdmcp|libbsd|libmd)\.so'
 
+# Copies the libraries an ELF file links (all of them, transitively) into a
+# directory, except the host's, and makes them find each other there.
+bundle_libraries() {
+    local elf="$1" dir="$2"
+    if ldd "$elf" | grep -q 'not found'; then
+        ldd "$elf" >&2
+        exit 1
+    fi
+    mkdir -p "$dir"
+    local library path
+    while read -r library path; do
+        if [[ "$library" =~ $appimage_host_libraries ]] || [ -e "$dir/$library" ]; then
+            continue
+        fi
+        cp -L "$path" "$dir/$library"
+        chmod 755 "$dir/$library"
+        patchelf --set-rpath '$ORIGIN' "$dir/$library"
+    done < <(ldd "$elf" | awk '$2 == "=>" { print $1, $3 }')
+}
+
+# Mesa's lavapipe, a CPU Vulkan driver, with the Vulkan loader and their
+# libraries, in usr/lib/lavapipe. GPUI cannot start without a Vulkan device;
+# on hosts that have none (virtual machines, missing drivers, headless test
+# machines) the app points the loader at this driver at startup
+# (src/platform/linux/vulkan.rs). The directory is not on the binary's rpath,
+# so the host's loader and drivers are used whenever they work.
+bundle_lavapipe() {
+    local dir="$1/usr/lib/lavapipe"
+    local manifest="" driver loader candidate
+    # Older Mesa names the manifest per architecture; newer Mesa shares one.
+    for candidate in /usr/share/vulkan/icd.d/lvp_icd.x86_64.json \
+        /usr/share/vulkan/icd.d/lvp_icd.json; do
+        if [ -f "$candidate" ]; then
+            manifest="$candidate"
+            break
+        fi
+    done
+    loader="$(/sbin/ldconfig -p | awk '/libvulkan\.so\.1 \(libc6,x86-64\)/ { print $NF; exit }')"
+    if [ -z "$manifest" ] || [ -z "$loader" ]; then
+        skip_package "lavapipe or the Vulkan loader not found (mesa-vulkan-drivers, libvulkan1); the AppImage has no software Vulkan fallback"
+        return
+    fi
+    driver="$(sed -n 's/.*"library_path": *"\([^"]*\)".*/\1/p' "$manifest")"
+    # A bare soname (newer Mesa) is found through the linker cache.
+    case "$driver" in
+        /*) ;;
+        *) driver="$(/sbin/ldconfig -p | awk -v name="$driver" '$1 == name && /x86-64/ { print $NF; exit }')" ;;
+    esac
+    if [ ! -f "$driver" ]; then
+        skip_package "lavapipe manifest $manifest names a missing driver: $driver"
+        return
+    fi
+    bundle_libraries "$driver" "$dir"
+    cp -L "$driver" "$dir/libvulkan_lvp.so"
+    cp -L "$loader" "$dir/libvulkan.so.1"
+    chmod 755 "$dir/libvulkan_lvp.so" "$dir/libvulkan.so.1"
+    patchelf --set-rpath '$ORIGIN' "$dir/libvulkan_lvp.so"
+    # The loader resolves a relative library path against the manifest.
+    sed 's#"library_path": *"[^"]*"#"library_path": "./libvulkan_lvp.so"#' \
+        "$manifest" > "$dir/lvp_icd.json"
+    echo "Bundled lavapipe ($(du -sh "$dir" | cut -f1))"
+}
+
 build_appimage() {
     local appdir="$stage/CodexMinibar.AppDir"
     local tools="target/appimage-tools"
     local app_id="io.github.vertopolkalf.CodexMinibar"
-    local output="$dist/codex-minibar-$version-linux-$arch.AppImage"
+    local output="$dist/codex-minibar-$version-$arch.AppImage"
     mkdir -p "$tools"
     fetch_tool "$appimagetool_url" "$appimagetool_sha256" "$tools/appimagetool"
     fetch_tool "$appimage_runtime_url" "$appimage_runtime_sha256" "$tools/runtime"
     chmod 755 "$tools/appimagetool"
 
     install_tree "$appdir/usr"
-    mkdir -p "$appdir/usr/lib"
-    if ldd "$binary" | grep -q 'not found'; then
-        ldd "$binary" >&2
-        exit 1
-    fi
-    local library path
-    while read -r library path; do
-        if [[ "$library" =~ $appimage_host_libraries ]]; then
-            continue
-        fi
-        cp -L "$path" "$appdir/usr/lib/$library"
-        chmod 755 "$appdir/usr/lib/$library"
-        patchelf --set-rpath '$ORIGIN' "$appdir/usr/lib/$library"
-    done < <(ldd "$binary" | awk '$2 == "=>" { print $1, $3 }')
+    bundle_libraries "$binary" "$appdir/usr/lib"
     # An rpath instead of LD_LIBRARY_PATH: the app starts provider CLIs, and
     # those must not inherit these libraries.
     patchelf --set-rpath '$ORIGIN/../lib' "$appdir/usr/bin/codex-minibar"
+    bundle_lavapipe "$appdir"
 
     ln -s usr/bin/codex-minibar "$appdir/AppRun"
     cp "$appdir/usr/share/applications/$app_id.desktop" "$appdir/$app_id.desktop"
@@ -266,12 +320,12 @@ else
     skip_package "rpmbuild not found; skipping the .rpm"
 fi
 
-if [ "$arch" = x64 ]; then
+if [ "$arch" = x86_64 ]; then
     write_pkgbuild
 fi
 
-if [ "$arch" != x64 ]; then
-    echo "The AppImage is built for x64 only; skipping it" >&2
+if [ "$arch" != x86_64 ]; then
+    echo "The AppImage is built for x86_64 only; skipping it" >&2
 elif command -v patchelf >/dev/null 2>&1 && command -v curl >/dev/null 2>&1; then
     build_appimage
 else
