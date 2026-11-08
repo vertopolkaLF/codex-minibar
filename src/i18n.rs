@@ -45,6 +45,7 @@ struct Locale {
     /// Primary subtag of a system locale tag that selects this language.
     primary_subtag: &'static str,
     /// Windows primary language id that selects this language.
+    #[cfg_attr(not(windows), allow(dead_code))]
     primary_langid: u16,
     catalog: &'static str,
 }

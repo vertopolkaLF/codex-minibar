@@ -791,7 +791,7 @@ impl Bridge {
             match event {
                 TrayEvent::Activate(x, y) => {
                     if popup::just_dismissed_by_focus_loss()
-                        && !(popup::is_visible() && !popup::is_closing())
+                        && (!popup::is_visible() || popup::is_closing())
                     {
                         // The click that closed the popup by taking its focus.
                         continue;

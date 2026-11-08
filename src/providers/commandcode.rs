@@ -233,11 +233,6 @@ pub fn cli_available(explicit: Option<&Path>) -> Option<PathBuf> {
     .next()
 }
 
-#[cfg(not(windows))]
-fn npm_launchers() -> Vec<PathBuf> {
-    Vec::new() // Unix npm launchers are discovered on PATH.
-}
-
 fn auth_path() -> Option<PathBuf> {
     BaseDirs::new().map(|dirs| dirs.home_dir().join(".commandcode/auth.json"))
 }
