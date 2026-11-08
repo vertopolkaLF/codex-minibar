@@ -228,6 +228,38 @@ fn find_visuals(xcb: &XCBConnection, screen_index: usize) -> VisualSet {
     set
 }
 
+/// codex-minibar patch: whether a software Vulkan driver can present to this X
+/// server through shared-memory pixmaps. This mirrors Mesa's check (in
+/// `wsi_x11_connection_create`): DRI3, Present and MIT-SHM with shared
+/// pixmaps, and a `ShmDetach` of segment 0 that fails with anything but
+/// `BadRequest` (remote clients get `BadRequest`). Otherwise Mesa falls back
+/// to PutImage requests.
+fn has_shm_present(xcb: &XCBConnection) -> bool {
+    use x11rb::errors::ReplyError;
+    use x11rb::protocol::{ErrorKind, shm::ConnectionExt as _};
+
+    let extensions = [&b"DRI3"[..], b"Present", b"MIT-SHM"]
+        .into_iter()
+        .all(|name| {
+            xcb.query_extension(name)
+                .ok()
+                .and_then(|cookie| cookie.reply().ok())
+                .is_some_and(|reply| reply.present)
+        });
+    extensions
+        && xcb
+            .shm_query_version()
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|reply| reply.shared_pixmaps)
+        && xcb.shm_detach(0).ok().is_some_and(|cookie| {
+            matches!(
+                cookie.check(),
+                Err(ReplyError::X11Error(error)) if error.error_kind != ErrorKind::Request
+            )
+        })
+}
+
 struct RawWindow {
     connection: *mut c_void,
     screen_id: usize,
@@ -403,7 +435,11 @@ impl X11WindowState {
 
         let visual_set = find_visuals(xcb, x_screen_index);
 
+        // codex-minibar patch: see `set_x11_opaque_without_shm_present`.
+        let opaque_required =
+            super::super::x11_opaque_without_shm_present() && !has_shm_present(xcb);
         let visual = match visual_set.transparent {
+            Some(_) if opaque_required => visual_set.opaque.unwrap_or(visual_set.inherit),
             Some(visual) => visual,
             None => {
                 log::warn!("Unable to find a transparent visual",);
