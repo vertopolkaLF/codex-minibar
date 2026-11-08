@@ -253,7 +253,7 @@ bundle_lavapipe() {
             break
         fi
     done
-    loader="$(/sbin/ldconfig -p | awk '/libvulkan\.so\.1 \(libc6,x86-64\)/ { print $NF; exit }')"
+    loader="$(/sbin/ldconfig -p | awk '/libvulkan\.so\.1 \(libc6,x86-64\)/ && !found { print $NF; found = 1 }')"
     if [ -z "$manifest" ] || [ -z "$loader" ]; then
         skip_package "lavapipe or the Vulkan loader not found (mesa-vulkan-drivers, libvulkan1); the AppImage has no software Vulkan fallback"
         return
@@ -262,7 +262,7 @@ bundle_lavapipe() {
     # A bare soname (newer Mesa) is found through the linker cache.
     case "$driver" in
         /*) ;;
-        *) driver="$(/sbin/ldconfig -p | awk -v name="$driver" '$1 == name && /x86-64/ { print $NF; exit }')" ;;
+        *) driver="$(/sbin/ldconfig -p | awk -v name="$driver" '$1 == name && /x86-64/ && !found { print $NF; found = 1 }')" ;;
     esac
     if [ ! -f "$driver" ]; then
         skip_package "lavapipe manifest $manifest names a missing driver: $driver"

@@ -22,6 +22,10 @@ const MANIFEST: &str = "lvp_icd.json";
 const LOADER: &str = "libvulkan.so.1";
 /// Driver manifest variables: the current name and the one older loaders read.
 const DRIVER_VARIABLES: [&str; 2] = ["VK_DRIVER_FILES", "VK_ICD_FILENAMES"];
+/// The manifest the app chose itself. Processes it starts inherit the driver
+/// variables, including the relaunch after an update, whose AppImage has its
+/// own bundle: values that match this are dropped and the choice made anew.
+const FALLBACK_MARKER: &str = "CODEX_MINIBAR_VK_FALLBACK";
 
 static OUTCOME: OnceLock<String> = OnceLock::new();
 
@@ -31,6 +35,8 @@ static OUTCOME: OnceLock<String> = OnceLock::new();
 /// # Safety
 /// Must run before any other thread can read or write the environment.
 pub unsafe fn select_driver() {
+    // SAFETY: the caller guarantees the process is still single-threaded.
+    unsafe { forget_inherited_fallback() };
     let Some(bundle) = std::env::current_exe()
         .ok()
         .and_then(|exe| bundle_dir(&exe))
@@ -49,7 +55,7 @@ pub unsafe fn select_driver() {
         return;
     }
     let manifest = bundle.join(MANIFEST);
-    for name in DRIVER_VARIABLES {
+    for name in DRIVER_VARIABLES.into_iter().chain([FALLBACK_MARKER]) {
         // SAFETY: the caller guarantees the process is still single-threaded.
         unsafe { std::env::set_var(name, &manifest) };
     }
@@ -60,6 +66,29 @@ pub unsafe fn select_driver() {
     };
     eprintln!("Codex Minibar: {outcome}");
     let _ = OUTCOME.set(outcome.to_owned());
+}
+
+/// Drops driver variables a parent instance of the app set, keeping the
+/// user's own.
+///
+/// # Safety
+/// Must run before any other thread can read or write the environment.
+unsafe fn forget_inherited_fallback() {
+    let Some(marker) = std::env::var_os(FALLBACK_MARKER) else {
+        return;
+    };
+    for name in DRIVER_VARIABLES {
+        if set_by_app(&marker, std::env::var_os(name).as_deref()) {
+            // SAFETY: the caller guarantees the process is still single-threaded.
+            unsafe { std::env::remove_var(name) };
+        }
+    }
+    // SAFETY: as above.
+    unsafe { std::env::remove_var(FALLBACK_MARKER) };
+}
+
+fn set_by_app(marker: &OsStr, value: Option<&OsStr>) -> bool {
+    value == Some(marker)
 }
 
 /// Writes the startup decision to the log once the logger is up.
@@ -109,6 +138,17 @@ fn host_renders() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_driver_variables_the_app_set_are_forgotten() {
+        let marker = OsStr::new("/tmp/.mount_old/usr/lib/lavapipe/lvp_icd.json");
+        assert!(set_by_app(marker, Some(marker)));
+        assert!(!set_by_app(
+            marker,
+            Some(OsStr::new("/usr/share/vulkan/icd.d/my.json"))
+        ));
+        assert!(!set_by_app(marker, None));
+    }
 
     #[test]
     fn bundle_is_found_next_to_the_appimage_binary_only() {
