@@ -434,6 +434,8 @@ features = [
     "cursor",
     "resource_manager",
     "sync",
+    # codex-minibar patch: `has_shm_present` in x11/window.rs.
+    "shm",
 ]
 optional = true
 
