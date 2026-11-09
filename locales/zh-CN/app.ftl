@@ -193,6 +193,7 @@ refreshing-limits-and-usage = 正在刷新额度和用量…
 updated = 已更新{ " " }
 
 refresh-last-updated-relative = 刷新 · 上次更新于 { $relative }
+refresh-provider = 刷新 { $provider }
 
 # src/ui/popup_window/ui/footer.rs
 popup-pin = 置顶固定并保持打开

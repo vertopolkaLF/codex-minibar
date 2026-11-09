@@ -291,6 +291,7 @@ updated = Güncellendi{ " " }
 
 # src/ui/popup_window/ui/footer.rs
 refresh-last-updated-relative = Yenile | Son güncelleme: { $relative }
+refresh-provider = { $provider } yenile
 
 # src/ui/popup_window/ui/footer.rs
 popup-pin = Üste sabitle ve açık tut

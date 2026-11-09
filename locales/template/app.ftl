@@ -392,6 +392,7 @@ updated = { "" }
 # English source:
 # refresh-last-updated-relative = Refresh | Last updated { $relative }
 refresh-last-updated-relative = { "" }
+refresh-provider = { "" }
 
 # English source:
 # popup-pin = Pin on top and keep open

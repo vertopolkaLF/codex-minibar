@@ -291,6 +291,7 @@ updated = 업데이트됨{ " " }
 
 # src/ui/popup_window/ui/footer.rs
 refresh-last-updated-relative = 새로고침 | 마지막 업데이트: { $relative }
+refresh-provider = { $provider } 새로고침
 
 # src/ui/popup_window/ui/footer.rs
 popup-pin = 맨 위에 고정하고 열린 상태 유지

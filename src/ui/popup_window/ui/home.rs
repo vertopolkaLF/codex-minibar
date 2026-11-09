@@ -187,6 +187,11 @@ impl PopupRoot {
                         .flex()
                         .flex_col()
                         .gap(px(gap))
+                        // Names the provider for the popup's context menu.
+                        .on_mouse_down(
+                            gpui::MouseButton::Right,
+                            cx.listener(move |this, _, _, _| this.context_target = Some(provider)),
+                        )
                         .children(heading)
                         .child(
                             content.child(

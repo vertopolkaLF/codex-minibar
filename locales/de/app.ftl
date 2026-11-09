@@ -294,6 +294,7 @@ updated = Aktualisiert{ " " }
 
 # src/ui/popup_window/ui/footer.rs
 refresh-last-updated-relative = Aktualisieren · Zuletzt aktualisiert: { $relative }
+refresh-provider = { $provider } aktualisieren
 
 # src/ui/popup_window/ui/footer.rs
 popup-pin = Im Vordergrund anheften und offen halten

@@ -294,6 +294,7 @@ updated = Updated{ " " }
 
 # src/ui/popup_window/ui/footer.rs
 refresh-last-updated-relative = Refresh | Last updated { $relative }
+refresh-provider = Refresh { $provider }
 
 # src/ui/popup_window/ui/footer.rs
 popup-pin = Pin on top and keep open

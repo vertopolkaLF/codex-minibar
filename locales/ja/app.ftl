@@ -291,6 +291,7 @@ updated = 更新済み{ " " }
 
 # src/ui/popup_window/ui/footer.rs
 refresh-last-updated-relative = 更新 · 最終更新: { $relative }
+refresh-provider = { $provider } を更新
 
 # src/ui/popup_window/ui/footer.rs
 popup-pin = 最前面に固定して開いたままにする

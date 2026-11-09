@@ -289,6 +289,7 @@ updated = Обновлено{ " " }
 
 # src/ui/popup_window/ui/footer.rs
 refresh-last-updated-relative = Обновить | Последнее обновление: { $relative }
+refresh-provider = Обновить { $provider }
 
 # src/ui/popup_window/ui/footer.rs
 popup-pin = Закрепить поверх окон и не закрывать

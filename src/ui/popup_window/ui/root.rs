@@ -394,6 +394,11 @@ pub(crate) struct PopupRoot {
     pub(super) home_editing: bool,
     /// Window position of the right-click that opened the context menu.
     context_menu_at: Point<Pixels>,
+    /// Provider whose zone took the pending right-click, set by its card
+    /// section before the root listener opens the menu.
+    pub(super) context_target: Option<ProviderId>,
+    /// Provider the open context menu offers to refresh.
+    context_menu_provider: Option<ProviderId>,
     pub(super) widget_drag: Option<HomeWidgetId>,
     pub(super) widget_drop: Option<(HomeWidgetId, Option<usize>)>,
     pub(super) tab_drag: Option<PopupView>,
@@ -545,6 +550,8 @@ impl PopupRoot {
             usage_spinner_started: None,
             home_editing: false,
             context_menu_at: point(px(0.0), px(0.0)),
+            context_target: None,
+            context_menu_provider: None,
             widget_drag: None,
             widget_drop: None,
             tab_drag: None,
@@ -783,6 +790,7 @@ impl PopupRoot {
     }
 
     fn open_context_menu(&mut self, position: Point<Pixels>, window: &mut Window) {
+        let target = self.context_target.take();
         let (width, height) = self.capsule_size;
         let local = position - self.capsule_origin;
         let inside = (0.0..=width).contains(&f32::from(local.x))
@@ -791,6 +799,7 @@ impl PopupRoot {
             return;
         }
         self.context_menu_at = position;
+        self.context_menu_provider = target.or_else(|| self.page_provider(self.pager.current));
         self.tip = None;
         self.kit.menus.open(CONTEXT_MENU_ID.into(), window);
     }
@@ -806,7 +815,17 @@ impl PopupRoot {
         } else {
             "fluent-edit"
         };
-        vec![crate::ui::gui::kit::MenuItem::new(label).icon(icon)]
+        let mut items = vec![crate::ui::gui::kit::MenuItem::new(label).icon(icon)];
+        if let Some(provider) = self.context_menu_provider {
+            items.push(
+                crate::ui::gui::kit::MenuItem::new(crate::i18n::format(
+                    "refresh-provider",
+                    &[("provider", provider.qualified_name())],
+                ))
+                .icon("fluent-refresh"),
+            );
+        }
+        items
     }
 
     /// The right-click menu, kept inside the capsule (the native region
@@ -822,10 +841,14 @@ impl PopupRoot {
             items,
             CONTEXT_MENU_WIDTH,
             kit::handler(move |index, _, cx| {
-                if index == 0 {
-                    let _ =
-                        root.update(cx, |root, cx| root.set_home_editing(!root.home_editing, cx));
-                }
+                let _ = root.update(cx, |root, cx| match index {
+                    0 => root.set_home_editing(!root.home_editing, cx),
+                    _ => {
+                        if let Some(provider) = root.context_menu_provider {
+                            root.refresh_provider(provider, cx);
+                        }
+                    }
+                });
             }),
         )?;
         let (capsule_w, capsule_h) = self.capsule_size;
@@ -1963,7 +1986,17 @@ impl PopupRoot {
 
     pub(super) fn refresh(&mut self, cx: &mut Context<Self>) {
         self.keys.mark_stale();
-        if self.state.refresh_all() {
+        let requested = self.state.refresh_all();
+        self.mark_refreshing(requested, cx);
+    }
+
+    pub(super) fn refresh_provider(&mut self, provider: ProviderId, cx: &mut Context<Self>) {
+        let requested = self.state.refresh_provider(provider);
+        self.mark_refreshing(requested, cx);
+    }
+
+    fn mark_refreshing(&mut self, requested: bool, cx: &mut Context<Self>) {
+        if requested {
             let mut ui = (*self.ui).clone();
             ui.refreshing = true;
             self.ui = Rc::new(ui);

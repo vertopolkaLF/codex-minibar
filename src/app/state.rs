@@ -214,6 +214,14 @@ impl AppState {
         requested
     }
 
+    /// Asks `provider`'s worker to poll now. Returns whether it took it.
+    pub(crate) fn refresh_provider(&self, provider: ProviderId) -> bool {
+        self.worker_commands()
+            .into_iter()
+            .find(|(id, _)| *id == provider)
+            .is_some_and(|(_, commands)| commands.send(WorkerCommand::Refresh).is_ok())
+    }
+
     pub(crate) fn current_forced_resets(&self) -> Vec<AnnouncedReset> {
         self.forced_resets
             .lock()

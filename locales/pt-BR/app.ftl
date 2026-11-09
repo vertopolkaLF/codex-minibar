@@ -196,6 +196,7 @@ refreshing-limits-and-usage = Atualizando limites e uso…
 updated = Atualizado{ " " }
 
 refresh-last-updated-relative = Atualizar · Última atualização { $relative }
+refresh-provider = Atualizar { $provider }
 
 # src/ui/popup_window/ui/footer.rs
 popup-pin = Fixar no topo e manter aberto
