@@ -1493,11 +1493,7 @@ pub fn parse_usage_response(response: &str, sampled_at: DateTime<Utc>) -> Result
             if id == crate::providers::registry::CLAUDE_CLOUD_SESSION_CREDITS_LIMIT_ID
                 && let Some(credits) = &cloud_session_credits
             {
-                window.used_percent = Some(
-                    (credits.used_dollars / credits.limit_dollars * 100.0)
-                        .round()
-                        .clamp(0.0, 100.0) as u8,
-                );
+                window.used_percent = Some(credits.used_percent());
                 // Promotional credits expire; there is no recurring pace.
                 window.duration_minutes = None;
             }

@@ -498,6 +498,40 @@ fn codex_credits_display_whole_grouped_counts_without_changing_the_balance() {
 }
 
 #[test]
+fn granted_credit_amounts_render_as_a_progress_card() {
+    let mut limits = plan_limits("pro");
+    limits.credits.has_credits = true;
+    limits.credits.balance = Some("$12.03 / $25.00".into());
+    limits.cloud_session_credits = Some(crate::quota::limits::CloudSessionCredits {
+        limit_dollars: 25.0,
+        used_dollars: 12.97,
+        remaining_dollars: 12.03,
+        locked: false,
+    });
+    let cards = test_cards(
+        ProviderKind::Cursor,
+        true,
+        &limits,
+        &all_visible(),
+        PopupSurface::ProviderTab,
+        true,
+        true,
+        true,
+    );
+    assert!(
+        !cards
+            .iter()
+            .any(|card| matches!(card, Card::Credits { .. }))
+    );
+    assert!(cards.iter().any(|card| matches!(
+        card,
+        Card::CloudCredits { window, credits: Some(credits), .. }
+            if window.used_percent == Some(52) && credits.remaining_dollars == 12.03
+    )));
+    assert!(popup_sections(ProviderKind::Cursor, &limits, false).contains(&PopupSection::Credits));
+}
+
+#[test]
 fn provider_cards_include_each_additional_limit() {
     let mut limits = plan_limits("plus");
     limits

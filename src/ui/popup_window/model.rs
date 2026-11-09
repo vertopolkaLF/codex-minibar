@@ -89,11 +89,13 @@ pub(crate) enum Card<'a> {
     AnnouncedReset(AnnouncedResetRow<'a>),
     /// Ongoing incidents on the driver's public status page.
     ProviderIncidents(crate::providers::status::ProviderStatus),
-    /// Claude's promotional cloud-session credits: a dollar balance that
-    /// expires instead of resetting.
+    /// A granted dollar balance with a progress bar: Claude's promotional
+    /// cloud-session credits (which expire instead of resetting) or a credit
+    /// grant such as Cursor's.
     CloudCredits {
         key: String,
-        window: &'a LimitWindow,
+        title: &'static str,
+        window: std::borrow::Cow<'a, LimitWindow>,
         credits: Option<&'a crate::quota::limits::CloudSessionCredits>,
     },
     BankedResets {
@@ -339,7 +341,8 @@ pub(crate) fn provider_cards<'a>(
         {
             cards.push(Card::CloudCredits {
                 key: card_key(provider, &format!("additional-{}", limit.id)),
-                window: &limit.window,
+                title: crate::i18n::tr("cloud-session-credits"),
+                window: std::borrow::Cow::Borrowed(&limit.window),
                 credits: limits.cloud_session_credits.as_ref(),
             });
             continue;
@@ -389,7 +392,20 @@ pub(crate) fn provider_cards<'a>(
     if visible(&credits_brick_id(kind))
         && let Some(value) = credits_display_value(kind, limits)
     {
-        cards.push(Card::Credits { value });
+        // A granted dollar balance reuses Claude's credits card. Claude's own
+        // cloud credits already rendered above as an additional window.
+        match limits.cloud_session_credits.as_ref() {
+            Some(credits) if kind != ProviderKind::Claude => cards.push(Card::CloudCredits {
+                key: card_key(provider, "credits"),
+                title: crate::i18n::tr("credits-338f52"),
+                window: std::borrow::Cow::Owned(LimitWindow {
+                    used_percent: Some(credits.used_percent()),
+                    ..LimitWindow::default()
+                }),
+                credits: Some(credits),
+            }),
+            _ => cards.push(Card::Credits { value }),
+        }
     }
     cards
 }

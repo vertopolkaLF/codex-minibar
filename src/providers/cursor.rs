@@ -24,7 +24,7 @@ use crate::{
     providers::instances::{ProviderId, ProviderInstance},
     providers::registry::ProviderKind,
     providers::worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
-    quota::limits::{AdditionalLimit, LimitWindow, RateLimits},
+    quota::limits::{AdditionalLimit, CloudSessionCredits, Credits, LimitWindow, RateLimits},
     store,
     usage::pricing::{self, RequestTokens},
     usage::{Rollup, RollupBuilder, TokenUsage, UsageStatistics},
@@ -168,7 +168,9 @@ impl CursorClient {
         // Run the requests concurrently — they share a token and are independent.
         // Grok Bot is a separate weekly allowance; a failed Sand lookup must
         // never discard otherwise valid Auto/API usage.
-        let (usage, summary, sand) = std::thread::scope(|scope| {
+        // Prepaid credit grants are a separate balance; a failed lookup only
+        // hides the Credits card.
+        let (usage, summary, sand, credits) = std::thread::scope(|scope| {
             let usage = scope.spawn(|| {
                 self.connect_post(
                     "/aiserver.v1.DashboardService/GetCurrentPeriodUsage",
@@ -179,6 +181,12 @@ impl CursorClient {
             let sand = scope.spawn(|| {
                 self.connect_post("/aiserver.v1.DashboardService/GetSandUsageStatus", &token)
             });
+            let credits = scope.spawn(|| {
+                self.connect_post(
+                    "/aiserver.v1.DashboardService/GetCreditGrantsBalance",
+                    &token,
+                )
+            });
             (
                 usage
                     .join()
@@ -188,6 +196,9 @@ impl CursorClient {
                     .unwrap_or_else(|_| Err(anyhow!("Cursor summary worker panicked"))),
                 sand.join()
                     .unwrap_or_else(|_| Err(anyhow!("Cursor Grok Bot worker panicked"))),
+                credits
+                    .join()
+                    .unwrap_or_else(|_| Err(anyhow!("Cursor credits worker panicked"))),
             )
         });
         if let Err(error) = &usage
@@ -212,10 +223,14 @@ impl CursorClient {
             )));
         }
         let sand = sand.as_ref().ok();
+        if let Err(error) = &credits {
+            crate::platform::logger::info(format!("Cursor credit balance unavailable: {error:#}"));
+        }
+        let credits = credits.as_ref().ok();
         match (usage, summary) {
-            (Ok(usage), Ok(summary)) => map_usage(Some(&usage), Some(&summary), sand),
-            (Ok(usage), Err(_)) => map_usage(Some(&usage), None, sand),
-            (Err(_), Ok(summary)) => map_usage(None, Some(&summary), sand),
+            (Ok(usage), Ok(summary)) => map_usage(Some(&usage), Some(&summary), sand, credits),
+            (Ok(usage), Err(_)) => map_usage(Some(&usage), None, sand, credits),
+            (Err(_), Ok(summary)) => map_usage(None, Some(&summary), sand, credits),
             (Err(usage_error), Err(summary_error)) => Err(usage_error).context(format!(
                 "Cursor usage summary fallback also failed: {summary_error:#}"
             )),
@@ -685,8 +700,10 @@ fn map_usage(
     usage: Option<&Value>,
     summary: Option<&Value>,
     sand: Option<&Value>,
+    credits: Option<&Value>,
 ) -> Result<RateLimits> {
     let now = Utc::now();
+    let (credits, cloud_session_credits) = credit_grants(credits);
     let plan = usage
         .and_then(|usage| usage.get("planUsage"))
         .and_then(Value::as_object);
@@ -745,8 +762,50 @@ fn map_usage(
         limit_name: Some("Cursor".into()),
         secondary_limit_name,
         additional_limits,
+        credits,
+        cloud_session_credits,
         ..RateLimits::default()
     })
+}
+
+/// Maps `GetCreditGrantsBalance` (cents as int64 strings) to the dashboard's
+/// "remaining / granted" balance, in the same shape as Claude's cloud credits
+/// so the popup reuses that card.
+fn credit_grants(value: Option<&Value>) -> (Credits, Option<CloudSessionCredits>) {
+    let Some(value) =
+        value.filter(|value| value.get("hasCreditGrants").and_then(Value::as_bool) == Some(true))
+    else {
+        return Default::default();
+    };
+    let cents = |key: &str| {
+        let field = value.get(key)?;
+        field
+            .as_str()
+            .and_then(|text| text.trim().parse::<i64>().ok())
+            .or_else(|| field.as_i64())
+    };
+    let Some(total) = cents("totalCents").filter(|total| *total > 0) else {
+        return Default::default();
+    };
+    let remaining = cents("creditBalanceCents")
+        .or_else(|| cents("usedCents").map(|used| total - used))
+        .unwrap_or(total)
+        .clamp(0, total);
+    let dollars = |cents: i64| format!("${}.{:02}", cents / 100, cents % 100);
+    let usd = |cents: i64| cents as f64 / 100.0;
+    (
+        Credits {
+            has_credits: true,
+            unlimited: false,
+            balance: Some(format!("{} / {}", dollars(remaining), dollars(total))),
+        },
+        Some(CloudSessionCredits {
+            limit_dollars: usd(total),
+            used_dollars: usd(total - remaining),
+            remaining_dollars: usd(remaining),
+            locked: false,
+        }),
+    )
 }
 
 fn billing_cycle(
@@ -983,7 +1042,7 @@ mod tests {
     fn maps_cursor_auto_and_api_percentages_and_cycle() {
         let usage = json!({"planUsage":{"limit":10000,"totalSpend":2500,"autoPercentUsed":12.4,"apiPercentUsed":3.6}});
         let summary = json!({"billingCycleStart":"2026-07-01T00:00:00Z","billingCycleEnd":"2026-08-01T00:00:00Z","individualUsage":{"plan":{"totalPercentUsed":25.0}}});
-        let limits = map_usage(Some(&usage), Some(&summary), None).unwrap();
+        let limits = map_usage(Some(&usage), Some(&summary), None, None).unwrap();
         assert!(limits.primary.is_empty());
         assert_eq!(limits.secondary.used_percent, Some(12));
         assert_eq!(
@@ -1006,7 +1065,7 @@ mod tests {
             "hasAvailableUsage": true,
             "hasNonZeroIncludedLimit": true
         });
-        let limits = map_usage(Some(&usage), None, Some(&sand)).unwrap();
+        let limits = map_usage(Some(&usage), None, Some(&sand), None).unwrap();
         assert_eq!(limits.additional_limits.len(), 2);
         assert_eq!(limits.additional_limits[0].id, "cursor-api");
         assert_eq!(limits.additional_limits[1].id, "cursor-grok-bot");
@@ -1040,7 +1099,7 @@ mod tests {
             ),
             (None, vec!["cursor-api"]),
         ] {
-            let limits = map_usage(Some(&usage), None, sand.as_ref()).unwrap();
+            let limits = map_usage(Some(&usage), None, sand.as_ref(), None).unwrap();
             assert_eq!(limits.secondary.used_percent, Some(12), "{sand:?}");
             let ids = limits
                 .additional_limits
@@ -1059,12 +1118,43 @@ mod tests {
             "membershipType":"pro",
             "individualUsage":{"plan":{"totalPercentUsed":25.0,"autoPercentUsed":10.0,"apiPercentUsed":5.0}}
         });
-        let limits = map_usage(None, Some(&summary), None).unwrap();
+        let limits = map_usage(None, Some(&summary), None, None).unwrap();
         assert!(limits.primary.is_empty());
         assert_eq!(limits.secondary.used_percent, Some(10));
         assert_eq!(limits.additional_limits[0].window.used_percent, Some(5));
         assert_eq!(limits.additional_limits[1].title, "All Models");
         assert_eq!(limits.additional_limits[1].window.used_percent, Some(25));
+    }
+
+    #[test]
+    fn maps_credit_grants_to_remaining_of_total() {
+        let usage = json!({"planUsage":{"autoPercentUsed":12.4}});
+        let credits = json!({"hasCreditGrants":true,"creditBalanceCents":"1318","totalCents":"2500","usedCents":"1182"});
+        let limits = map_usage(Some(&usage), None, None, Some(&credits)).unwrap();
+        assert!(limits.credits.has_credits);
+        assert_eq!(limits.credits.balance.as_deref(), Some("$13.18 / $25.00"));
+        let amount = limits.cloud_session_credits.unwrap();
+        assert_eq!(amount.remaining_dollars, 13.18);
+        assert_eq!(amount.limit_dollars, 25.0);
+        assert_eq!(amount.used_dollars, 11.82);
+
+        let derived = credit_grants(Some(
+            &json!({"hasCreditGrants":true,"totalCents":2500,"usedCents":"3000"}),
+        ));
+        assert_eq!(derived.0.balance.as_deref(), Some("$0.00 / $25.00"));
+        assert_eq!(derived.1.map(|credits| credits.used_percent()), Some(100));
+
+        for missing in [
+            None,
+            Some(json!({"hasCreditGrants":false,"creditBalanceCents":"0","totalCents":"0"})),
+            Some(json!({"hasCreditGrants":true,"totalCents":"0"})),
+        ] {
+            assert_eq!(
+                credit_grants(missing.as_ref()),
+                (Credits::default(), None),
+                "{missing:?}"
+            );
+        }
     }
 
     #[test]

@@ -210,10 +210,12 @@ impl PopupRoot {
             }
             Card::CloudCredits {
                 key,
+                title,
                 window: limit,
                 credits,
             } => self.render_cloud_credits(
                 key,
+                title,
                 limit,
                 *credits,
                 style,
@@ -913,6 +915,7 @@ impl PopupRoot {
     fn render_cloud_credits(
         &mut self,
         key: &str,
+        title: &'static str,
         limit: &LimitWindow,
         credits: Option<&crate::quota::limits::CloudSessionCredits>,
         style: CardStyle,
@@ -955,7 +958,6 @@ impl PopupRoot {
                 ));
             }
         }
-        let title = crate::i18n::tr("cloud-session-credits");
         let title_width = metrics.caption(title);
         let label_width = metrics.strong(&label);
         let fits = |width: f32| TextMetrics::fits_split(available_width, width, metadata_width);

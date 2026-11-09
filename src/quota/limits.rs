@@ -33,13 +33,23 @@ pub struct UsageAmount {
     pub limit: f64,
 }
 
-/// Promotional Claude cloud-session amounts, reported directly in USD.
+/// A granted dollar balance reported directly in USD: Claude's promotional
+/// cloud-session credits or Cursor's credit grants.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct CloudSessionCredits {
     pub limit_dollars: f64,
     pub used_dollars: f64,
     pub remaining_dollars: f64,
     pub locked: bool,
+}
+
+impl CloudSessionCredits {
+    /// Spent share of the grant, for the card's progress bar.
+    pub fn used_percent(&self) -> u8 {
+        (self.used_dollars / self.limit_dollars * 100.0)
+            .round()
+            .clamp(0.0, 100.0) as u8
+    }
 }
 
 /// A named quota window supplied in addition to the standard session and
