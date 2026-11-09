@@ -62,6 +62,11 @@ const PROFILE_COLUMNS: usize = 4;
 const PROFILE_ROW_GAP: f32 = 6.0;
 const PROFILE_GRID_PADDING: f32 = 12.0;
 
+const CONTEXT_MENU_ID: &str = "popup-context";
+const CONTEXT_MENU_WIDTH: f32 = 200.0;
+/// Gap kept between the context menu and the capsule edge.
+const CONTEXT_MENU_INSET: f32 = 8.0;
+
 fn profile_grid_height(count: usize) -> f32 {
     let rows = count.div_ceil(PROFILE_COLUMNS);
     if rows == 0 {
@@ -387,6 +392,8 @@ pub(crate) struct PopupRoot {
     pub(super) usage_spinner_started: Option<Instant>,
     /// Home edit mode: reveals the widget reorder grips.
     pub(super) home_editing: bool,
+    /// Window position of the right-click that opened the context menu.
+    context_menu_at: Point<Pixels>,
     pub(super) widget_drag: Option<HomeWidgetId>,
     pub(super) widget_drop: Option<(HomeWidgetId, Option<usize>)>,
     pub(super) tab_drag: Option<PopupView>,
@@ -537,6 +544,7 @@ impl PopupRoot {
             widget_bounds: Rc::new(RefCell::new(WidgetLayout::default())),
             usage_spinner_started: None,
             home_editing: false,
+            context_menu_at: point(px(0.0), px(0.0)),
             widget_drag: None,
             widget_drop: None,
             tab_drag: None,
@@ -772,6 +780,76 @@ impl PopupRoot {
         }
         self.home_editing = editing;
         cx.notify();
+    }
+
+    fn open_context_menu(&mut self, position: Point<Pixels>, window: &mut Window) {
+        let (width, height) = self.capsule_size;
+        let local = position - self.capsule_origin;
+        let inside = (0.0..=width).contains(&f32::from(local.x))
+            && (0.0..=height).contains(&f32::from(local.y));
+        if !inside {
+            return;
+        }
+        self.context_menu_at = position;
+        self.tip = None;
+        self.kit.menus.open(CONTEXT_MENU_ID.into(), window);
+    }
+
+    fn context_menu_items(&self) -> Vec<crate::ui::gui::kit::MenuItem> {
+        let label = crate::i18n::tr(if self.home_editing {
+            "done"
+        } else {
+            "edit-home"
+        });
+        let icon = if self.home_editing {
+            "fluent-checkmark"
+        } else {
+            "fluent-edit"
+        };
+        vec![crate::ui::gui::kit::MenuItem::new(label).icon(icon)]
+    }
+
+    /// The right-click menu, kept inside the capsule (the native region
+    /// clips anything outside it on Windows).
+    fn render_context_menu(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::ui::gui::kit;
+        let items = self.context_menu_items();
+        let height = kit::context_menu_height(&items);
+        let root = cx.entity().downgrade();
+        let menu = kit::context_menu(
+            &self.kit,
+            CONTEXT_MENU_ID,
+            items,
+            CONTEXT_MENU_WIDTH,
+            kit::handler(move |index, _, cx| {
+                if index == 0 {
+                    let _ =
+                        root.update(cx, |root, cx| root.set_home_editing(!root.home_editing, cx));
+                }
+            }),
+        )?;
+        let (capsule_w, capsule_h) = self.capsule_size;
+        let local = self.context_menu_at - self.capsule_origin;
+        let (x, y) = (f32::from(local.x), f32::from(local.y));
+        let left = x.min(capsule_w - CONTEXT_MENU_INSET - CONTEXT_MENU_WIDTH);
+        // Open below the pointer, or above it when the capsule ends first.
+        let top = if y + height <= capsule_h - CONTEXT_MENU_INSET {
+            y
+        } else {
+            y - height
+        };
+        let max_top = (capsule_h - CONTEXT_MENU_INSET - height).max(CONTEXT_MENU_INSET);
+        let left = left.max(CONTEXT_MENU_INSET);
+        let top = top.clamp(CONTEXT_MENU_INSET - 4.0, max_top);
+        Some(
+            div()
+                .absolute()
+                .left(self.capsule_origin.x + px(left))
+                .top(self.capsule_origin.y + px(top))
+                .size_0()
+                .child(menu)
+                .into_any_element(),
+        )
     }
 
     pub(super) fn navigate(&mut self, view: PopupView, cx: &mut Context<Self>) {
@@ -2361,6 +2439,8 @@ impl Render for PopupRoot {
             .render_tip(capsule_w, capsule_h, window, cx)
             .map(|tip| gpui::deferred(tip).with_priority(usize::MAX));
 
+        let context_menu = self.render_context_menu(cx);
+
         if self.host.phase == Phase::Prewarm {
             self.host.prewarm_frames = self.host.prewarm_frames.saturating_add(1);
             if self.host.prewarm_frames <= PREWARM_FRAMES + PREWARM_EXPOSED_FRAMES {
@@ -2381,8 +2461,15 @@ impl Render for PopupRoot {
             .text_color(palette.text_primary)
             .text_size(px(14.0))
             .line_height(px(20.0))
+            .on_mouse_down(
+                gpui::MouseButton::Right,
+                cx.listener(|this, event: &gpui::MouseDownEvent, window, _| {
+                    this.open_context_menu(event.position, window);
+                }),
+            )
             .child(capsule)
             .children(chrome)
+            .children(context_menu)
             .children(tip)
     }
 }

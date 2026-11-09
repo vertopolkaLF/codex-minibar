@@ -397,6 +397,24 @@ impl Menus {
         window.refresh();
     }
 
+    /// Open `id` even if it is already open or has just closed: a context
+    /// menu reopens at every right-click, after its own outside-press
+    /// handler closed it during the capture phase.
+    pub(crate) fn open(&self, id: SharedString, window: &mut Window) {
+        let mut open = self.open.borrow_mut();
+        if let Some(previous) = open.take()
+            && previous != id
+        {
+            *self.leaving.borrow_mut() = Some((previous, Instant::now()));
+        } else {
+            self.leaving.borrow_mut().take();
+        }
+        self.closed.borrow_mut().take();
+        *open = Some(id);
+        self.list_scroll.borrow_mut().take();
+        window.refresh();
+    }
+
     /// The open menu's list scroll; a fresh opening reveals `selected`.
     fn list_scroll(&self, id: &SharedString, selected: Option<usize>) -> gpui::ScrollHandle {
         let mut slot = self.list_scroll.borrow_mut();
@@ -2135,6 +2153,46 @@ pub(crate) fn field(k: &Kit, label: impl Into<SharedString>, control: AnyElement
         .child(text(label, 12.0, k.theme.text_secondary))
         .child(control)
         .into_any_element()
+}
+
+/// Total height of a context menu with `items`, including its top gap.
+pub(crate) fn context_menu_height(items: &[MenuItem]) -> f32 {
+    let entries = items.len() as f32;
+    let separators = items.iter().filter(|item| item.separator).count() as f32;
+    let children = entries + separators;
+    4.0 + 8.0 + entries * 32.0 + separators * 7.0 + (children - 1.0).max(0.0) * 2.0
+}
+
+/// Action menu opened with [`Menus::open`], `width` wide. The caller places
+/// the returned element at the menu's top-left corner in a zero-size,
+/// absolutely positioned box; `None` while the menu is closed.
+pub(crate) fn context_menu(
+    k: &Kit,
+    id: impl Into<SharedString>,
+    items: Vec<MenuItem>,
+    width: f32,
+    on_select: Handler<usize>,
+) -> Option<AnyElement> {
+    let id: SharedString = id.into();
+    let open = k.menus.is_open(&id);
+    let leaving = (!open && k.animate())
+        .then(|| k.menus.leaving(&id))
+        .flatten();
+    (open || leaving.is_some()).then(|| {
+        menu_panel_with(
+            k,
+            &id,
+            items,
+            None,
+            width,
+            on_select,
+            leaving,
+            MenuExtras {
+                exact_width: true,
+                ..MenuExtras::default()
+            },
+        )
+    })
 }
 
 /// "⋯" button opening an action menu.
