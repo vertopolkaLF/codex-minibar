@@ -43,36 +43,43 @@ pub struct DesktopSession {
     pub rate_limit_tier: Option<String>,
 }
 
-/// Every known Claude Desktop (Electron) user-data directory. The direct
-/// installer uses `%APPDATA%\Claude`, while the Microsoft Store/MSIX build is
-/// sandboxed under
-/// `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude`.
-/// The latter is discovered from the package identity rather than an installed
-/// version, because WindowsApps versions change on every Store update.
+/// All desktop data roots, shared by session and bundled CLI discovery.
+/// New Store builds migrate the whole profile out of LocalCache to
+/// %LOCALAPPDATA%\Claude-Data\claude_pzs8sxrjxfjjc. The old folder may
+/// contain only a .user-data-left marker after the move.
+/// Migration report: https://github.com/anthropics/claude-code/issues/103860
 fn config_roots() -> Vec<PathBuf> {
-    let mut roots = BaseDirs::new()
-        .map(|directories| vec![directories.config_dir().join("Claude")])
+    let directories = BaseDirs::new();
+    let local = if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else {
+        None
+    };
+    config_roots_in(
+        directories
+            .as_ref()
+            .map(|directories| directories.config_dir()),
+        local.as_deref(),
+    )
+}
+
+fn config_roots_in(config: Option<&Path>, local: Option<&Path>) -> Vec<PathBuf> {
+    let mut roots = config
+        .map(|config| vec![config.join("Claude")])
         .unwrap_or_default();
 
-    #[cfg(windows)]
-    if let Some(packages) = std::env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .map(|local| local.join("Packages"))
-        && let Ok(entries) = fs::read_dir(packages)
-    {
-        for entry in entries.flatten() {
-            let package_name = entry.file_name();
-            let Some(package_name) = package_name.to_str() else {
-                continue;
-            };
-            if is_store_package_name(package_name) {
-                roots.push(
-                    entry
-                        .path()
-                        .join("LocalCache")
-                        .join("Roaming")
-                        .join("Claude"),
-                );
+    if let Some(local) = local {
+        roots.push(local.join("Claude-Data/claude_pzs8sxrjxfjjc"));
+        // Package directory names are identities, not app versions.
+        if let Ok(entries) = fs::read_dir(local.join("Packages")) {
+            for entry in entries.flatten() {
+                if entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(is_store_package_name)
+                {
+                    roots.push(entry.path().join("LocalCache/Roaming/Claude"));
+                }
             }
         }
     }
@@ -82,9 +89,9 @@ fn config_roots() -> Vec<PathBuf> {
     roots
 }
 
-#[cfg(any(windows, test))]
 fn is_store_package_name(name: &str) -> bool {
-    name.starts_with("Claude_") && name.ends_with("pzs8sxrjxfjjc")
+    let name = name.to_ascii_lowercase();
+    name.starts_with("claude_") && name.ends_with("pzs8sxrjxfjjc")
 }
 
 /// The `claude.exe` the desktop app unpacks for its embedded Claude Code. This
@@ -525,6 +532,73 @@ mod tests {
         let unrelated = directory.path().join("Update.exe");
         fs::write(&unrelated, b"fixture").unwrap();
         assert_eq!(application_in(&unrelated), None);
+    }
+
+    #[test]
+    fn migrated_store_profile_supplies_both_session_cache_and_bundled_cli() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = directory.path().join("Local");
+        let roaming = directory.path().join("Roaming");
+        let old = local.join("Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude");
+        let moved = local.join("Claude-Data/claude_pzs8sxrjxfjjc");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(&moved).unwrap();
+        fs::write(old.join(".user-data-left.claude_pzs8sxrjxfjjc"), b"").unwrap();
+        let key = [7u8; 32];
+        let envelope = seal(
+            &key,
+            &[3u8; GCM_NONCE_LEN],
+            r#"{"cid:acct:https://api.anthropic.com:claude_code":{"token":"fixture-token"}}"#,
+        );
+        fs::write(
+            moved.join("config.json"),
+            serde_json::to_vec(&serde_json::json!({"oauth:tokenCacheV2": envelope})).unwrap(),
+        )
+        .unwrap();
+        let cli = write_launcher(&moved, "2.1.321/build-hash");
+        let roots = config_roots_in(Some(&roaming), Some(&local));
+        assert!(roots.contains(&moved));
+        assert!(roots.contains(&old));
+        assert!(!old.join("config.json").exists());
+        assert_eq!(bundled_cli_in(&roots), Some(cli));
+        let configs = roots
+            .iter()
+            .filter_map(|root| read_config(root).ok())
+            .collect::<Vec<_>>();
+        assert_eq!(configs.len(), 1);
+        let cache = configs[0].token_caches().next().unwrap();
+        let entries = decrypt_token_cache(cache, &key).unwrap();
+        assert_eq!(entries[0].1.token.as_deref(), Some("fixture-token"));
+        assert!(
+            !roots
+                .iter()
+                .any(|root| root.starts_with(local.join("Claude-3p")))
+        );
+    }
+
+    #[test]
+    fn unmigrated_store_and_direct_profiles_remain_discoverable() {
+        let directory = tempfile::tempdir().unwrap();
+        let local = directory.path().join("Local");
+        let roaming = directory.path().join("Roaming");
+        let old = local.join("Packages/Claude_pzs8sxrjxfjjc/LocalCache/Roaming/Claude");
+        fs::create_dir_all(&old).unwrap();
+        fs::create_dir_all(local.join("Packages/NotClaude_pzs8sxrjxfjjc")).unwrap();
+        let cli = write_launcher(&old, "2.1.286/build-hash");
+        let roots = config_roots_in(Some(&roaming), Some(&local));
+        assert!(roots.contains(&roaming.join("Claude")));
+        assert!(roots.contains(&old));
+        assert_eq!(bundled_cli_in(&roots), Some(cli));
+        assert!(
+            !roots
+                .iter()
+                .any(|root| root.to_string_lossy().contains("NotClaude"))
+        );
+        // Linux keeps its original XDG config layout.
+        assert_eq!(
+            config_roots_in(Some(&roaming), None),
+            vec![roaming.join("Claude")]
+        );
     }
 
     fn write_launcher(root: &Path, relative: &str) -> PathBuf {
