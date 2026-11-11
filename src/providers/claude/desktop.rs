@@ -90,7 +90,22 @@ fn is_store_package_name(name: &str) -> bool {
 /// The `claude.exe` the desktop app unpacks for its embedded Claude Code. This
 /// is the only launcher available when the CLI was never installed on PATH.
 pub fn bundled_cli() -> Option<PathBuf> {
-    bundled_cli_in(&config_roots())
+    bundled_cli_at(None)
+}
+
+pub fn bundled_cli_at(app: Option<&Path>) -> Option<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(root) = app.map(|path| {
+        if path.is_file() {
+            path.parent().unwrap_or(path)
+        } else {
+            path
+        }
+    }) {
+        roots.push(root.to_path_buf());
+    }
+    roots.extend(config_roots());
+    bundled_cli_in(&roots)
 }
 
 fn bundled_cli_in(roots: &[PathBuf]) -> Option<PathBuf> {
@@ -142,15 +157,87 @@ fn launcher_in_version(version_dir: &Path) -> Option<PathBuf> {
         .find(|executable| executable.is_file())
 }
 
-/// True when the desktop app is present, whether or not it can be decrypted.
-/// Used only as an installation signal, so a cached session is enough.
-pub fn is_installed() -> bool {
-    if bundled_cli().is_some() {
-        return true;
+/// Locate the desktop application independently of its optional Code download.
+pub fn installation_path(explicit: Option<&Path>) -> Option<PathBuf> {
+    if let Some(path) = explicit.and_then(application_in) {
+        return Some(path);
+    }
+    #[cfg(windows)]
+    {
+        let mut roots = Vec::new();
+        if let Some(local) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
+            roots.push(local.join("Claude"));
+            roots.push(local.join("Programs/Claude"));
+        }
+        if let Some(programs) = std::env::var_os("ProgramFiles").map(PathBuf::from) {
+            roots.push(programs.join("Claude"));
+        }
+        // Store installations can live on another drive. The registered root
+        // avoids assuming access to C:\Program Files\WindowsApps.
+        use windows_sys::Win32::System::Registry::HKEY_CURRENT_USER;
+        const KEY: &str = r"Software\Classes\Local Settings\Software\Microsoft\Windows\CurrentVersion\AppModel\Repository\Packages";
+        if let Some(key) = crate::platform::win32::RegKey::open(HKEY_CURRENT_USER, KEY) {
+            for name in key.subkey_names() {
+                if name.to_str().is_some_and(is_store_package_name)
+                    && let Some(root) = key
+                        .subkey(name)
+                        .and_then(|key| key.string("PackageRootFolder"))
+                {
+                    roots.push(PathBuf::from(root));
+                }
+            }
+        }
+        if let Some(path) = roots.iter().find_map(|root| application_in(root)) {
+            return Some(path);
+        }
     }
     config_roots()
         .into_iter()
-        .any(|root| read_config(&root).is_ok_and(|config| config.token_caches().next().is_some()))
+        .find(|root| read_config(root).is_ok_and(|config| config.token_caches().next().is_some()))
+        .or_else(bundled_cli)
+}
+
+fn application_in(root: &Path) -> Option<PathBuf> {
+    let name = if cfg!(windows) {
+        "Claude.exe"
+    } else {
+        "claude-desktop"
+    };
+    if root.is_file() {
+        return root
+            .file_name()
+            .is_some_and(|file| file.eq_ignore_ascii_case(name))
+            .then(|| root.to_path_buf());
+    }
+    for relative in [PathBuf::from(name), PathBuf::from("app").join(name)] {
+        let path = root.join(relative);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    // Squirrel keeps versioned app-* directories alongside its updater.
+    let mut versions = fs::read_dir(root)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let version = entry
+                .file_name()
+                .to_str()?
+                .strip_prefix("app-")?
+                .parse::<semver::Version>()
+                .ok()?;
+            let path = entry.path().join(name);
+            path.is_file().then_some((version, path))
+        })
+        .collect::<Vec<_>>();
+    versions.sort_by(|a, b| b.0.cmp(&a.0));
+    versions.into_iter().next().map(|(_, path)| path)
+}
+
+/// True when the desktop app is present, whether or not it can be decrypted.
+/// Used only as an installation signal, so a cached session is enough.
+pub fn is_installed() -> bool {
+    installation_path(None).is_some()
 }
 
 pub fn load_session() -> Result<DesktopSession> {
@@ -402,6 +489,43 @@ mod tests {
     use aes_gcm::aead::Payload;
 
     use super::*;
+
+    #[test]
+    fn finds_desktop_without_a_cli_download_or_login() {
+        let directory = tempfile::tempdir().unwrap();
+        let name = if cfg!(windows) {
+            "Claude.exe"
+        } else {
+            "claude-desktop"
+        };
+        let app = directory.path().join(name);
+        fs::write(&app, b"fixture").unwrap();
+        assert_eq!(installation_path(Some(directory.path())), Some(app));
+        assert_eq!(bundled_cli_in(&[directory.path().to_path_buf()]), None);
+    }
+
+    #[test]
+    fn finds_latest_complete_squirrel_app_and_rejects_unrelated_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let name = if cfg!(windows) {
+            "Claude.exe"
+        } else {
+            "claude-desktop"
+        };
+        for version in ["1.9.0", "1.10.0"] {
+            let root = directory.path().join(format!("app-{version}"));
+            fs::create_dir_all(&root).unwrap();
+            fs::write(root.join(name), b"fixture").unwrap();
+        }
+        fs::create_dir_all(directory.path().join("app-1.11.0")).unwrap();
+        assert_eq!(
+            application_in(directory.path()),
+            Some(directory.path().join("app-1.10.0").join(name))
+        );
+        let unrelated = directory.path().join("Update.exe");
+        fs::write(&unrelated, b"fixture").unwrap();
+        assert_eq!(application_in(&unrelated), None);
+    }
 
     fn write_launcher(root: &Path, relative: &str) -> PathBuf {
         let path = root.join("claude-code").join(relative).join("claude.exe");

@@ -107,8 +107,8 @@ fn cleanup_root(root: &Path) -> Result<()> {
 pub(crate) fn login(explicit: Option<&Path>, folder: &Path, control: &LoginControl) -> Result<()> {
     ensure!(!control.cancelled(), "Claude sign-in cancelled.");
     // Never the desktop app's bundled copy: it serves only the app's account.
-    let executable = super::cli_available(explicit)
-        .context(crate::i18n::english(super::OTHER_ACCOUNT_NEEDS_CLI))?;
+    let executable =
+        super::cli_available(explicit).context(crate::i18n::tr(super::OTHER_ACCOUNT_NEEDS_CLI))?;
     #[cfg(windows)]
     ensure!(
         executable

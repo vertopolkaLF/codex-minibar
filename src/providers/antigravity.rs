@@ -118,7 +118,7 @@ fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<W
 
 fn detect(instance: &ProviderInstance) -> InstallStatus {
     let explicit = instance.binary_path.as_deref();
-    let app = desktop_app(explicit);
+    let app = desktop_app(instance.app_path.as_deref().or(explicit));
     let cli = cli_available(explicit);
     let used = if cli.is_some() {
         Some(InstallSource::Cli)

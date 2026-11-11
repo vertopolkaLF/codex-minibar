@@ -1387,7 +1387,9 @@ fn sign_in(
             &control,
         )?,
         ProviderKind::Codex => crate::providers::codex::profile_oauth::login(
-            instance.binary_path.as_deref(),
+            Some(&crate::providers::codex::executable_for_instance(
+                &instance,
+            )?),
             &folder,
             &control,
         )?,

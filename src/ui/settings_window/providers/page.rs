@@ -633,7 +633,8 @@ impl SettingsWindow {
                 let app_note = copy
                     .config_folder_app_note
                     .filter(|_| instance.config_folder().is_some());
-                let choosable = |source| copy.binary_source == Some(source);
+                let choosable =
+                    |source| crate::providers::drivers::source_path_field(driver, source);
                 if status.sources.app {
                     cards.push(self.source_row(
                         k,
@@ -681,6 +682,24 @@ impl SettingsWindow {
         if crate::providers::registry::descriptor(driver).config_folder {
             out.extend(self.source_settings(instance, &copy, k, window, cx));
         }
+        if crate::providers::drivers::source_path_field(driver, InstallSource::App)
+            == Some(PathField::App)
+        {
+            out.push(self.folder_expander(
+                instance,
+                FolderField {
+                    field: PathField::App,
+                    label: copy.app,
+                    description: crate::i18n::tr(
+                        "only-needed-if-automatic-detection-misses-your-install",
+                    ),
+                    placeholder: "",
+                },
+                k,
+                window,
+                cx,
+            ));
+        }
         for config in copy.folders {
             out.push(div().h(px(4.0)).into_any_element());
             out.push(self.folder_expander(instance, config, k, window, cx));
@@ -698,7 +717,7 @@ impl SettingsWindow {
         label: &str,
         path: Option<&str>,
         in_use: bool,
-        can_choose_folder: bool,
+        folder_field: Option<PathField>,
         note: Option<&'static str>,
     ) -> AnyElement {
         let theme = &k.theme;
@@ -710,6 +729,7 @@ impl SettingsWindow {
                 let menu_path = path.to_owned();
                 row = row.detail(
                     div()
+                        .truncate()
                         .text_size(px(12.0))
                         .text_color(theme.text_secondary)
                         .child(path.to_owned())
@@ -763,17 +783,29 @@ impl SettingsWindow {
                         kit::text(crate::i18n::tr("not-found"), 12.0, theme.text_secondary)
                             .into_any_element(),
                     );
-                if can_choose_folder {
+                if let Some(field) = folder_field {
                     row = row.trailing(
                         Button::new(format!("{id}-choose"), crate::i18n::tr("choose-folder"))
                             .with_icon("folder-fill")
                             .on_click(Self::h(cx, move |this, (), _, cx| {
-                                this.pick_folder(provider, PathField::Binary, cx)
+                                this.pick_folder(provider, field, cx)
                             }))
                             .render(k),
                     );
                 }
             }
+        }
+        if path.is_some()
+            && let Some(field) = folder_field
+        {
+            row = row.trailing(
+                Button::icon_only(format!("{id}-choose"), "folder-open-fill")
+                    .tooltip(crate::i18n::tr("choose-folder"))
+                    .on_click(Self::h(cx, move |this, (), _, cx| {
+                        this.pick_folder(provider, field, cx)
+                    }))
+                    .render(k),
+            );
         }
         row.render(k)
     }
@@ -841,6 +873,7 @@ impl SettingsWindow {
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .child(kit::text_field(k, &input, None, window, cx)),
             )
             .child(

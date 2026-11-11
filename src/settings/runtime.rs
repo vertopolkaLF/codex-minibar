@@ -109,7 +109,14 @@ pub fn apply(settings: &Settings) {
             .instances
             .iter()
             .filter(|instance| instance.driver == ProviderKind::Codex)
-            .filter_map(|instance| instance.binary_path.as_deref()),
+            .flat_map(|instance| {
+                [
+                    instance.binary_path.as_deref(),
+                    instance.app_path.as_deref(),
+                ]
+                .into_iter()
+                .flatten()
+            }),
     );
     crate::surfaces::taskbar::publish_settings(settings);
     crate::surfaces::cmdpal::publish_settings(settings);

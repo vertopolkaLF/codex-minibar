@@ -17,7 +17,16 @@ pub struct CodexCandidate {
 /// Every Codex launcher on this PC in launch order: an explicit location,
 /// the desktop app's bridge, PATH, then per-user bin folders.
 pub fn discover(explicit: Option<&Path>) -> Vec<CodexCandidate> {
-    let desktop = desktop_app_locations();
+    discover_with_app(explicit, None)
+}
+
+/// A separately selected desktop root is searched for its CLI bridge; never
+/// launch the GUI executable as an app-server.
+pub fn discover_with_app(explicit: Option<&Path>, app: Option<&Path>) -> Vec<CodexCandidate> {
+    let mut desktop = desktop_app_locations();
+    if let Some(path) = app.and_then(bridge_in) {
+        desktop.insert(0, path);
+    }
     let search = CliSearch {
         names: if cfg!(windows) {
             &["codex.exe", "codex.cmd", "codex.ps1", "codex.bat"]
@@ -109,4 +118,46 @@ fn sort_desktop_paths(paths: &mut [PathBuf]) {
 #[cfg(not(windows))]
 fn desktop_app_locations() -> Vec<PathBuf> {
     Vec::new()
+}
+
+fn bridge_in(root: &Path) -> Option<PathBuf> {
+    let root = if root.is_file() { root.parent()? } else { root };
+    let binary = if cfg!(windows) { "codex.exe" } else { "codex" };
+    ["app/resources", "resources"]
+        .into_iter()
+        .map(|relative| root.join(relative).join(binary))
+        .find(|path| path.is_file())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selected_desktop_root_resolves_bridge_not_gui() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path();
+        let binary = if cfg!(windows) { "codex.exe" } else { "codex" };
+        std::fs::write(root.join(binary), b"GUI fixture").unwrap();
+        assert_eq!(bridge_in(root), None);
+        let resources = root.join("app/resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        let bridge = resources.join(binary);
+        std::fs::write(&bridge, b"fixture").unwrap();
+        #[cfg(not(windows))]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&bridge, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        assert_eq!(bridge_in(root), Some(bridge.clone()));
+        assert_eq!(bridge_in(&root.join("app")), Some(bridge.clone()));
+        let candidates = discover_with_app(None, Some(root));
+        assert_eq!(
+            candidates[0],
+            CodexCandidate {
+                path: bridge,
+                desktop_app: true
+            }
+        );
+    }
 }

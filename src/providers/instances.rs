@@ -349,6 +349,9 @@ pub struct ProviderInstance {
     /// Explicit CLI or app location. Empty keeps automatic discovery.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub binary_path: Option<PathBuf>,
+    /// Independent desktop location for providers with both an app and CLI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub app_path: Option<PathBuf>,
     pub source: InstanceSource,
     /// Kiro reads three independent installations.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -368,6 +371,7 @@ pub struct ProviderInstance {
 pub struct SourceKey {
     driver: ProviderKind,
     binary_path: Option<PathBuf>,
+    app_path: Option<PathBuf>,
     source: InstanceSource,
     config_folder: Option<PathBuf>,
     kiro_crew_path: Option<PathBuf>,
@@ -396,6 +400,7 @@ impl ProviderInstance {
             in_usage_overview: true,
             refresh_interval: None,
             binary_path: None,
+            app_path: None,
             source: InstanceSource::default(),
             kiro_crew_path: None,
             kiro_cli_path: None,
@@ -486,6 +491,7 @@ impl ProviderInstance {
         SourceKey {
             driver: self.driver,
             binary_path: self.binary_path.clone(),
+            app_path: self.app_path.clone(),
             source: self.source.clone(),
             config_folder: self.config_folder(),
             kiro_crew_path: self.kiro_crew_path.clone(),
@@ -560,6 +566,7 @@ impl ProviderInstance {
 pub enum PathField {
     /// CLI/app location (Kiro: IDE).
     Binary,
+    App,
     KiroCrew,
     KiroCli,
     /// `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
@@ -570,6 +577,7 @@ impl PathField {
     pub fn key(self) -> &'static str {
         match self {
             Self::Binary => "binary",
+            Self::App => "app",
             Self::KiroCrew => "kiro-crew",
             Self::KiroCli => "kiro-cli",
             Self::ConfigFolder => "config-folder",
@@ -579,6 +587,7 @@ impl PathField {
     pub fn read(self, instance: &ProviderInstance) -> Option<&Path> {
         match self {
             Self::Binary => instance.binary_path.as_deref(),
+            Self::App => instance.app_path.as_deref(),
             Self::KiroCrew => instance.kiro_crew_path.as_deref(),
             Self::KiroCli => instance.kiro_cli_path.as_deref(),
             Self::ConfigFolder => match &instance.source {
@@ -592,6 +601,7 @@ impl PathField {
         let before = self.read(instance).map(Path::to_path_buf);
         match self {
             Self::Binary => instance.binary_path = folder,
+            Self::App => instance.app_path = folder,
             Self::KiroCrew => instance.kiro_crew_path = folder,
             Self::KiroCli => instance.kiro_cli_path = folder,
             Self::ConfigFolder => {

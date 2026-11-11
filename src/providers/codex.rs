@@ -990,6 +990,17 @@ pub fn first_available(explicit: Option<&Path>) -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("Codex executable was not found"))
 }
 
+pub(crate) fn executable_for_instance(instance: &ProviderInstance) -> Result<PathBuf> {
+    discovery::discover_with_app(
+        instance.binary_path.as_deref(),
+        instance.app_path.as_deref(),
+    )
+    .into_iter()
+    .next()
+    .map(|candidate| candidate.path)
+    .ok_or_else(|| anyhow!("Codex executable was not found"))
+}
+
 pub(crate) static DRIVER: Driver = Driver {
     start: start_worker,
     detect,
@@ -1000,8 +1011,7 @@ pub(crate) static DRIVER: Driver = Driver {
 };
 
 fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
-    let executable =
-        first_available(instance.binary_path.as_deref()).unwrap_or_else(|_| PathBuf::from("codex"));
+    let executable = executable_for_instance(instance).unwrap_or_else(|_| PathBuf::from("codex"));
     crate::platform::logger::info(format!(
         "{} executable: {}",
         instance.provider_id().display_name(),
@@ -1020,7 +1030,10 @@ fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<W
 /// Filesystem-only, so detection never starts a provider process merely to
 /// identify an installation.
 fn detect(instance: &ProviderInstance) -> InstallStatus {
-    let candidates = discovery::discover(instance.binary_path.as_deref());
+    let candidates = discovery::discover_with_app(
+        instance.binary_path.as_deref(),
+        instance.app_path.as_deref(),
+    );
     let path = |desktop_app: bool| {
         candidates
             .iter()
@@ -1059,7 +1072,7 @@ fn settings_copy() -> SettingsCopy {
 
 /// Codex picks the credit itself, so a requested grant is ignored.
 fn consume_reset(instance: &ProviderInstance, _grant: Option<&str>) -> ResetResult {
-    let executable = first_available(instance.binary_path.as_deref())?;
+    let executable = executable_for_instance(instance)?;
     let client = CodexClient::for_instance(executable, instance);
     let outcome = client.consume_reset()?;
     Ok((outcome, client.read_rate_limits()))

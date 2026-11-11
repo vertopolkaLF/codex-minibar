@@ -183,7 +183,12 @@ pub(crate) static DRIVER: Driver = Driver {
 
 fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
     let folder = instance.config_folder();
-    let executable = executable_for(instance.binary_path.as_deref(), folder.as_deref());
+    let executable = if folder.is_none() {
+        desktop::bundled_cli_at(instance.app_path.as_deref())
+            .or_else(|| cli_available(instance.binary_path.as_deref()))
+    } else {
+        executable_for(instance.binary_path.as_deref(), folder.as_deref())
+    };
     crate::platform::logger::info(format!(
         "{} executable: {}",
         instance.provider_id().display_name(),
@@ -214,7 +219,7 @@ fn detect(instance: &ProviderInstance) -> InstallStatus {
         };
     }
     let folder = instance.config_folder();
-    let app = desktop::bundled_cli();
+    let app = desktop::installation_path(instance.app_path.as_deref());
     let cli = cli_available(instance.binary_path.as_deref());
     // Another account's folder never runs the app's bundled copy.
     let used = if app.is_some() && folder.is_none() {

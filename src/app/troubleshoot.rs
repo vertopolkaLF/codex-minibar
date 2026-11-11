@@ -76,13 +76,20 @@ pub fn available_tools(
     AiTool::ALL
         .into_iter()
         .filter_map(|tool| {
-            let explicit = instances
+            let instance = instances
                 .iter()
-                .find(|instance| instance.driver == tool.driver())
-                .and_then(|instance| instance.binary_path.as_deref());
+                .find(|instance| instance.driver == tool.driver());
+            let explicit = instance.and_then(|instance| instance.binary_path.as_deref());
+            let app = instance.and_then(|instance| instance.app_path.as_deref());
             let executable = match tool {
-                AiTool::Codex => crate::providers::codex::first_available(explicit).ok(),
-                AiTool::Claude => crate::providers::claude::first_available(explicit),
+                AiTool::Codex => {
+                    crate::providers::codex::discovery::discover_with_app(explicit, app)
+                        .into_iter()
+                        .next()
+                        .map(|candidate| candidate.path)
+                }
+                AiTool::Claude => crate::providers::claude::desktop::bundled_cli_at(app)
+                    .or_else(|| crate::providers::claude::cli_available(explicit)),
             }?;
             Some(AvailableAiTool { tool, executable })
         })

@@ -203,6 +203,27 @@ pub(crate) enum Credential {
     KeyAccounts,
 }
 
+pub(crate) fn source_path_field(kind: ProviderKind, source: InstallSource) -> Option<PathField> {
+    match (kind, source) {
+        (ProviderKind::Kiro, InstallSource::App) => Some(PathField::Binary),
+        (ProviderKind::Kiro, InstallSource::Crew) => Some(PathField::KiroCrew),
+        (ProviderKind::Kiro, InstallSource::Cli) => Some(PathField::KiroCli),
+        (_, InstallSource::App)
+            if driver(kind).sources.app && settings_copy(kind).credential == Credential::Login =>
+        {
+            Some(
+                if settings_copy(kind).binary_source == Some(InstallSource::App) {
+                    PathField::Binary
+                } else {
+                    PathField::App
+                },
+            )
+        }
+        (_, source) if settings_copy(kind).binary_source == Some(source) => Some(PathField::Binary),
+        _ => None,
+    }
+}
+
 /// How Settings and onboarding describe a driver.
 pub(crate) struct SettingsCopy {
     /// What the driver reads, shown under the Runtime heading.
@@ -272,6 +293,50 @@ impl FolderField {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_installation_source_has_an_independent_picker() {
+        for kind in ProviderKind::ALL {
+            let sources = driver(kind).sources;
+            if settings_copy(kind).credential != Credential::Login {
+                continue;
+            }
+            let app = source_path_field(kind, InstallSource::App);
+            let cli = source_path_field(kind, InstallSource::Cli);
+            let crew = source_path_field(kind, InstallSource::Crew);
+            if sources.app {
+                assert!(app.is_some(), "{kind:?} app");
+            }
+            if sources.cli {
+                assert!(cli.is_some(), "{kind:?} cli");
+            }
+            if sources.crew {
+                assert!(crew.is_some(), "{kind:?} crew");
+            }
+            if sources.app && sources.cli {
+                assert_ne!(app, cli, "{kind:?} independent locations");
+            }
+        }
+    }
+
+    #[test]
+    fn app_path_survives_settings_roundtrip_and_changes_worker_identity() {
+        let mut instance = ProviderInstance::primary(ProviderKind::Claude);
+        instance.binary_path = Some("standalone-cli".into());
+        let before = instance.runtime_key();
+        PathField::App.write(&mut instance, Some("desktop-app".into()));
+        assert!(before != instance.runtime_key());
+        assert_eq!(
+            instance.binary_path.as_deref(),
+            Some(Path::new("standalone-cli"))
+        );
+        let stored = serde_json::to_string(&instance).unwrap();
+        let restored: ProviderInstance = serde_json::from_str(&stored).unwrap();
+        assert_eq!(restored, instance);
+        PathField::App.write(&mut instance, None);
+        assert!(instance.app_path.is_none());
+        assert_eq!(instance.credentials_revision, 2);
+    }
 
     #[test]
     fn every_driver_agrees_with_its_registry_entry() {

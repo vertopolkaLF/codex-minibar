@@ -2654,7 +2654,12 @@ pub(crate) fn info_bar(
         .rounded(px(CARD_RADIUS))
         .bg(bg)
         .child(icon(glyph, 16.0, fg))
-        .child(text(message, 13.0, theme.text).flex_1())
+        .child(
+            text(message, 13.0, theme.text)
+                .flex_1()
+                .min_w_0()
+                .whitespace_normal(),
+        )
         .into_any_element()
 }
 
