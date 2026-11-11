@@ -1638,6 +1638,8 @@ is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { $v0 } вы�
 
 # src/ui/settings_window/providers/page.rs
 replace-chatgpt-logo-with-codex = Заменить логотип ChatGPT на Codex
+show-fable-inside-the-weekly-bar = Показывать Fable в недельной полосе
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = Показывает лимит только для Fable цветным сегментом недельной полосы вместо отдельной карточки.
 
 # src/ui/settings_window/providers/page.rs
 limits-only = Только лимиты
@@ -2391,6 +2393,9 @@ quota-percent-used = Использовано { $value }%
 
 # { $value }% left
 quota-percent-left = Осталось { $value }%
+quota-all = Все
+quota-word-left = осталось
+quota-word-used = использовано
 
 # { $amount } of { $limit } used
 cloud-amount-used = Использовано { $amount } из { $limit }

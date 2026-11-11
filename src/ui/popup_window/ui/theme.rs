@@ -702,6 +702,23 @@ impl Palette {
     }
 
     /// Brand tint of a small provider mark on this theme's cards.
+    /// Color of a sub-limit segment inside a quota bar (Claude's Fable
+    /// window in the weekly bar): the Claude brand color, or the accent's
+    /// complement when the accent itself is close to it.
+    pub(crate) fn quota_overlay(&self) -> Hsla {
+        let claude = brand(ProviderKind::Claude, self.dark);
+        let distance = (claude.h - self.accent.h).abs();
+        let distance = distance.min(1.0 - distance);
+        if self.accent.s > 0.2 && distance < 0.08 {
+            Hsla {
+                h: (self.accent.h + 0.5) % 1.0,
+                ..self.accent
+            }
+        } else {
+            claude
+        }
+    }
+
     pub(crate) fn provider_icon(&self, provider: ProviderKind, colored: bool) -> Hsla {
         if !colored {
             return self.mono_provider_icon;

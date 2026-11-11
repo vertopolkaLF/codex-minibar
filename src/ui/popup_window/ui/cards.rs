@@ -144,12 +144,14 @@ impl PopupRoot {
                 window: limit,
                 usage_amount,
                 disabled,
+                overlay,
             } => self.render_limit_card(
                 key,
                 title,
                 limit,
                 *usage_amount,
                 *disabled,
+                overlay.as_ref(),
                 style,
                 self.card_inner_width(surface),
                 window,
@@ -306,11 +308,36 @@ impl PopupRoot {
                     window: limit,
                     usage_amount,
                     disabled,
+                    overlay,
                 } => {
+                    let overlay = overlay.as_ref();
                     if layout == HomeCardLayout::Rings {
-                        rings.push(self.render_limit_ring(key, title, limit, *disabled, style));
+                        rings.push(
+                            self.render_limit_ring(key, title, limit, *disabled, overlay, style),
+                        );
                     } else if layout == HomeCardLayout::Tiles {
-                        rings.push(self.render_limit_tile(key, title, limit, *disabled, style, cx));
+                        rings.push(
+                            self.render_limit_tile(
+                                key, title, limit, *disabled, overlay, style, cx,
+                            ),
+                        );
+                    } else if overlay.is_some() {
+                        // Two limits do not fit a single line: a merged
+                        // card always keeps the two-row compact shape.
+                        out.push(self.render_limit_card(
+                            key,
+                            title,
+                            limit,
+                            *usage_amount,
+                            *disabled,
+                            overlay,
+                            CardStyle {
+                                compact: true,
+                                ..style
+                            },
+                            self.card_inner_width(PopupSurface::HomeTab),
+                            window,
+                        ));
                     } else {
                         out.push(self.render_limit_line(
                             key,
@@ -346,6 +373,92 @@ impl PopupRoot {
         }
         flush_rings(&mut out, &mut rings, paired);
         out
+    }
+
+    /// Animated segment length and copy of a sub-limit merged into a quota
+    /// bar. `parent_progress` is the parent bar's target percent.
+    fn limit_overlay(
+        &mut self,
+        key: &str,
+        limit: &LimitWindow,
+        overlay: Option<&LimitOverlay<'_>>,
+        parent_progress: f64,
+        disabled: bool,
+        show_used_percentage: bool,
+    ) -> Option<MergedLimit> {
+        let overlay = overlay.filter(|_| !disabled)?;
+        let target = overlay.progress(parent_progress, show_used_percentage);
+        let progress = self.fx.value(
+            fx::key(("limit-overlay-progress", key)),
+            target as f32,
+            fx::NORMAL,
+        );
+        let percent =
+            |value: Option<u8>| value.map_or_else(|| "–".to_owned(), |value| format!("{value}%"));
+        Some(MergedLimit {
+            progress,
+            color: self.palette.quota_overlay(),
+            legend: overlay.legend(show_used_percentage),
+            parent_percent: percent(if show_used_percentage {
+                limit.used_percent
+            } else {
+                limit.remaining_percent()
+            }),
+            name: overlay.short_title().to_owned(),
+            percent: percent(overlay.percent(show_used_percentage)),
+            mode: crate::i18n::tr(if show_used_percentage {
+                "quota-word-used"
+            } else {
+                "quota-word-left"
+            }),
+        })
+    }
+
+    /// Both values of a merged card with equal weight, each in the color of
+    /// its bar: `All 94%  Fable 97% left`.
+    fn merged_usage(&self, merged: &MergedLimit) -> Div {
+        let palette = &self.palette;
+        let pair = |name: SharedString, value: String, color: Hsla| {
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(MERGED_USAGE_GAP))
+                .child(caption(name, palette.text_tertiary))
+                .child(components::body_strong(value, color))
+        };
+        div()
+            .flex()
+            .flex_row()
+            .flex_wrap()
+            .items_center()
+            .gap_x(px(MERGED_USAGE_PAIR_GAP))
+            .whitespace_nowrap()
+            .child(pair(
+                crate::i18n::tr("quota-all").into(),
+                merged.parent_percent.clone(),
+                palette.accent_text,
+            ))
+            .child(
+                pair(
+                    merged.name.clone().into(),
+                    merged.percent.clone(),
+                    merged.color,
+                )
+                .child(caption(merged.mode, palette.text_tertiary)),
+            )
+    }
+
+    fn merged_usage_width(metrics: &TextMetrics<'_>, merged: &MergedLimit) -> f32 {
+        metrics.caption(crate::i18n::tr("quota-all"))
+            + MERGED_USAGE_GAP
+            + metrics.strong(&merged.parent_percent)
+            + MERGED_USAGE_PAIR_GAP
+            + metrics.caption(&merged.name)
+            + MERGED_USAGE_GAP
+            + metrics.strong(&merged.percent)
+            + MERGED_USAGE_GAP
+            + metrics.caption(merged.mode)
     }
 
     /// Lines layout: title, pace, value and countdown on one row over the
@@ -434,11 +547,23 @@ impl PopupRoot {
         title: &str,
         limit: &LimitWindow,
         disabled: bool,
+        overlay: Option<&LimitOverlay<'_>>,
         style: CardStyle,
     ) -> AnyElement {
         let palette = self.palette.clone();
         let (_, progress, show_reset, exhausted) =
             limit_card_presentation(limit, style.show_used_percentage, disabled);
+        let merged = self.limit_overlay(
+            key,
+            limit,
+            overlay,
+            progress,
+            disabled,
+            style.show_used_percentage,
+        );
+        let overlay_segment = merged
+            .as_ref()
+            .map(|merged| (merged.progress, merged.color));
         let progress = self.fx.value(
             fx::key(("limit-progress", key)),
             progress as f32,
@@ -469,7 +594,15 @@ impl PopupRoot {
                 canvas(
                     |_, _, _| {},
                     move |bounds, _, window, _| {
-                        paint_ring(bounds, progress, pace_percent, accent, marker, window);
+                        paint_ring(
+                            bounds,
+                            progress,
+                            overlay_segment,
+                            pace_percent,
+                            accent,
+                            marker,
+                            window,
+                        );
                     },
                 )
                 .absolute()
@@ -509,6 +642,9 @@ impl PopupRoot {
         if !show_reset && let Some(pace) = pace {
             details = details.child(components::pace_status(pace, &palette));
         }
+        if let Some(merged) = merged {
+            details = details.child(overlay_legend(merged.legend, merged.color, &palette));
+        }
         // Grows to fill its `flush_rings` cell so paired tiles share a height,
         // with the gauge and details centered vertically.
         card(&palette)
@@ -533,12 +669,24 @@ impl PopupRoot {
         title: &str,
         limit: &LimitWindow,
         disabled: bool,
+        overlay: Option<&LimitOverlay<'_>>,
         style: CardStyle,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = self.palette.clone();
         let (_, progress, show_reset, exhausted) =
             limit_card_presentation(limit, style.show_used_percentage, disabled);
+        let merged = self.limit_overlay(
+            key,
+            limit,
+            overlay,
+            progress,
+            disabled,
+            style.show_used_percentage,
+        );
+        let overlay_segment = merged
+            .as_ref()
+            .map(|merged| (merged.progress, merged.color));
         let progress = self.fx.value(
             fx::key(("limit-progress", key)),
             progress as f32,
@@ -576,7 +724,10 @@ impl PopupRoot {
             .items_center()
             .justify_between()
             .gap_x(px(8.0))
-            .child(nowrap(components::body_strong(value, palette.accent_text)));
+            .child(match merged.as_ref() {
+                Some(merged) => self.merged_usage(merged),
+                None => nowrap(components::body_strong(value, palette.accent_text)),
+            });
         if show_reset {
             footer = footer.child(match limit.resets_at {
                 Some(at) => components::caption_icon_status(
@@ -595,8 +746,9 @@ impl PopupRoot {
             .overflow_hidden()
             .flex_1()
             .min_w_0()
-            .children(components::compact_progress_layers(
+            .children(components::compact_progress_layers_with(
                 progress,
+                overlay_segment,
                 pace.map(|pace| pace.percent as f32),
                 interval_tick_count(limit),
                 palette.accent,
@@ -795,6 +947,7 @@ impl PopupRoot {
         limit: &LimitWindow,
         usage_amount: Option<&UsageAmount>,
         disabled: bool,
+        overlay: Option<&LimitOverlay<'_>>,
         style: CardStyle,
         available_width: f32,
         window: &Window,
@@ -802,6 +955,17 @@ impl PopupRoot {
         let palette = self.palette.clone();
         let (label, progress, show_reset, exhausted) =
             limit_card_presentation(limit, style.show_used_percentage, disabled);
+        let merged = self.limit_overlay(
+            key,
+            limit,
+            overlay,
+            progress,
+            disabled,
+            style.show_used_percentage,
+        );
+        let overlay_segment = merged
+            .as_ref()
+            .map(|merged| (merged.progress, merged.color));
         // Values glide when a poll moves them instead of jumping.
         let progress = self.fx.value(
             fx::key(("limit-progress", key)),
@@ -818,14 +982,23 @@ impl PopupRoot {
         if let Some(value) = usage_amount_label(usage_amount, style.show_usage_values) {
             usage_width += 5.0 + metrics.caption(&value);
         }
+        if let Some(merged) = merged.as_ref() {
+            usage_width = Self::merged_usage_width(&metrics, merged);
+        }
+        let usage_el = |this: &Self| match merged.as_ref() {
+            Some(merged) => this.merged_usage(merged),
+            None => this.usage_label(label.clone(), usage_amount, style.show_usage_values),
+        };
         let reset_width = match limit.resets_at {
             Some(at) => metrics.icon_status(&format_reset_in(Some(at))),
             None => metrics.caption(crate::i18n::tr("session-not-started")),
         };
         let single_line = !title.contains(['\n', '\r']);
-        // Title, usage and reset on one row; pace forces the two-row layout.
+        // Title, usage and reset on one row; pace or a merged sub-limit forces
+        // the two-row layout.
         let one_row_fits = single_line
             && pace.is_none()
+            && merged.is_none()
             && compact_title_fits(available_width, title_width, usage_width, reset_width);
         let title_alone_fits = single_line && title_width <= available_width;
         let title_el = || nowrap(caption(title.to_owned(), secondary));
@@ -837,7 +1010,7 @@ impl PopupRoot {
                 .w_full()
                 .gap(px(10.0))
                 .child(div().flex_1().min_w_0().child(title_el()))
-                .child(this.usage_label(label.clone(), usage_amount, style.show_usage_values))
+                .child(usage_el(this))
                 .child(this.reset_status(limit))
         };
         let title_block =
@@ -861,17 +1034,18 @@ impl PopupRoot {
         let footer = if show_reset {
             components::adaptive_split(
                 TextMetrics::fits_split(available_width, usage_width, reset_width),
-                self.usage_label(label.clone(), usage_amount, style.show_usage_values),
+                usage_el(self),
                 self.reset_status(limit),
             )
         } else {
-            self.usage_label(label.clone(), usage_amount, style.show_usage_values)
+            usage_el(self)
         };
 
         if style.compact {
             let mut element = card(&palette).relative().overflow_hidden();
-            for layer in components::compact_progress_layers(
+            for layer in components::compact_progress_layers_with(
                 progress,
+                overlay_segment,
                 pace.map(|pace| pace.percent as f32),
                 interval_tick_count(limit),
                 palette.accent,
@@ -903,8 +1077,9 @@ impl PopupRoot {
             .flex_col()
             .gap(px(8.0))
             .child(header)
-            .child(components::progress_track(
+            .child(components::progress_track_with(
                 progress,
+                overlay_segment,
                 pace.map(|pace| pace.percent as f32),
                 interval_tick_count(limit),
                 palette.accent,
@@ -2007,9 +2182,11 @@ fn flush_rings(out: &mut Vec<AnyElement>, rings: &mut Vec<AnyElement>, paired: b
 
 /// Track, clockwise value arc from 12 o'clock, and a radial pace tick the
 /// width of the stroke.
+#[allow(clippy::too_many_arguments)]
 fn paint_ring(
     bounds: Bounds<Pixels>,
     percent: f32,
+    overlay: Option<(f32, Hsla)>,
     pace: Option<f32>,
     color: Hsla,
     marker: Hsla,
@@ -2043,6 +2220,9 @@ fn paint_ring(
     };
     arc(1.0, color.opacity(0.2), window);
     arc(percent / 100.0, color, window);
+    if let Some((overlay, overlay_color)) = overlay {
+        arc(overlay.min(percent) / 100.0, overlay_color, window);
+    }
     if let Some(pace) = pace {
         let fraction = pace.clamp(0.0, 100.0) / 100.0;
         let mut builder = PathBuilder::stroke(px(2.0));
@@ -2052,6 +2232,45 @@ fn paint_ring(
             window.paint_path(path, marker);
         }
     }
+}
+
+/// Diameter of the color dot and its gap to the text in [`overlay_legend`].
+const OVERLAY_LEGEND_DOT: f32 = 6.0;
+const OVERLAY_LEGEND_GAP: f32 = 4.0;
+/// Gaps inside and between the name/value pairs of a merged card.
+const MERGED_USAGE_GAP: f32 = 4.0;
+const MERGED_USAGE_PAIR_GAP: f32 = 10.0;
+
+/// A sub-limit merged into its parent's card, resolved for one frame.
+struct MergedLimit {
+    /// Animated segment length in parent-bar percent.
+    progress: f32,
+    color: Hsla,
+    /// Ring layout legend, such as `Fable only 61%`.
+    legend: String,
+    parent_percent: String,
+    name: String,
+    percent: String,
+    /// Localized `left` / `used`.
+    mode: &'static str,
+}
+
+/// Color dot and label of a sub-limit segment drawn inside a quota bar.
+fn overlay_legend(legend: String, color: Hsla, palette: &super::theme::Palette) -> Div {
+    div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap(px(OVERLAY_LEGEND_GAP))
+        .whitespace_nowrap()
+        .child(
+            div()
+                .size(px(OVERLAY_LEGEND_DOT))
+                .flex_none()
+                .rounded_full()
+                .bg(color),
+        )
+        .child(caption(legend, palette.text_tertiary))
 }
 
 fn theme_gray() -> gpui::Hsla {

@@ -211,6 +211,26 @@ impl SettingsWindow {
             }));
             sections.push(div().h(px(4.0)).into_any_element());
         }
+        if instance.driver == ProviderKind::Claude {
+            sections.push(kit::card_of(k, |k| {
+                vec![kit::toggle_row(
+                    k,
+                    "claude-merge-fable",
+                    crate::i18n::tr("show-fable-inside-the-weekly-bar"),
+                    Some(
+                        crate::i18n::tr(
+                            "draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar",
+                        )
+                        .into(),
+                    ),
+                    self.settings.merge_claude_fable_into_weekly,
+                    Self::h(cx, |this, value: bool, _, cx| {
+                        this.edit(cx, move |s| s.merge_claude_fable_into_weekly = value)
+                    }),
+                )]
+            }));
+            sections.push(div().h(px(4.0)).into_any_element());
+        }
         sections.push(self.popup_cards_section(&instance, k, cx));
         let dim = k.fx.toggle(
             fx::key(("provider-dim", provider.id())),

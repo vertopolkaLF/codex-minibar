@@ -1446,6 +1446,7 @@ impl PopupRoot {
             provider_status: statuses
                 .iter()
                 .find(|status| status.kind == provider.kind()),
+            merge_claude_fable: ui.settings.merge_claude_fable_into_weekly,
             now: Utc::now(),
         }
     }

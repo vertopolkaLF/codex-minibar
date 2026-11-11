@@ -1637,6 +1637,8 @@ is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { $v0 } is of
 
 # src/ui/settings_window/providers/page.rs
 replace-chatgpt-logo-with-codex = Replace ChatGPT logo with Codex
+show-fable-inside-the-weekly-bar = Show Fable inside the weekly bar
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = Draws the Fable-only limit as a colored segment of the weekly bar instead of a separate card.
 
 # src/ui/settings_window/providers/page.rs
 limits-only = Limits only
@@ -2384,6 +2386,9 @@ quota-percent-used = { $value }% used
 
 # { $value }% left
 quota-percent-left = { $value }% left
+quota-all = All
+quota-word-left = left
+quota-word-used = used
 
 # { $amount } of { $limit } used
 cloud-amount-used = { $amount } of { $limit } used

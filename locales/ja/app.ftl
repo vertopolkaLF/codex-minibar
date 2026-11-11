@@ -1618,6 +1618,8 @@ is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { $v0 } は�
 
 # src/ui/settings_window/providers/page.rs
 replace-chatgpt-logo-with-codex = ChatGPT ロゴを Codex に置き換えます
+show-fable-inside-the-weekly-bar = 週間バーの中に Fable を表示
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = Fable 専用の制限を、別のカードではなく週間バーの色付きセグメントとして表示します。
 
 # src/ui/settings_window/providers/page.rs
 limits-only = 利用枠のみ
@@ -2347,6 +2349,9 @@ quota-percent-used = { $value }% 使用済み
 
 # { $value }% left
 quota-percent-left = 残り { $value }%
+quota-all = 全体
+quota-word-left = 残り
+quota-word-used = 使用済み
 
 # { $amount } of { $limit } used
 cloud-amount-used = { $limit } 中 { $amount } 使用済み

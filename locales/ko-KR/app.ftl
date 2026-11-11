@@ -1634,6 +1634,8 @@ is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { $v0 }이 �
 
 # src/ui/settings_window/providers/page.rs
 replace-chatgpt-logo-with-codex = ChatGPT 로고를 Codex로 교체
+show-fable-inside-the-weekly-bar = 주간 막대 안에 Fable 표시
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = Fable 전용 한도를 별도 카드 대신 주간 막대의 색상 구간으로 표시합니다.
 
 # src/ui/settings_window/providers/page.rs
 limits-only = 한도만
@@ -2363,6 +2365,9 @@ quota-percent-used = { $value }% 사용됨
 
 # { $value }% left
 quota-percent-left = { $value }% 남음
+quota-all = 전체
+quota-word-left = 남음
+quota-word-used = 사용됨
 
 # { $amount } of { $limit } used
 cloud-amount-used = { $limit } 중 { $amount } 사용

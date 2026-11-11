@@ -1109,6 +1109,8 @@ no-providers-yet-add-one-to-start-reading-limits = Ainda não há provedores. Ad
 is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { $v0 } está desativado e não aparece no minibar nem na bandeja. Ative para começar a ler o uso.
 
 replace-chatgpt-logo-with-codex = Substituir logo do ChatGPT pelo Codex
+show-fable-inside-the-weekly-bar = Mostrar Fable dentro da barra semanal
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = Mostra o limite exclusivo do Fable como um segmento colorido da barra semanal em vez de um cartão separado.
 
 limits-only = Somente limites
 
@@ -1620,6 +1622,9 @@ dec = dez
 quota-percent-used = { $value }% usado
 
 quota-percent-left = { $value }% restante
+quota-all = Todos
+quota-word-left = restante
+quota-word-used = usado
 
 cloud-amount-used = { $amount } de { $limit } usados
 

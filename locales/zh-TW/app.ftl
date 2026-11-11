@@ -1106,6 +1106,8 @@ no-providers-yet-add-one-to-start-reading-limits = 尚無服務供應商。新�
 is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { $v0 } 已關閉，因此不會出現在 Minibar 或系統匣中。啟用後開始讀取用量。
 
 replace-chatgpt-logo-with-codex = 將 ChatGPT 標誌替換為 Codex
+show-fable-inside-the-weekly-bar = 在每週進度條中顯示 Fable
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = 將 Fable 專屬限額顯示為每週進度條中的彩色區段，而非獨立卡片。
 
 limits-only = 僅額度
 
@@ -1599,6 +1601,9 @@ dec = 12月
 quota-percent-used = 已用 { $value }%
 
 quota-percent-left = 剩餘 { $value }%
+quota-all = 全部
+quota-word-left = 剩餘
+quota-word-used = 已用
 
 cloud-amount-used = 已用 { $amount }，共 { $limit }
 

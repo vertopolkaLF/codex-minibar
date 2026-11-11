@@ -16,6 +16,8 @@ pub(crate) const PROGRESS_TRACK_HEIGHT: f32 = 6.0;
 const INTERVAL_TICK_WIDTH: f32 = 2.0;
 const INTERVAL_TICK_HEIGHT: f32 = PROGRESS_TRACK_HEIGHT - 2.0;
 const CARD_EDGE_MARKER_HEIGHT: f32 = INTERVAL_TICK_HEIGHT + 2.0;
+/// Height of a sub-limit strip on a compact card's bottom edge.
+const OVERLAY_STRIP_HEIGHT: f32 = 3.0;
 
 pub(crate) fn text(value: impl Into<SharedString>, size: f32, line: f32, color: Hsla) -> Div {
     div()
@@ -547,6 +549,19 @@ pub(crate) fn progress_track(
     fill: Hsla,
     palette: &Palette,
 ) -> Div {
+    progress_track_with(value, None, pace, ticks, fill, palette)
+}
+
+/// [`progress_track`] with an optional sub-limit segment `(percent, color)`
+/// painted from the left inside the fill.
+pub(crate) fn progress_track_with(
+    value: f32,
+    overlay: Option<(f32, Hsla)>,
+    pace: Option<f32>,
+    ticks: u32,
+    fill: Hsla,
+    palette: &Palette,
+) -> Div {
     let value = value.clamp(0.0, 100.0);
     let mut track = div()
         .relative()
@@ -571,6 +586,19 @@ pub(crate) fn progress_track(
                 .min_w(px(PROGRESS_TRACK_HEIGHT))
                 .rounded(px(PROGRESS_TRACK_HEIGHT / 2.0))
                 .bg(fill),
+        );
+    }
+    if let Some((overlay, color)) = overlay.filter(|(overlay, _)| *overlay > 0.0) {
+        track = track.child(
+            div()
+                .absolute()
+                .left_0()
+                .top_0()
+                .bottom_0()
+                .w(relative(overlay.min(value) / 100.0))
+                .min_w(px(PROGRESS_TRACK_HEIGHT))
+                .rounded(px(PROGRESS_TRACK_HEIGHT / 2.0))
+                .bg(color),
         );
     }
     if let Some(ticks) = interval_ticks(ticks, palette, false) {
@@ -599,24 +627,42 @@ pub(crate) fn compact_progress_layers(
     fill: Hsla,
     palette: &Palette,
 ) -> Vec<AnyElement> {
+    compact_progress_layers_with(value, None, pace, ticks, fill, palette)
+}
+
+/// [`compact_progress_layers`] with an optional sub-limit `(percent, color)`
+/// drawn as a strip along the bottom edge.
+pub(crate) fn compact_progress_layers_with(
+    value: f32,
+    overlay: Option<(f32, Hsla)>,
+    pace: Option<f32>,
+    ticks: u32,
+    fill: Hsla,
+    palette: &Palette,
+) -> Vec<AnyElement> {
     let value = value.clamp(0.0, 100.0);
     let radius = palette.card_radius - 1.0;
-    let mut layers = Vec::with_capacity(3);
-    if value > 0.0 {
-        // Overflow masks are rectangular in GPUI. Paint the full card's
-        // rounded contour through a percentage mask so even a narrow fill
-        // follows the card corners instead of shrinking its own radius.
-        let segment = gpui::canvas(
+    let mut layers = Vec::with_capacity(4);
+    // Overflow masks are rectangular in GPUI. Paint the full card's rounded
+    // contour through a percentage mask so even a narrow fill follows the
+    // card corners instead of shrinking its own radius.
+    // `strip` limits the layer to a band on the card's bottom edge.
+    let segment = |value: f32, strip: Option<f32>, color: Hsla| {
+        gpui::canvas(
             |_, _, _| (),
             move |bounds, _, window, _| {
                 let mut filled_bounds = bounds;
                 filled_bounds.size.width *= value / 100.0;
+                if let Some(strip) = strip {
+                    filled_bounds.origin.y += bounds.size.height - px(strip);
+                    filled_bounds.size.height = px(strip);
+                }
                 window.with_content_mask(
                     Some(gpui::ContentMask {
                         bounds: filled_bounds,
                     }),
                     |window| {
-                        let mut quad = gpui::fill(bounds, fill.opacity(0.2));
+                        let mut quad = gpui::fill(bounds, color);
                         quad.corner_radii = gpui::Corners::all(px(radius));
                         window.paint_quad(quad);
                     },
@@ -624,8 +670,19 @@ pub(crate) fn compact_progress_layers(
             },
         )
         .absolute()
-        .inset_0();
-        layers.push(segment.into_any_element());
+        .inset_0()
+        .into_any_element()
+    };
+    if value > 0.0 {
+        layers.push(segment(value, None, fill.opacity(0.2)));
+    }
+    // The sub-limit is a solid strip along the bottom edge: it stays clear
+    // of the card's text and never blends with the fill.
+    if let Some((overlay, color)) = overlay {
+        let overlay = overlay.clamp(0.0, value);
+        if overlay > 0.0 {
+            layers.push(segment(overlay, Some(OVERLAY_STRIP_HEIGHT), color));
+        }
     }
     if let Some(ticks) = interval_ticks(ticks, palette, true) {
         layers.push(ticks.into_any_element());

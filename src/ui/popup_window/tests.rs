@@ -60,6 +60,7 @@ fn test_cards<'a>(
             drag_handle: false,
             provider_error: None,
             provider_status: None,
+            merge_claude_fable: false,
             now: Utc::now(),
         },
     )
@@ -329,6 +330,7 @@ fn reset_card_keeps_instance_identity_and_last_credit_result_surface() {
                     provider_error: None,
                     provider_status: None,
                     keep_reset_card: true,
+                    merge_claude_fable: false,
                     now: Utc::now(),
                 },
             );
@@ -563,6 +565,79 @@ fn provider_cards_include_each_additional_limit() {
         vec!["5H SESSION", "WEEKLY", "FABLE"]
     );
     assert!(!cards.iter().any(Card::is_usage_statistics));
+}
+
+#[test]
+fn merged_fable_rides_in_the_weekly_bar_instead_of_its_own_card() {
+    let mut limits = plan_limits("max");
+    limits.secondary.used_percent = Some(30);
+    limits
+        .additional_limits
+        .push(crate::quota::limits::AdditionalLimit {
+            id: "claude-weekly-scoped-claude-fable-5-promo".into(),
+            title: "Fable only".into(),
+            window: LimitWindow {
+                used_percent: Some(42),
+                ..Default::default()
+            },
+        });
+    let visibility = all_visible();
+    let cards_with = |merge: bool| {
+        provider_cards(
+            ProviderKind::Claude.into(),
+            true,
+            false,
+            &limits,
+            &[],
+            &CardOptions {
+                keep_reset_card: false,
+                popup_visibility: &visibility,
+                surface: PopupSurface::ProviderTab,
+                show_provider_tabs: true,
+                include_usage_stats: false,
+                show_account_name: false,
+                drag_handle: false,
+                provider_error: None,
+                provider_status: None,
+                merge_claude_fable: merge,
+                now: Utc::now(),
+            },
+        )
+    };
+
+    let separate = cards_with(false);
+    assert!(
+        separate
+            .iter()
+            .filter_map(Card::limit_title)
+            .any(|title| title == "FABLE ONLY")
+    );
+
+    let merged = cards_with(true);
+    assert_eq!(
+        merged
+            .iter()
+            .filter_map(Card::limit_title)
+            .collect::<Vec<_>>(),
+        vec!["5H SESSION", "WEEKLY"]
+    );
+    let overlay = merged
+        .iter()
+        .find_map(|card| match card {
+            Card::Limit {
+                title,
+                overlay: Some(overlay),
+                ..
+            } if title == "WEEKLY" => Some(overlay.clone()),
+            _ => None,
+        })
+        .expect("weekly carries the Fable segment");
+    // 42% of a limit half the weekly size is 21% of the weekly bar.
+    assert_eq!(overlay.progress(30.0, true), 21.0);
+    assert_eq!(overlay.legend(true), "Fable only 42%");
+    // Remaining mode: 58% of Fable is 29% of weekly, capped by the 70% left.
+    assert_eq!(overlay.progress(70.0, false), 29.0);
+    assert_eq!(overlay.progress(10.0, false), 10.0);
 }
 
 #[test]

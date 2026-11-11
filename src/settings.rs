@@ -2046,6 +2046,9 @@ pub struct Settings {
     /// as "Use monochrome icons".
     pub use_colored_provider_icons: bool,
     pub replace_chatgpt_logo_with_codex: bool,
+    /// Draw Claude's Fable-only weekly window as a segment of the weekly bar
+    /// instead of as its own card.
+    pub merge_claude_fable_into_weekly: bool,
     /// Weekly activations, each bound to exactly one provider instance.
     pub scheduled_activations: Vec<ScheduledActivation>,
     /// Weekly local-time periods that suppress automatic activation per provider.
@@ -2154,6 +2157,7 @@ impl Default for Settings {
             popup_home_card_layouts: BTreeMap::new(),
             use_colored_provider_icons: true,
             replace_chatgpt_logo_with_codex: false,
+            merge_claude_fable_into_weekly: false,
             scheduled_activations: Vec::new(),
             auto_activation_pauses: Vec::new(),
             auto_reset_lead: AutoResetLead::default(),

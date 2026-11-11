@@ -1634,6 +1634,8 @@ is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { $v0 } kapal
 
 # src/ui/settings_window/providers/page.rs
 replace-chatgpt-logo-with-codex = ChatGPT logosunu Codex ile değiştir
+show-fable-inside-the-weekly-bar = Fable'ı haftalık çubuğun içinde göster
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = Yalnızca Fable sınırını ayrı bir kart yerine haftalık çubuğun renkli bir bölümü olarak gösterir.
 
 # src/ui/settings_window/providers/page.rs
 limits-only = Yalnızca limitler
@@ -2363,6 +2365,9 @@ quota-percent-used = %{ $value } kullanıldı
 
 # { $value }% left
 quota-percent-left = %{ $value } kaldı
+quota-all = Tümü
+quota-word-left = kaldı
+quota-word-used = kullanıldı
 
 # { $amount } of { $limit } used
 cloud-amount-used = { $limit } toplamının { $amount } kadarı kullanıldı

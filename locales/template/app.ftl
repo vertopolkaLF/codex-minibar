@@ -2355,6 +2355,14 @@ is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { "" }
 replace-chatgpt-logo-with-codex = { "" }
 
 # English source:
+# show-fable-inside-the-weekly-bar = Show Fable inside the weekly bar
+show-fable-inside-the-weekly-bar = { "" }
+
+# English source:
+# draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = Draws the Fable-only limit as a colored segment of the weekly bar instead of a separate card.
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = { "" }
+
+# English source:
 # limits-only = Limits only
 limits-only = { "" }
 
@@ -3343,6 +3351,18 @@ quota-percent-used = { "" }
 # English source:
 # quota-percent-left = { $value }% left
 quota-percent-left = { "" }
+
+# English source:
+# quota-all = All
+quota-all = { "" }
+
+# English source:
+# quota-word-left = left
+quota-word-left = { "" }
+
+# English source:
+# quota-word-used = used
+quota-word-used = { "" }
 
 # English source:
 # cloud-amount-used = { $amount } of { $limit } used

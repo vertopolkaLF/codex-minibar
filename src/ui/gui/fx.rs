@@ -530,6 +530,7 @@ mod tests {
                     drag_handle: false,
                     provider_error: None,
                     provider_status: None,
+                    merge_claude_fable: false,
                     now: chrono::Utc::now(),
                 };
                 let sample = |session_used, weekly_used| {

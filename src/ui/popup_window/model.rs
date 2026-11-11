@@ -31,7 +31,60 @@ pub(crate) struct CardOptions<'a> {
     pub(crate) keep_reset_card: bool,
     /// Status page of the instance's driver, when it has incidents.
     pub(crate) provider_status: Option<&'a crate::providers::status::ProviderStatus>,
+    /// Draw Claude's Fable-only window inside the weekly bar instead of as
+    /// its own card.
+    pub(crate) merge_claude_fable: bool,
     pub(crate) now: DateTime<Utc>,
+}
+
+/// Share of Claude's all-models weekly limit that the Fable-only weekly
+/// limit amounts to.
+pub(crate) const CLAUDE_FABLE_WEEKLY_SHARE: f32 = 0.5;
+
+/// Whether an additional Claude window is the model-scoped Fable limit.
+pub(crate) fn is_claude_fable_limit(limit: &crate::quota::limits::AdditionalLimit) -> bool {
+    limit.id.to_ascii_lowercase().contains("fable")
+}
+
+/// A sub-limit drawn as a second segment inside its parent bar. `share` is
+/// the sub-limit's size as a fraction of the parent limit.
+#[derive(Clone, Debug)]
+pub(crate) struct LimitOverlay<'a> {
+    pub(crate) title: String,
+    pub(crate) window: &'a LimitWindow,
+    pub(crate) share: f32,
+}
+
+impl LimitOverlay<'_> {
+    /// The sub-limit's own percentage in the selected label mode.
+    pub(crate) fn percent(&self, show_used_percentage: bool) -> Option<u8> {
+        if show_used_percentage {
+            self.window.used_percent
+        } else {
+            self.window.remaining_percent()
+        }
+    }
+
+    /// Segment length in parent-bar percent, never longer than the parent
+    /// fill: Fable usage also counts toward the all-models limit, and Fable
+    /// can never have more left than the weekly limit itself.
+    pub(crate) fn progress(&self, parent_progress: f64, show_used_percentage: bool) -> f64 {
+        let own = f64::from(self.percent(show_used_percentage).unwrap_or(0));
+        (own * f64::from(self.share)).min(parent_progress).max(0.0)
+    }
+
+    /// The model name without the provider's ` only` suffix.
+    pub(crate) fn short_title(&self) -> &str {
+        self.title.strip_suffix(" only").unwrap_or(&self.title)
+    }
+
+    /// Short legend such as `Fable only 42%`.
+    pub(crate) fn legend(&self, show_used_percentage: bool) -> String {
+        let value = self
+            .percent(show_used_percentage)
+            .map_or_else(|| "–".to_owned(), |value| format!("{value}%"));
+        format!("{} {value}", self.title)
+    }
 }
 
 /// Instance-scoped card identity, so two instances of one driver never share
@@ -62,6 +115,8 @@ pub(crate) enum Card<'a> {
         window: &'a LimitWindow,
         usage_amount: Option<&'a UsageAmount>,
         disabled: bool,
+        /// Claude's Fable window merged into the weekly bar.
+        overlay: Option<LimitOverlay<'a>>,
     },
     Spending {
         key: String,
@@ -292,6 +347,15 @@ pub(crate) fn provider_cards<'a>(
         && (limits.usage.has_data()
             || crate::providers::registry::descriptor(kind).usage_stats
                 == UsageStats::RemoteExport);
+    // Claude can fold its Fable-only window into the weekly bar.
+    let fable = (kind == ProviderKind::Claude && options.merge_claude_fable)
+        .then(|| {
+            limits.additional_limits.iter().find(|limit| {
+                is_claude_fable_limit(limit) && visible(&additional_limit_brick_id(kind, &limit.id))
+            })
+        })
+        .flatten();
+    let mut fable_merged = false;
     for section in popup_sections(kind, limits, false) {
         if !matches!(
             section,
@@ -322,18 +386,29 @@ pub(crate) fn provider_cards<'a>(
                 false,
             ),
         };
+        let overlay = fable
+            .filter(|_| section == PopupSection::Weekly)
+            .map(|limit| LimitOverlay {
+                title: crate::providers::registry::additional_label(limit),
+                window: &limit.window,
+                share: CLAUDE_FABLE_WEEKLY_SHARE,
+            });
+        fable_merged |= overlay.is_some();
         cards.push(Card::Limit {
             key: card_key(provider, section.key()),
             title: title.to_uppercase(),
             window,
             usage_amount,
             disabled,
+            overlay,
         });
     }
     // Claude can return extra windows such as Fable or Opus. They belong with
     // the ordinary limit cards, before banked resets, statistics, or credits.
     for limit in &limits.additional_limits {
-        if !visible(&additional_limit_brick_id(kind, &limit.id)) {
+        if !visible(&additional_limit_brick_id(kind, &limit.id))
+            || (fable_merged && fable.is_some_and(|fable| std::ptr::eq(fable, limit)))
+        {
             continue;
         }
         if kind == ProviderKind::Claude
@@ -353,6 +428,7 @@ pub(crate) fn provider_cards<'a>(
             window: &limit.window,
             usage_amount: None,
             disabled: false,
+            overlay: None,
         });
     }
     // A Claude instance backed by an Admin API key reports organization
