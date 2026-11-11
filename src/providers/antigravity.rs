@@ -19,7 +19,7 @@ use crate::{
     providers::instances::ProviderInstance,
     providers::support,
     providers::worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
-    quota::limits::{LimitWindow, RateLimits},
+    quota::limits::{AdditionalLimit, LimitWindow, RateLimits},
     usage::UsageStatistics,
 };
 
@@ -489,11 +489,33 @@ fn read_remote_limits(
 
 fn limits_from_summary(summary: &Value, plan_type: Option<String>) -> Result<RateLimits> {
     let observations = observations_from_summary(summary);
-    // Keep the existing family metrics (including saved tray selections), but
-    // let either the session or weekly allowance drive each family's usage.
-    let gemini = select_family(&observations, Family::Gemini);
-    let third_party = select_family(&observations, Family::ThirdParty);
-    if gemini.is_none() && third_party.is_none() {
+    // Each family has a 5h session and a weekly allowance. The sessions keep
+    // the existing primary and secondary metrics (and saved tray selections);
+    // the weekly allowances are their own lanes so neither hides the other.
+    let gemini = select_family(&observations, Family::Gemini, Cadence::Session);
+    let third_party = select_family(&observations, Family::ThirdParty, Cadence::Session);
+    let additional_limits = [
+        (
+            Family::Gemini,
+            crate::providers::registry::ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID,
+            "Gemini weekly",
+        ),
+        (
+            Family::ThirdParty,
+            crate::providers::registry::ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID,
+            "Claude + GPT weekly",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(family, id, title)| {
+        select_family(&observations, family, Cadence::Weekly).map(|item| AdditionalLimit {
+            id: id.into(),
+            title: title.into(),
+            window: limit_window(item),
+        })
+    })
+    .collect::<Vec<_>>();
+    if gemini.is_none() && third_party.is_none() && additional_limits.is_empty() {
         bail!("Antigravity returned no recognized subscription quota pools")
     }
     Ok(RateLimits {
@@ -503,6 +525,7 @@ fn limits_from_summary(summary: &Value, plan_type: Option<String>) -> Result<Rat
         plan_type,
         limit_name: Some("Gemini".into()),
         secondary_limit_name: Some("Claude + GPT".into()),
+        additional_limits,
         ..RateLimits::default()
     })
 }
@@ -584,9 +607,9 @@ fn observations_from_summary(value: &Value) -> Vec<QuotaObservation> {
                         reset_time: bucket.get("resetTime").and_then(parse_expiry),
                         duration_minutes: match cadence {
                             Some("5h") => Some(300),
-                            Some("weekly") => Some(10_080),
+                            Some("weekly") => Some(WEEKLY_MINUTES),
                             None if id.ends_with("-5h") => Some(300),
-                            None if id.ends_with("-weekly") => Some(10_080),
+                            None if id.ends_with("-weekly") => Some(WEEKLY_MINUTES),
                             _ => None,
                         },
                     }
@@ -601,7 +624,21 @@ enum Family {
     ThirdParty,
 }
 
-fn select_family(items: &[QuotaObservation], family: Family) -> Option<QuotaObservation> {
+/// Weekly allowances are their own lane; every other bucket (5h, or an
+/// unknown cadence) competes for the family's session slot.
+#[derive(Clone, Copy, PartialEq)]
+enum Cadence {
+    Session,
+    Weekly,
+}
+
+const WEEKLY_MINUTES: u32 = 10_080;
+
+fn select_family(
+    items: &[QuotaObservation],
+    family: Family,
+    cadence: Cadence,
+) -> Option<QuotaObservation> {
     items
         .iter()
         .filter(|item| {
@@ -615,6 +652,10 @@ fn select_family(items: &[QuotaObservation], family: Family) -> Option<QuotaObse
                         || identity.contains("oss")
                 }
             }
+        })
+        .filter(|item| {
+            let weekly = item.duration_minutes == Some(WEEKLY_MINUTES);
+            weekly == (cadence == Cadence::Weekly)
         })
         .filter(|item| item.remaining_fraction.is_some())
         .min_by(|left, right| {
@@ -663,6 +704,9 @@ fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::providers::registry::{
+        ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID, ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID,
+    };
 
     type RecordedRequests = Vec<(String, Value)>;
 
@@ -736,13 +780,13 @@ mod tests {
     }
 
     #[test]
-    fn weekly_consumption_is_not_hidden_by_an_unused_session() {
+    fn reports_session_and_weekly_windows_for_both_families() {
         let limits = limits_from_summary(&quota_summary(), None).unwrap();
-        assert_eq!(limits.primary.used_percent, Some(3));
-        assert_eq!(limits.primary.duration_minutes, Some(10_080));
+        assert_eq!(limits.primary.used_percent, Some(0));
+        assert_eq!(limits.primary.duration_minutes, Some(300));
         assert_eq!(
             limits.primary.resets_at,
-            parse_timestamp("2026-10-27T14:58:17Z")
+            parse_timestamp("2026-10-21T06:59:37Z")
         );
         assert_eq!(limits.secondary.used_percent, Some(60));
         assert_eq!(limits.secondary.duration_minutes, Some(300));
@@ -750,10 +794,29 @@ mod tests {
             limits.secondary.resets_at,
             parse_timestamp("2026-10-21T06:00:00Z")
         );
+        let gemini = weekly(&limits, ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID).unwrap();
+        assert_eq!(gemini.used_percent, Some(3));
+        assert_eq!(gemini.duration_minutes, Some(WEEKLY_MINUTES));
+        assert_eq!(gemini.resets_at, parse_timestamp("2026-10-27T14:58:17Z"));
+        let third_party = weekly(&limits, ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID).unwrap();
+        assert_eq!(third_party.used_percent, Some(20));
+        assert_eq!(third_party.duration_minutes, Some(WEEKLY_MINUTES));
+        assert_eq!(
+            third_party.resets_at,
+            parse_timestamp("2026-10-28T01:59:37Z")
+        );
+    }
+
+    fn weekly<'a>(limits: &'a RateLimits, id: &str) -> Option<&'a LimitWindow> {
+        limits
+            .additional_limits
+            .iter()
+            .find(|limit| limit.id == id)
+            .map(|limit| &limit.window)
     }
 
     #[test]
-    fn disabled_session_buckets_do_not_override_enabled_weekly_allowances() {
+    fn disabled_session_buckets_leave_only_the_weekly_allowances() {
         let mut summary = quota_summary();
         for group in summary["groups"].as_array_mut().unwrap() {
             group["buckets"][0]["disabled"] = json!(false);
@@ -761,17 +824,15 @@ mod tests {
             group["buckets"][1]["remainingFraction"] = json!(0.5);
         }
         let limits = limits_from_summary(&summary, None).unwrap();
-        assert_eq!(limits.primary.used_percent, Some(3));
-        assert_eq!(limits.primary.duration_minutes, Some(10_080));
+        assert!(limits.primary.is_empty());
+        assert!(limits.secondary.is_empty());
         assert_eq!(
-            limits.primary.resets_at,
-            parse_timestamp("2026-10-27T14:58:17Z")
+            weekly(&limits, ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID).and_then(|w| w.used_percent),
+            Some(3)
         );
-        assert_eq!(limits.secondary.used_percent, Some(20));
-        assert_eq!(limits.secondary.duration_minutes, Some(10_080));
         assert_eq!(
-            limits.secondary.resets_at,
-            parse_timestamp("2026-10-28T01:59:37Z")
+            weekly(&limits, ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID).and_then(|w| w.used_percent),
+            Some(20)
         );
     }
 
@@ -788,6 +849,14 @@ mod tests {
             let limits = limits_from_summary(&summary, None).unwrap();
             assert_eq!(limits.primary.is_empty(), disabled_group == 0);
             assert_eq!(limits.secondary.is_empty(), disabled_group == 1);
+            assert_eq!(
+                weekly(&limits, ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID).is_none(),
+                disabled_group == 0
+            );
+            assert_eq!(
+                weekly(&limits, ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID).is_none(),
+                disabled_group == 1
+            );
 
             for group in summary["groups"].as_array_mut().unwrap() {
                 for bucket in group["buckets"].as_array_mut().unwrap() {
@@ -827,6 +896,10 @@ mod tests {
             let expected = if remaining == 0.0 { Some(100) } else { Some(0) };
             assert_eq!(limits.primary.used_percent, expected);
             assert_eq!(limits.secondary.used_percent, expected);
+            assert_eq!(limits.additional_limits.len(), 2);
+            for limit in &limits.additional_limits {
+                assert_eq!(limit.window.used_percent, expected);
+            }
         }
     }
 
@@ -874,8 +947,12 @@ mod tests {
             "buckets":[{"bucketId":"gemini-weekly","remainingFraction":0.7}]
         }]});
         let limits = limits_from_summary(&summary, None).unwrap();
-        assert_eq!(limits.primary.used_percent, Some(30));
+        assert!(limits.primary.is_empty());
         assert!(limits.secondary.is_empty());
+        assert_eq!(
+            weekly(&limits, ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID).and_then(|w| w.used_percent),
+            Some(30)
+        );
     }
 
     #[test]
@@ -890,10 +967,13 @@ mod tests {
         }]}});
         let limits = limits_from_summary(&summary, None).unwrap();
         assert!(limits.primary.is_empty());
-        assert_eq!(limits.secondary.used_percent, Some(75));
-        assert_eq!(limits.secondary.duration_minutes, Some(10_080));
+        assert!(limits.secondary.is_empty());
+        assert!(weekly(&limits, ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID).is_none());
+        let third_party = weekly(&limits, ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID).unwrap();
+        assert_eq!(third_party.used_percent, Some(75));
+        assert_eq!(third_party.duration_minutes, Some(WEEKLY_MINUTES));
         assert_eq!(
-            limits.secondary.resets_at,
+            third_party.resets_at,
             DateTime::from_timestamp(1_800_000_000, 0)
         );
     }
@@ -946,7 +1026,8 @@ mod tests {
         );
         assert_eq!(requests[1].1, json!({"project":"test-project"}));
         assert_eq!(limits.plan_type.as_deref(), Some("Google AI Pro"));
-        assert_eq!(limits.primary.used_percent, Some(3));
+        assert_eq!(limits.primary.used_percent, Some(0));
+        assert_eq!(limits.additional_limits.len(), 2);
         assert_eq!(limits.limit_name.as_deref(), Some("Gemini"));
         assert_eq!(limits.secondary_limit_name.as_deref(), Some("Claude + GPT"));
     }

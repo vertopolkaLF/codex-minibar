@@ -571,6 +571,22 @@ gemini = { "" }
 claude-gpt = { "" }
 
 # English source:
+# gemini-5h = Gemini 5h
+gemini-5h = { "" }
+
+# English source:
+# gemini-weekly = Gemini weekly
+gemini-weekly = { "" }
+
+# English source:
+# claude-gpt-5h = Claude + GPT 5h
+claude-gpt-5h = { "" }
+
+# English source:
+# claude-gpt-weekly = Claude + GPT weekly
+claude-gpt-weekly = { "" }
+
+# English source:
 # credits = Credits
 credits = { "" }
 

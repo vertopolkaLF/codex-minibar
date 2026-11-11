@@ -61,6 +61,9 @@ pub const CURSOR_API_LIMIT_ID: &str = "cursor-api";
 pub const CURSOR_ALL_MODELS_LIMIT_ID: &str = "cursor-all-models";
 pub const CURSOR_GROK_BOT_LIMIT_ID: &str = "cursor-grok-bot";
 pub const OPENCODE_GO_MONTHLY_LIMIT_ID: &str = "monthly";
+/// Antigravity weekly allowances; the 5h sessions are primary and secondary.
+pub const ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID: &str = "antigravity-gemini-weekly";
+pub const ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID: &str = "antigravity-3p-weekly";
 pub const COMMAND_CODE_MONTHLY_LIMIT_ID: &str = "monthly";
 /// Claude's additional window that carries cloud-session credit dollars.
 pub const CLAUDE_CLOUD_SESSION_CREDITS_LIMIT_ID: &str = "iguana_necktie";
@@ -374,18 +377,32 @@ const OPENROUTER_METRICS: &[MetricDescriptor] = &[MetricDescriptor::new(
     MetricSource::Primary,
 )];
 
+// Metric ids predate the weekly lanes; keep them so saved tray and popup
+// selections survive now that they name the 5h sessions.
 const ANTIGRAVITY_METRICS: &[MetricDescriptor] = &[
     MetricDescriptor::new(
         "antigravity.gemini",
-        "Gemini",
-        "gemini",
+        "Gemini 5h",
+        "gemini-5h",
         MetricSource::Primary,
     ),
     MetricDescriptor::new(
+        "antigravity.geminiWeekly",
+        "Gemini weekly",
+        "gemini-weekly",
+        MetricSource::Additional(ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID),
+    ),
+    MetricDescriptor::new(
         "antigravity.thirdParty",
-        "Claude + GPT",
-        "claude-gpt",
+        "Claude + GPT 5h",
+        "claude-gpt-5h",
         MetricSource::Secondary,
+    ),
+    MetricDescriptor::new(
+        "antigravity.thirdPartyWeekly",
+        "Claude + GPT weekly",
+        "claude-gpt-weekly",
+        MetricSource::Additional(ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID),
     ),
 ];
 
@@ -674,7 +691,7 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         spending_strips: false,
         balance_only: false,
         monthly_only: false,
-        limit_titles: LimitTitles::all("gemini", "gemini", "claude-gpt"),
+        limit_titles: LimitTitles::all("gemini", "gemini-5h", "claude-gpt-5h"),
         default_refresh_seconds: 60,
         activation_state_file: "activation-antigravity.toml",
         pricing_prefixes: &[],
@@ -1024,6 +1041,10 @@ pub fn metric_label(provider: ProviderKind, limits: &RateLimits, id: &str) -> St
 pub fn additional_label(limit: &AdditionalLimit) -> String {
     if limit.id == crate::quota::limits::GPT_RESERVE_LIMIT_ID {
         crate::i18n::tr("luna-reserve").into()
+    } else if limit.id == ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID {
+        crate::i18n::tr("gemini-weekly").into()
+    } else if limit.id == ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID {
+        crate::i18n::tr("claude-gpt-weekly").into()
     } else {
         limit.title.clone()
     }

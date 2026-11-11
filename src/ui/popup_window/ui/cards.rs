@@ -15,10 +15,12 @@ use super::{
 use crate::ui::gui::{color::HslaExt, fx, mark::icon};
 use crate::ui::popup_window::{model::*, *};
 
-/// Upper estimate per expanded banked-reset row; used as the reveal cap.
-const RESET_ROW_HEIGHT: f32 = 58.0;
-/// Name line plus gap added when a row stacks its date under the name.
-const STACKED_ROW_EXTRA: f32 = 24.0;
+/// Line boxes of [`components::body`] and [`components::caption`] copy; used
+/// to estimate the reveal cap of expanded banked-reset rows.
+const BODY_LINE: f32 = 20.0;
+const CAPTION_LINE: f32 = 16.0;
+/// Vertical gap around the dividers between expanded banked-reset rows.
+const RESET_ROW_GAP: f32 = 9.0;
 /// Ring gauge diameter and stroke of the Rings layout.
 const RING_SIZE: f32 = 46.0;
 const RING_PACE_GAP: f32 = 8.0;
@@ -1292,7 +1294,9 @@ impl PopupRoot {
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
-        let expandable = count > 1 && available.len() > 1;
+        // Listed credits differ (a model-only grant versus a full limit
+        // reset), so even a single one can be expanded to read its title.
+        let expandable = count > 0 && !available.is_empty();
         let open = expandable && self.open_reset_card.as_deref() == Some(expansion_key);
         let reveal = self
             .fx
@@ -1454,9 +1458,11 @@ impl PopupRoot {
             let mut rows = div()
                 .flex()
                 .flex_col()
-                .gap(px(9.0))
+                .gap(px(RESET_ROW_GAP))
                 .child(components::rule(&palette));
-            let mut stacked_rows = 0;
+            // Each row adds a divider and two gaps; the first gap is shared
+            // with the header rule, so drop one.
+            let mut content_height = -RESET_ROW_GAP;
             for (index, credit) in available.iter().enumerate() {
                 if index > 0 {
                     rows = rows.child(components::rule(&palette));
@@ -1487,39 +1493,80 @@ impl PopupRoot {
                     }
                 };
                 let name_width = metrics.body(&name);
-                let fits = TextMetrics::fits_split(
+                let date_width = metrics.caption(&date);
+                content_height += 1.0 + RESET_ROW_GAP * 2.0;
+                if TextMetrics::fits_split(
                     available_width,
                     name_width,
-                    metrics.caption(&date).max(status_width),
-                );
-                if !fits {
-                    stacked_rows += 1;
+                    date_width.max(status_width),
+                ) {
+                    // Short title: name on the left, date over the countdown
+                    // on the right.
+                    content_height += CAPTION_LINE + 1.0 + BODY_LINE;
+                    rows = rows.child(components::split_row(
+                        components::nowrap(components::body(name, palette.text_secondary)),
+                        div()
+                            .flex()
+                            .flex_col()
+                            .flex_none()
+                            .items_end()
+                            .gap(px(1.0))
+                            .child(card_metadata(date, &palette))
+                            .child(status),
+                    ));
+                } else {
+                    // Long title: it wraps across the full width, and the date
+                    // and countdown share the line under it.
+                    let name_lines = (name_width * 1.15 / available_width.max(1.0))
+                        .ceil()
+                        .max(1.0);
+                    let meta_fits =
+                        TextMetrics::fits_split(available_width, date_width, status_width);
+                    content_height += name_lines * BODY_LINE
+                        + 4.0
+                        + if meta_fits {
+                            BODY_LINE
+                        } else {
+                            CAPTION_LINE + 4.0 + BODY_LINE
+                        };
+                    let date = card_metadata(date, &palette);
+                    let meta = if meta_fits {
+                        components::split_row(date, status)
+                    } else {
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(4.0))
+                            .child(date)
+                            .child(div().flex().flex_row().justify_end().child(status))
+                    };
+                    rows = rows.child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .w_full()
+                            .gap(px(4.0))
+                            .child(components::body(name, palette.text_secondary))
+                            .child(meta),
+                    );
                 }
-                rows = rows.child(components::adaptive_split(
-                    fits,
-                    components::fit_text(
-                        name_width <= available_width,
-                        components::body(name, palette.text_secondary),
-                    ),
-                    div()
-                        .flex()
-                        .flex_col()
-                        .items_end()
-                        .gap(px(1.0))
-                        .child(card_metadata(date, &palette))
-                        .child(status),
-                ));
             }
-            let cap = (available.len() as f32 * RESET_ROW_HEIGHT
-                + stacked_rows as f32 * STACKED_ROW_EXTRA
-                + 16.0)
-                * reveal;
+            let cap = (content_height + 12.0 + 8.0) * reveal;
             element = element.child(
                 div()
                     .overflow_hidden()
                     .max_h(px(cap))
                     .opacity(reveal)
-                    .child(div().px(px(pad_x)).pb(px(12.0)).child(rows)),
+                    .child(
+                        // A definite width: an unbounded title would inflate
+                        // the section's max-content width and squeeze the
+                        // provider heading instead of wrapping.
+                        div()
+                            .w(px(available_width + pad_x * 2.0))
+                            .px(px(pad_x))
+                            .pb(px(12.0))
+                            .child(rows),
+                    ),
             );
         }
         let confirm_reveal = self.fx.toggle(

@@ -410,6 +410,18 @@ gemini = Gemini
 claude-gpt = Claude + GPT
 
 # src/providers/registry.rs
+gemini-5h = Gemini 5 sa.
+
+# src/providers/registry.rs
+gemini-weekly = Gemini haftalık
+
+# src/providers/registry.rs
+claude-gpt-5h = Claude + GPT 5 sa.
+
+# src/providers/registry.rs
+claude-gpt-weekly = Claude + GPT haftalık
+
+# src/providers/registry.rs
 credits = Krediler
 
 # src/providers/registry.rs

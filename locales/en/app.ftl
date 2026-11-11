@@ -413,6 +413,18 @@ gemini = Gemini
 claude-gpt = Claude + GPT
 
 # src/providers/registry.rs
+gemini-5h = Gemini 5h
+
+# src/providers/registry.rs
+gemini-weekly = Gemini weekly
+
+# src/providers/registry.rs
+claude-gpt-5h = Claude + GPT 5h
+
+# src/providers/registry.rs
+claude-gpt-weekly = Claude + GPT weekly
+
+# src/providers/registry.rs
 credits = Credits
 
 # src/providers/registry.rs

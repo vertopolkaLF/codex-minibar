@@ -276,6 +276,18 @@ gemini = Gemini
 
 claude-gpt = Claude + GPT
 
+# src/providers/registry.rs
+gemini-5h = Gemini 5 小时
+
+# src/providers/registry.rs
+gemini-weekly = Gemini 每周
+
+# src/providers/registry.rs
+claude-gpt-5h = Claude + GPT 5 小时
+
+# src/providers/registry.rs
+claude-gpt-weekly = Claude + GPT 每周
+
 credits = 积分
 
 monthly-credits = 每月积分
