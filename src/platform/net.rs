@@ -47,9 +47,15 @@ pub(crate) fn shared_agent() -> ureq::Agent {
 
 /// Bounds network stalls, not total download time: large packages may take
 /// minutes on a slow connection as long as bytes keep arriving.
+///
+/// Requests through this agent are minutes or hours apart, so it keeps no
+/// idle connections: a pooled one would usually have been dropped by GitHub,
+/// a VPN or a NAT by the next request, and ureq fails that request instead of
+/// reconnecting when the dead socket reports a reset.
 fn shared_agent_with_read_timeout(read_timeout: Duration) -> ureq::Agent {
     native_tls_agent()
         .user_agent("codex-minibar-updater")
+        .max_idle_connections(0)
         .timeout_connect(Duration::from_secs(10))
         .timeout_read(read_timeout)
         .timeout_write(Duration::from_secs(30))

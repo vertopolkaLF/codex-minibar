@@ -123,7 +123,7 @@ fn run() -> Result<()> {
     let (usage_actions_tx, usage_actions_rx) = mpsc::channel();
     let updates = UpdateController::new();
     if settings.check_for_updates {
-        updates.check_async(settings.notifications.update_available);
+        updates.check_on_startup(settings.notifications.update_available);
     }
     let onboarding_needed = !settings.onboarding_completed;
     let state = Arc::new(AppState {

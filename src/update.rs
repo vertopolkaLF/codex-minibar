@@ -142,6 +142,24 @@ fn report_update_failure(error: anyhow::Error) -> anyhow::Error {
     error
 }
 
+/// Pauses before retrying a check that could not reach GitHub.
+const MANUAL_RETRY_DELAYS: &[Duration] = &[Duration::from_secs(1)];
+const STARTUP_RETRY_DELAYS: &[Duration] = &[
+    Duration::from_secs(5),
+    Duration::from_secs(15),
+    Duration::from_secs(45),
+];
+
+/// Network failures may pass; an HTTP error status or a bad release will not.
+fn is_transient_check_error(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        matches!(
+            cause.downcast_ref::<ureq::Error>(),
+            Some(ureq::Error::Transport(_))
+        ) || cause.downcast_ref::<std::io::Error>().is_some()
+    })
+}
+
 /// How long the "Restarting" step stays up before the process exits.
 const RESTART_NOTICE: Duration = Duration::from_millis(600);
 /// Minimum spacing of progress updates sent to the update card.
@@ -548,18 +566,86 @@ impl UpdateController {
     /// Checks for an update in the background; `notify` announces a newly
     /// found version on a card.
     pub fn check_async(self: &Arc<Self>, notify: bool) {
+        self.spawn_check("manual", notify, MANUAL_RETRY_DELAYS);
+    }
+
+    /// The check at launch, which may run before the network is up (start at
+    /// login), so failures to reach GitHub are retried for longer.
+    pub fn check_on_startup(self: &Arc<Self>, notify: bool) {
+        self.spawn_check("startup", notify, STARTUP_RETRY_DELAYS);
+    }
+
+    fn spawn_check(
+        self: &Arc<Self>,
+        source: &'static str,
+        notify: bool,
+        retry_delays: &'static [Duration],
+    ) {
+        {
+            let mut state = self.lock_state();
+            if matches!(state.phase, UpdatePhase::Checking | UpdatePhase::Applying) {
+                crate::platform::logger::info(format!(
+                    "Update check ({source}) skipped: {:?} is in progress",
+                    state.phase
+                ));
+                return;
+            }
+            state.phase = UpdatePhase::Checking;
+        }
         let controller = Arc::clone(self);
         thread::spawn(move || {
-            if let Err(error) = controller.check_once(notify) {
-                eprintln!("update check failed: {error:#}");
-                controller.set_phase(UpdatePhase::Failed(error.to_string()));
+            crate::platform::logger::info(format!(
+                "Checking for updates ({source}); running {}",
+                env!("CARGO_PKG_VERSION")
+            ));
+            let started = Instant::now();
+            let mut retries = retry_delays.iter();
+            let mut attempt = 1;
+            let result = loop {
+                match check_for_update() {
+                    Err(error) if is_transient_check_error(&error) => {
+                        let Some(delay) = retries.next() else {
+                            break Err(error);
+                        };
+                        crate::platform::logger::info(format!(
+                            "Update check attempt {attempt} failed: {error:#}; retrying in {}s",
+                            delay.as_secs()
+                        ));
+                        thread::sleep(*delay);
+                        attempt += 1;
+                    }
+                    result => break result,
+                }
+            };
+            let elapsed = started.elapsed().as_millis();
+            match result {
+                Ok(update) => {
+                    crate::platform::logger::info(match &update {
+                        Some(update) => format!(
+                            "Update check finished in {elapsed} ms: {} is available{}",
+                            update.version,
+                            if update.asset_url.is_empty() {
+                                " (no installable asset; release page only)"
+                            } else {
+                                ""
+                            }
+                        ),
+                        None => format!("Update check finished in {elapsed} ms: up to date"),
+                    });
+                    controller.finish_check(update, notify);
+                }
+                Err(error) => {
+                    crate::platform::logger::info(format!(
+                        "Update check failed after {attempt} attempt(s) in {elapsed} ms: {error:#}"
+                    ));
+                    controller.set_phase(UpdatePhase::Failed(error.to_string()));
+                }
             }
         });
     }
 
-    fn check_once(&self, notify: bool) -> Result<()> {
-        self.set_phase(UpdatePhase::Checking);
-        match check_for_update()? {
+    fn finish_check(&self, update: Option<AvailableUpdate>, notify: bool) {
+        match update {
             Some(update) => {
                 let should_notify = notify
                     && self.notifications_enabled.load(Ordering::Relaxed)
@@ -577,7 +663,6 @@ impl UpdateController {
             }
             None => self.set_phase(UpdatePhase::UpToDate),
         }
-        Ok(())
     }
 
     pub fn apply(&self) -> Result<()> {
@@ -736,11 +821,26 @@ fn parse_release_version(tag: &str) -> Result<Version> {
 }
 
 fn github_get(url: &str) -> Result<GhRelease> {
-    let response = crate::platform::net::shared_agent()
+    let response = match crate::platform::net::shared_agent()
         .get(url)
         .set("Accept", "application/vnd.github+json")
         .call()
-        .with_context(|| format!("GET {url}"))?;
+    {
+        Ok(response) => response,
+        // Keep GitHub's explanation (e.g. the hourly rate limit) for the log.
+        Err(ureq::Error::Status(status, response)) => {
+            let remaining = response.header("x-ratelimit-remaining").map(str::to_owned);
+            let reset = response.header("x-ratelimit-reset").map(str::to_owned);
+            let body = response.into_string().unwrap_or_default();
+            let body: String = body.chars().take(300).collect();
+            bail!(
+                "GitHub API returned {status} (rate limit remaining {}, resets at {}): {body}",
+                remaining.as_deref().unwrap_or("?"),
+                reset.as_deref().unwrap_or("?"),
+            );
+        }
+        Err(error) => return Err(error).with_context(|| format!("GET {url}")),
+    };
     let status = response.status();
     let body = response
         .into_string()
