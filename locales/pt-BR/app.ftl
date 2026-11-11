@@ -1732,6 +1732,7 @@ use-reset = Usar redefinição
 use-reset-short = Usar
 reset-using = Aplicando…
 reset-confirm-message = Usar uma redefinição acumulada nesta conta? Isso limpa os limites elegíveis e não pode ser desfeito.
+reset-confirm-selected = Usar “{ $name }”? Isso limpa os limites cobertos e não pode ser desfeito.
 reset-applied = Redefinição aplicada. Os limites elegíveis foram limpos.
 reset-nothing-to-reset = Nada para redefinir agora.
 reset-no-credit = Não há mais redefinições disponíveis.

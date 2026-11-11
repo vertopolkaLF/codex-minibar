@@ -1711,6 +1711,7 @@ use-reset = 使用重置
 use-reset-short = 使用
 reset-using = 正在应用…
 reset-confirm-message = 为此账户使用一次累积重置？这将清除符合条件的速率限制，且无法撤销。
+reset-confirm-selected = 使用“{ $name }”？这将清除其涵盖的限制，且无法撤销。
 reset-applied = 重置已应用。符合条件的限制已清除。
 reset-nothing-to-reset = 目前没有需要重置的限制。
 reset-no-credit = 没有可用的重置次数。

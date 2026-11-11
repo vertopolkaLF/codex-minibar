@@ -2631,6 +2631,7 @@ use-reset = Zurücksetzung nutzen
 use-reset-short = Nutzen
 reset-using = Wird angewendet…
 reset-confirm-message = Eine angesparte Zurücksetzung für dieses Konto nutzen? Berechtigte Limits werden zurückgesetzt. Dies kann nicht rückgängig gemacht werden.
+reset-confirm-selected = „{ $name }“ nutzen? Die davon abgedeckten Limits werden zurückgesetzt. Dies kann nicht rückgängig gemacht werden.
 reset-applied = Zurücksetzung angewendet. Berechtigte Limits wurden zurückgesetzt.
 reset-nothing-to-reset = Derzeit gibt es nichts zurückzusetzen.
 reset-no-credit = Keine nutzbaren Zurücksetzungen mehr verfügbar.

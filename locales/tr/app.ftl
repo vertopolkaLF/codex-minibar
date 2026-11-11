@@ -733,6 +733,7 @@ use-reset = Sıfırlama kullan
 use-reset-short = Kullan
 reset-using = Kullanılıyor…
 reset-confirm-message = Bu hesap için bir birikmiş sıfırlama kullanılsın mı? Uygun hız limiti dönemleri temizlenir ve bu işlem geri alınamaz.
+reset-confirm-selected = “{ $name }” kullanılsın mı? Kapsadığı limitler temizlenir ve bu işlem geri alınamaz.
 reset-applied = Sıfırlama uygulandı. Uygun limitleriniz temizlendi.
 reset-nothing-to-reset = Şu anda sıfırlanacak bir şey yok.
 reset-no-credit = Kullanılabilir sıfırlama kredisi kalmadı.

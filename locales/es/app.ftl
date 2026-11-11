@@ -1732,6 +1732,7 @@ use-reset = Usar reinicio
 use-reset-short = Usar
 reset-using = Aplicando…
 reset-confirm-message = ¿Usar un reinicio acumulado en esta cuenta? Esto borra los límites elegibles y no se puede deshacer.
+reset-confirm-selected = ¿Usar «{ $name }»? Esto borra los límites que cubre y no se puede deshacer.
 reset-applied = Reinicio aplicado. Se han borrado los límites elegibles.
 reset-nothing-to-reset = No hay nada que reiniciar ahora.
 reset-no-credit = No quedan reinicios disponibles.

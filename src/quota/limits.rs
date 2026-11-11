@@ -406,6 +406,19 @@ impl RateLimits {
             .unwrap_or(0)
     }
 
+    /// The provider grant id of the available credit that expires first.
+    /// Credits without an expiry sort last.
+    pub fn next_expiring_credit_id(&self) -> Option<&str> {
+        self.reset_credits
+            .as_ref()?
+            .credits
+            .iter()
+            .filter(|credit| credit.status.eq_ignore_ascii_case("available"))
+            .filter_map(|credit| Some((credit.expires_at, credit.description.as_deref()?)))
+            .min_by_key(|(expires_at, _)| (expires_at.is_none(), *expires_at))
+            .map(|(_, id)| id)
+    }
+
     pub fn next_reset_credit_expiration(&self) -> Option<DateTime<Utc>> {
         self.reset_credits
             .as_ref()?

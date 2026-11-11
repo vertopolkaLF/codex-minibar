@@ -307,7 +307,14 @@ impl AutoReset {
             } else {
                 format!("{name} banked reset expires soon; applying it automatically")
             });
-            let result = crate::providers::drivers::consume_reset(&instance);
+            // Spend the credit the schedule is about: the one expiring first,
+            // which need not be the provider's default pick.
+            let grant = state
+                .current_limits()
+                .get(provider)
+                .next_expiring_credit_id()
+                .map(str::to_owned);
+            let result = crate::providers::drivers::consume_reset(&instance, grant.as_deref());
             match &result {
                 Ok((Outcome::Reset, _)) => {
                     crate::platform::logger::info(format!("{name} banked reset applied"));

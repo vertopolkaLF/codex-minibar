@@ -2610,6 +2610,7 @@ use-reset = リセットを使用
 use-reset-short = 使用
 reset-using = 適用中…
 reset-confirm-message = このアカウントの蓄積されたリセットを1回使用しますか？対象の利用制限が解除されます。この操作は取り消せません。
+reset-confirm-selected = 「{ $name }」を使用しますか？対象の利用制限が解除されます。この操作は取り消せません。
 reset-applied = リセットを適用しました。対象の利用制限が解除されました。
 reset-nothing-to-reset = 現在リセットする制限はありません。
 reset-no-credit = 使用できるリセットは残っていません。

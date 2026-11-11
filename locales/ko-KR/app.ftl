@@ -733,6 +733,7 @@ use-reset = 재설정 사용
 use-reset-short = 사용
 reset-using = 사용 중…
 reset-confirm-message = 이 계정에 적립된 재설정 1회를 사용하시겠습니까? 적용 가능한 사용 한도가 초기화되며 취소할 수 없습니다.
+reset-confirm-selected = “{ $name }”을(를) 사용하시겠습니까? 해당 사용 한도가 초기화되며 취소할 수 없습니다.
 reset-applied = 재설정이 적용되었습니다. 적용 가능한 한도가 초기화되었습니다.
 reset-nothing-to-reset = 지금은 재설정할 항목이 없습니다.
 reset-no-credit = 사용할 수 있는 재설정 크레딧이 남아 있지 않습니다.

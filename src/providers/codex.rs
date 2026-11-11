@@ -1057,7 +1057,8 @@ fn settings_copy() -> SettingsCopy {
     }
 }
 
-fn consume_reset(instance: &ProviderInstance) -> ResetResult {
+/// Codex picks the credit itself, so a requested grant is ignored.
+fn consume_reset(instance: &ProviderInstance, _grant: Option<&str>) -> ResetResult {
     let executable = first_available(instance.binary_path.as_deref())?;
     let client = CodexClient::for_instance(executable, instance);
     let outcome = client.consume_reset()?;

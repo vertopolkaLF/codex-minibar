@@ -736,6 +736,7 @@ use-reset = Use reset
 use-reset-short = Use
 reset-using = Using…
 reset-confirm-message = Use one banked reset for this account? This clears eligible rate-limit windows and cannot be undone.
+reset-confirm-selected = Use “{ $name }”? This clears the limits it covers and cannot be undone.
 reset-applied = Reset applied. Your eligible limits have been cleared.
 reset-nothing-to-reset = Nothing to reset right now.
 reset-no-credit = No usable reset credit left.

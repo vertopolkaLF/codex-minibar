@@ -369,7 +369,9 @@ pub(crate) struct PopupRoot {
     pub(super) usage_excluded: std::collections::BTreeSet<ProviderId>,
     pub(super) chart_hover: Option<usize>,
     pub(super) open_reset_card: Option<String>,
-    pub(super) reset_confirm: Option<ProviderId>,
+    /// The provider whose reset awaits confirmation, and the listed grant
+    /// picked for it (`None` lets the provider choose).
+    pub(super) reset_confirm: Option<(ProviderId, Option<String>)>,
     pub(super) reset_busy: HashSet<ProviderId>,
     /// Latest redemption result per provider and when it arrived; it fades
     /// out after `RESET_STATUS_TTL` and is dropped when the popup hides.
@@ -596,7 +598,8 @@ impl PopupRoot {
             .retain(|provider, _| same_account(*provider));
         if self
             .reset_confirm
-            .is_some_and(|provider| !same_account(provider))
+            .as_ref()
+            .is_some_and(|(provider, _)| !same_account(*provider))
         {
             self.reset_confirm = None;
         }
@@ -1918,7 +1921,12 @@ impl PopupRoot {
 
     // ----- actions ------------------------------------------------------------
 
-    pub(super) fn use_reset(&mut self, provider: ProviderId, cx: &mut Context<Self>) {
+    pub(super) fn use_reset(
+        &mut self,
+        provider: ProviderId,
+        grant: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         let Some(instance) = self
             .ui
             .settings
@@ -1938,7 +1946,9 @@ impl PopupRoot {
         cx.spawn(async move |this, cx| {
             let result = cx
                 .background_executor()
-                .spawn(async move { crate::providers::drivers::consume_reset(&instance) })
+                .spawn(async move {
+                    crate::providers::drivers::consume_reset(&instance, grant.as_deref())
+                })
                 .await;
             let _ = this.update(cx, |this, cx| {
                 this.reset_busy.remove(&provider);

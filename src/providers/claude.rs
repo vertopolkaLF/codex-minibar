@@ -255,10 +255,34 @@ fn forget_secrets(instance: &ProviderInstance) -> Result<()> {
     save_manual_credential(&instance.id, None)
 }
 
-fn consume_reset(instance: &ProviderInstance) -> ResetResult {
+fn consume_reset(instance: &ProviderInstance, grant: Option<&str>) -> ResetResult {
     let mut client = ClaudeClient::for_instance(instance);
-    let outcome = client.consume_reset()?;
+    let outcome = client.consume_reset(grant)?;
     Ok((outcome, client.read_rate_limits()))
+}
+
+/// The grant to redeem from a freshly read inventory. A requested grant must
+/// still be listed as available; otherwise nothing is spent, so a stale choice
+/// can never fall through to a different grant. Without a request the server's
+/// `next_grant_id` is used. Empty means no credit.
+fn redeemable_grant(
+    summary: Option<crate::quota::limits::RateLimitResetCreditsSummary>,
+    requested: Option<&str>,
+) -> String {
+    let Some(summary) = summary else {
+        return String::new();
+    };
+    match requested {
+        Some(requested)
+            if summary.credits.iter().any(|credit| {
+                credit.status == "available" && credit.description.as_deref() == Some(requested)
+            }) =>
+        {
+            requested.to_owned()
+        }
+        Some(_) => String::new(),
+        None => summary.next_credit_id.unwrap_or_default(),
+    }
 }
 
 /// The `reset_rate_limits` endpoint's outcomes.
@@ -492,7 +516,7 @@ impl ClaudeClient {
         self
     }
 
-    pub(crate) fn consume_reset(&mut self) -> Result<Outcome> {
+    pub(crate) fn consume_reset(&mut self, requested: Option<&str>) -> Result<Outcome> {
         let folder = match &self.login {
             ClaudeLogin::Folder(folder) => folder.clone(),
             ClaudeLogin::Ambient => credentials_path()
@@ -531,10 +555,7 @@ impl ClaudeClient {
             .context("Claude account has no organization UUID")?;
         let limits =
             self.read_oauth(&agent, &credentials.access_token, FOLDER_SIGN_IN_HINT, None)?;
-        let grant = limits
-            .reset_credits
-            .and_then(|summary| summary.next_credit_id)
-            .unwrap_or_default();
+        let grant = redeemable_grant(limits.reset_credits, requested);
         let account = crate::quota::banked_reset::account_key("claude", &folder, organization);
         crate::quota::banked_reset::redeem(account, grant, |key, grant| {
             if grant.is_empty() {
@@ -2264,6 +2285,30 @@ mod tests {
         .unwrap();
         assert!(limits.reset_credits.is_none());
         assert_eq!(limits.available_reset_count(), 0);
+    }
+
+    #[test]
+    fn requested_reset_grant_must_still_be_available() {
+        let now = Utc.with_ymd_and_hms(2026, 10, 10, 12, 0, 0).unwrap();
+        let response = serde_json::json!({"five_hour":{"utilization":0},"cedar_ember":{"eligible":true,"next_grant_id":"full","grants":[
+            {"id":"full","resets_left":1,"usable_now":true},
+            {"id":"fable","resets_left":1,"usable_now":true,"clears":["seven_day_fable"]},
+            {"id":"paused","resets_left":1,"paused":true,"usable_now":true}
+        ]}});
+        let limits = parse_usage_response(&response.to_string(), now).unwrap();
+        for (requested, grant) in [
+            (None, "full"),
+            (Some("fable"), "fable"),
+            (Some("full"), "full"),
+            (Some("paused"), ""),
+            (Some("gone"), ""),
+        ] {
+            assert_eq!(
+                redeemable_grant(limits.reset_credits.clone(), requested),
+                grant,
+                "{requested:?}"
+            );
+        }
     }
 
     #[test]

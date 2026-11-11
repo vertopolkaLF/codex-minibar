@@ -1015,6 +1015,10 @@ reset-using = { "" }
 reset-confirm-message = { "" }
 
 # English source:
+# reset-confirm-selected = Use “{ $name }”? This clears the limits it covers and cannot be undone.
+reset-confirm-selected = { "" }
+
+# English source:
 # reset-applied = Reset applied. Your eligible limits have been cleared.
 reset-applied = { "" }
 

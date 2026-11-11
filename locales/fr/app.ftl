@@ -2638,6 +2638,7 @@ use-reset = Utiliser une réinitialisation
 use-reset-short = Utiliser
 reset-using = Application…
 reset-confirm-message = Utiliser une réinitialisation cumulée pour ce compte ? Les limites éligibles seront effacées. Cette action est irréversible.
+reset-confirm-selected = Utiliser « { $name } » ? Les limites concernées seront effacées. Cette action est irréversible.
 reset-applied = Réinitialisation appliquée. Les limites éligibles ont été effacées.
 reset-nothing-to-reset = Rien à réinitialiser pour le moment.
 reset-no-credit = Aucune réinitialisation utilisable restante.

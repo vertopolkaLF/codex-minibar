@@ -29,8 +29,9 @@ pub(crate) struct Driver {
     /// Deletes what Minibar stored in protected storage for an instance.
     /// Config folders belong to the CLI and stay on disk.
     pub(crate) forget_secrets: Option<fn(&ProviderInstance) -> Result<()>>,
-    /// Spends a banked reset credit.
-    pub(crate) consume_reset: Option<fn(&ProviderInstance) -> ResetResult>,
+    /// Spends a banked reset credit: the listed grant with this id when one is
+    /// given, otherwise the one the provider selects.
+    pub(crate) consume_reset: Option<fn(&ProviderInstance, Option<&str>) -> ResetResult>,
 }
 
 pub(crate) fn driver(kind: ProviderKind) -> &'static Driver {
@@ -58,12 +59,12 @@ pub(crate) fn start_worker(
     (driver(instance.driver).start)(instance, options)
 }
 
-pub(crate) fn consume_reset(instance: &ProviderInstance) -> ResetResult {
+pub(crate) fn consume_reset(instance: &ProviderInstance, grant: Option<&str>) -> ResetResult {
     if crate::providers::fake::serves(instance.driver) {
         return crate::providers::fake::consume(instance.driver);
     }
     match driver(instance.driver).consume_reset {
-        Some(consume) => consume(instance),
+        Some(consume) => consume(instance, grant),
         None => bail!("Provider does not support reset credits"),
     }
 }

@@ -1516,11 +1516,17 @@ impl PopupRoot {
         // server-selected grant, so a cached snapshot without `next_credit_id`
         // still qualifies.
         let busy = self.reset_busy.contains(&provider);
-        let confirming = self.reset_confirm == Some(provider);
+        let confirm_grant = self
+            .reset_confirm
+            .as_ref()
+            .filter(|(confirm, _)| *confirm == provider)
+            .map(|(_, grant)| grant.clone());
+        let confirming = confirm_grant.is_some();
+        let banked_resets = crate::providers::registry::descriptor(provider.kind()).banked_resets;
         let can_use = count > 0
             && self.ui.settings.instance(provider).is_some_and(|instance| {
                 !instance.uses_manual_credential()
-                    && match crate::providers::registry::descriptor(provider.kind()).banked_resets {
+                    && match banked_resets {
                         crate::providers::registry::BankedResets::Unsupported => false,
                         crate::providers::registry::BankedResets::ByCount => true,
                         crate::providers::registry::BankedResets::ByListedCredit => {
@@ -1528,6 +1534,16 @@ impl PopupRoot {
                         }
                     }
             });
+        // Listed grants can clear different limits (a model-only grant versus
+        // a full reset), so with several of them each row gets its own button
+        // and the header button opens the list instead of picking one.
+        let choosable = can_use
+            && banked_resets == crate::providers::registry::BankedResets::ByListedCredit
+            && available
+                .iter()
+                .filter(|credit| credit.description.is_some())
+                .count()
+                > 1;
         let header_content = if can_use || busy {
             // The action sits on the trailing edge. When the full label does
             // not fit beside the title (long translations), it shortens to
@@ -1555,7 +1571,7 @@ impl PopupRoot {
                 .px(px(12.0))
                 .py(px(5.0))
                 .rounded(px(palette.control_radius))
-                .bg(palette.accent.opacity(if confirming {
+                .bg(palette.accent.opacity(if confirm_grant == Some(None) {
                     0.26
                 } else {
                     0.14 + 0.1 * button_hover
@@ -1566,16 +1582,26 @@ impl PopupRoot {
                 )));
             if busy {
                 button = button.opacity(0.6);
+            } else if choosable {
+                let key = expansion_key.to_owned();
+                button = button
+                    .cursor_pointer()
+                    .on_hover(self.hover_listener(button_id, None, cx))
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                        cx.stop_propagation();
+                        this.open_reset_card = Some(key.clone());
+                        cx.notify();
+                    }));
             } else if can_use {
                 button = button
                     .cursor_pointer()
                     .on_hover(self.hover_listener(button_id, None, cx))
                     .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                         cx.stop_propagation();
-                        this.reset_confirm = if this.reset_confirm == Some(provider) {
+                        this.reset_confirm = if this.reset_confirm == Some((provider, None)) {
                             None
                         } else {
-                            Some(provider)
+                            Some((provider, None))
                         };
                         cx.notify();
                     }));
@@ -1638,7 +1664,15 @@ impl PopupRoot {
             // Each row adds a divider and two gaps; the first gap is shared
             // with the header rule, so drop one.
             let mut content_height = -RESET_ROW_GAP;
+            let row_button_label = crate::i18n::tr("use-reset-short");
+            let row_button_width = metrics.strong(row_button_label) + 24.0;
             for (index, credit) in available.iter().enumerate() {
+                let grant = credit.description.clone().filter(|_| choosable);
+                let available_width = if grant.is_some() {
+                    available_width - row_button_width - 8.0
+                } else {
+                    available_width
+                };
                 if index > 0 {
                     rows = rows.child(components::rule(&palette));
                 }
@@ -1669,6 +1703,7 @@ impl PopupRoot {
                 };
                 let name_width = metrics.body(&name);
                 let date_width = metrics.caption(&date);
+                let mut row = div().flex().flex_col();
                 content_height += 1.0 + RESET_ROW_GAP * 2.0;
                 if TextMetrics::fits_split(
                     available_width,
@@ -1678,7 +1713,7 @@ impl PopupRoot {
                     // Short title: name on the left, date over the countdown
                     // on the right.
                     content_height += CAPTION_LINE + 1.0 + BODY_LINE;
-                    rows = rows.child(components::split_row(
+                    row = row.child(components::split_row(
                         components::nowrap(components::body(name, palette.text_secondary)),
                         div()
                             .flex()
@@ -1715,7 +1750,7 @@ impl PopupRoot {
                             .child(date)
                             .child(div().flex().flex_row().justify_end().child(status))
                     };
-                    rows = rows.child(
+                    row = row.child(
                         div()
                             .flex()
                             .flex_col()
@@ -1725,6 +1760,59 @@ impl PopupRoot {
                             .child(meta),
                     );
                 }
+                rows = rows.child(match grant {
+                    Some(grant) => {
+                        let selected = confirm_grant.as_ref().and_then(Option::as_deref)
+                            == Some(grant.as_str());
+                        let button_id = fx::key(("use-reset-grant", expansion_key, &grant));
+                        let hover = self.fx.toggle(
+                            fx::key(("use-reset-grant-hover", button_id)),
+                            !busy && self.hovered(button_id),
+                            fx::FASTER,
+                        );
+                        let mut button = div()
+                            .id(eid(format!("use-reset-{expansion_key}-{grant}")))
+                            .flex_none()
+                            .px(px(12.0))
+                            .py(px(5.0))
+                            .rounded(px(palette.control_radius))
+                            .bg(palette.accent.opacity(if selected {
+                                0.26
+                            } else {
+                                0.14 + 0.1 * hover
+                            }))
+                            .child(components::nowrap(components::body_strong(
+                                row_button_label,
+                                palette.accent_text,
+                            )));
+                        if busy {
+                            button = button.opacity(0.6);
+                        } else {
+                            button = button
+                                .cursor_pointer()
+                                .on_hover(self.hover_listener(button_id, None, cx))
+                                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                                    cx.stop_propagation();
+                                    let choice = (provider, Some(grant.clone()));
+                                    this.reset_confirm =
+                                        if this.reset_confirm.as_ref() == Some(&choice) {
+                                            None
+                                        } else {
+                                            Some(choice)
+                                        };
+                                    cx.notify();
+                                }));
+                        }
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(row.flex_1().min_w_0())
+                            .child(button)
+                    }
+                    None => row,
+                });
             }
             let cap = (content_height + 12.0 + 8.0) * reveal;
             element = element.child(
@@ -1750,8 +1838,24 @@ impl PopupRoot {
             fx::NORMAL,
         );
         if confirm_reveal > 0.001 {
-            let message = crate::i18n::tr("reset-confirm-message");
-            let height = (metrics.body(message) / available_width.max(1.0)).ceil() * 22.0 + 72.0;
+            let picked = confirm_grant
+                .as_ref()
+                .and_then(Option::as_deref)
+                .and_then(|grant| {
+                    available
+                        .iter()
+                        .find(|credit| credit.description.as_deref() == Some(grant))
+                })
+                .and_then(|credit| credit.title.as_deref())
+                .filter(|title| !title.trim().is_empty());
+            let message: SharedString = match picked {
+                Some(name) => {
+                    crate::i18n::format("reset-confirm-selected", &[("name", name.to_owned())])
+                        .into()
+                }
+                None => crate::i18n::tr("reset-confirm-message").into(),
+            };
+            let height = (metrics.body(&message) / available_width.max(1.0)).ceil() * 22.0 + 72.0;
             let confirm_id = fx::key(("confirm-reset", expansion_key));
             let confirm_hover = self.fx.toggle(
                 fx::key(("confirm-reset-hover", confirm_id)),
@@ -1804,8 +1908,10 @@ impl PopupRoot {
                         .on_hover(self.hover_listener(confirm_id, None, cx))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
                             cx.stop_propagation();
-                            if this.reset_confirm == Some(provider) {
-                                this.use_reset(provider, cx);
+                            if let Some((confirm, grant)) = this.reset_confirm.clone()
+                                && confirm == provider
+                            {
+                                this.use_reset(provider, grant, cx);
                             }
                         })),
                 );
