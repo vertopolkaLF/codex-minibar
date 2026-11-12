@@ -114,6 +114,9 @@ pub struct StatusIncident {
     /// Names of the relevant affected components.
     pub components: Vec<String>,
     pub url: String,
+    /// The user closed this incident's card; the popup marks the provider
+    /// name instead until the card is reopened.
+    pub collapsed: bool,
 }
 
 impl StatusIncident {
@@ -128,6 +131,17 @@ pub struct ProviderStatus {
     pub kind: ProviderKind,
     pub page_url: &'static str,
     pub incidents: Vec<StatusIncident>,
+}
+
+impl ProviderStatus {
+    /// The most severe incident whose card the user closed.
+    pub fn worst_collapsed_impact(&self) -> Option<IncidentImpact> {
+        self.incidents
+            .iter()
+            .filter(|incident| incident.collapsed)
+            .map(|incident| incident.impact)
+            .max()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,6 +216,11 @@ pub enum ProviderStatusCommand {
     /// Drivers to watch; empty pauses polling and clears every status.
     Watch(Vec<ProviderKind>),
     MarkNotified(String),
+    /// Closes (or reopens) the cards of these incident ids.
+    SetCollapsed {
+        ids: Vec<String>,
+        collapsed: bool,
+    },
     Shutdown,
 }
 
@@ -232,6 +251,9 @@ pub fn start_worker(
 struct NotifiedCache {
     #[serde(default)]
     notified_ids: Vec<String>,
+    /// Incidents whose card the user closed.
+    #[serde(default)]
+    collapsed_ids: Vec<String>,
 }
 
 struct Known {
@@ -320,6 +342,30 @@ fn run(
                     }
                 }
             }
+            Ok(ProviderStatusCommand::SetCollapsed { ids, collapsed }) => {
+                let before = cache.collapsed_ids.clone();
+                if collapsed {
+                    for id in ids {
+                        if !id.trim().is_empty() && !cache.collapsed_ids.contains(&id) {
+                            cache.collapsed_ids.push(id);
+                        }
+                    }
+                    if cache.collapsed_ids.len() > MAX_NOTIFIED_IDS {
+                        let excess = cache.collapsed_ids.len() - MAX_NOTIFIED_IDS;
+                        cache.collapsed_ids.drain(..excess);
+                    }
+                } else {
+                    cache.collapsed_ids.retain(|id| !ids.contains(id));
+                }
+                if cache.collapsed_ids != before {
+                    if let Err(error) = save_cache(&cache_path, &cache) {
+                        crate::platform::logger::info(format!(
+                            "failed to save provider status card state: {error:#}"
+                        ));
+                    }
+                    send_snapshot(&publish, &watched, &known, &cache);
+                }
+            }
             Ok(ProviderStatusCommand::Shutdown) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                 break;
             }
@@ -337,7 +383,13 @@ fn send_snapshot(
     let statuses = sources()
         .filter(|source| watched.contains(&source.kind))
         .filter_map(|source| known.get(&source.kind))
-        .map(|known| known.status.clone())
+        .map(|known| {
+            let mut status = known.status.clone();
+            for incident in &mut status.incidents {
+                incident.collapsed = cache.collapsed_ids.contains(&incident.id);
+            }
+            status
+        })
         .collect();
     publish(ProviderStatusSnapshot {
         statuses,
@@ -479,6 +531,7 @@ fn parse_statuspage(body: &str, source: &Source) -> Result<Vec<StatusIncident>> 
                 .map(|component| component.name.clone())
                 .collect(),
             url: format!("{}/incidents/{}", source.page.page_url, incident.id),
+            collapsed: false,
         });
     }
     Ok(finish(incidents))
@@ -619,6 +672,7 @@ fn parse_incident_io(body: &str, source: &Source) -> Result<Vec<StatusIncident>>
             started_at: incident.published_at,
             components,
             url: format!("{}/incidents/{}", source.page.page_url, incident.id),
+            collapsed: false,
         });
     }
     Ok(finish(incidents))
@@ -673,6 +727,55 @@ mod tests {
 
     fn source(kind: ProviderKind) -> Source {
         sources().find(|source| source.kind == kind).unwrap()
+    }
+
+    #[test]
+    fn closing_one_incident_leaves_new_ones_open() {
+        let incident = |id: &str| StatusIncident {
+            id: id.to_owned(),
+            title: id.to_owned(),
+            impact: IncidentImpact::Degraded,
+            stage: IncidentStage::Identified,
+            started_at: None,
+            components: Vec::new(),
+            url: String::new(),
+            collapsed: false,
+        };
+        let kind = ProviderKind::Claude;
+        let known = HashMap::from([(
+            kind,
+            Known {
+                status: ProviderStatus {
+                    kind,
+                    page_url: "",
+                    incidents: vec![incident("old"), incident("new")],
+                },
+                fetched_at: Instant::now(),
+            },
+        )]);
+        let cache = NotifiedCache {
+            notified_ids: Vec::new(),
+            collapsed_ids: vec!["old".to_owned()],
+        };
+        let published = std::cell::RefCell::new(None);
+        send_snapshot(
+            &|snapshot| *published.borrow_mut() = Some(snapshot),
+            &[kind],
+            &known,
+            &cache,
+        );
+        let snapshot = published.into_inner().unwrap();
+        let status = &snapshot.statuses[0];
+        let collapsed = status
+            .incidents
+            .iter()
+            .map(|incident| (incident.id.as_str(), incident.collapsed))
+            .collect::<Vec<_>>();
+        assert_eq!(collapsed, [("old", true), ("new", false)]);
+        assert_eq!(
+            status.worst_collapsed_impact(),
+            Some(IncidentImpact::Degraded)
+        );
     }
 
     #[test]
@@ -782,6 +885,7 @@ mod tests {
             ),
             components: Vec::new(),
             url: String::new(),
+            collapsed: false,
         };
         let sorted = finish(vec![
             incident("a", IncidentImpact::Degraded, 9),

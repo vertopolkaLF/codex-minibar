@@ -1763,6 +1763,8 @@ notify-about-new-incidents-description = 当状态页报告已启用提供商的
 
 # src/ui/popup_window/ui/cards.rs
 open-status-page = 打开状态页
+hide-incident = 隐藏事件
+show-incident = 显示事件
 
 # src/surfaces/notifications.rs
 provider-incident-title = { $provider }：{ $impact }

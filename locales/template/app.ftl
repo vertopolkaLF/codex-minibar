@@ -3757,6 +3757,14 @@ notify-about-new-incidents-description = { "" }
 open-status-page = { "" }
 
 # English source:
+# hide-incident = Hide incident
+hide-incident = { "" }
+
+# English source:
+# show-incident = Show incident
+show-incident = { "" }
+
+# English source:
 # provider-incident-title = { $provider }: { $impact }
 provider-incident-title = { "" }
 

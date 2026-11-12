@@ -2662,6 +2662,8 @@ notify-about-new-incidents-description = 有効なプロバイダーの新しい
 
 # src/ui/popup_window/ui/cards.rs
 open-status-page = ステータスページを開く
+hide-incident = 障害を非表示
+show-incident = 障害を表示
 
 # src/surfaces/notifications.rs
 provider-incident-title = { $provider }: { $impact }

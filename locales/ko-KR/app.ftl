@@ -2661,6 +2661,8 @@ notify-about-new-incidents-description = 활성화된 공급자의 상태 페이
 
 # src/ui/popup_window/ui/cards.rs
 open-status-page = 상태 페이지 열기
+hide-incident = 장애 숨기기
+show-incident = 장애 표시
 
 # src/surfaces/notifications.rs
 provider-incident-title = { $provider }: { $impact }

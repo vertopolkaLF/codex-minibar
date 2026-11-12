@@ -28,6 +28,19 @@ const RING_STROKE: f32 = 5.0;
 /// Narrower cards stack ring tiles one per row.
 const RING_PAIR_MIN_WIDTH: f32 = 260.0;
 
+/// Accent color of an incident's impact.
+fn incident_severity(
+    impact: crate::providers::status::IncidentImpact,
+    palette: &super::theme::Palette,
+) -> Hsla {
+    use crate::providers::status::IncidentImpact;
+    match impact {
+        IncidentImpact::Maintenance => palette.text_secondary,
+        IncidentImpact::Degraded | IncidentImpact::PartialOutage => palette.caution,
+        IncidentImpact::MajorOutage => palette.critical,
+    }
+}
+
 fn compact_title_fits(available: f32, title: f32, usage: f32, reset: f32) -> bool {
     // Two 10 DIP gaps between the three groups in the compact row.
     title + usage + reset + 20.0 <= available
@@ -829,6 +842,9 @@ impl PopupRoot {
                 plan.clone(),
                 palette.text_tertiary,
             )));
+        }
+        if let Some(mark) = self.incident_mark(heading, surface, cx) {
+            title = title.child(mark);
         }
         if let Some(error) = heading.error.as_ref() {
             let id = fx::key(("heading-error", provider.id(), heading.first));
@@ -1970,6 +1986,70 @@ impl PopupRoot {
         element.into_any_element()
     }
 
+    /// Warning icon after the provider name while an incident card is
+    /// closed; it grows in as the card folds away, and a click reopens every
+    /// closed card.
+    fn incident_mark(
+        &mut self,
+        heading: &HeadingCard,
+        surface: PopupSurface,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        const SIZE: f32 = 16.0;
+        let provider = heading.provider;
+        let kind = provider.kind();
+        let shown = self.fx.toggle(
+            fx::key((
+                "incident-mark",
+                provider.id(),
+                heading.first,
+                surface == PopupSurface::HomeTab,
+            )),
+            heading.closed_incident.is_some(),
+            fx::NORMAL,
+        );
+        if shown <= 0.001 {
+            return None;
+        }
+        let palette = self.palette.clone();
+        // Fading out after a reopen keeps the caution color.
+        let color = incident_severity(
+            heading
+                .closed_incident
+                .unwrap_or(crate::providers::status::IncidentImpact::Degraded),
+            &palette,
+        );
+        let hover_id = fx::key(("incident-mark-hover", provider.id(), heading.first));
+        let mark = div()
+            .id(eid(format!(
+                "incident-mark-{}-{}",
+                provider.id(),
+                heading.first
+            )))
+            .flex()
+            .flex_none()
+            .items_center()
+            .justify_center()
+            .size(px(SIZE))
+            .on_hover(self.hover_listener(
+                hover_id,
+                Some(crate::i18n::tr("show-incident").into()),
+                cx,
+            ))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                this.state
+                    .set_provider_incident_collapsed(kind, None, false);
+                cx.notify();
+            }))
+            .child(icon("fluent-warning", SIZE, color));
+        let mut slot = div().flex().flex_none().opacity(shown).child(mark);
+        if shown < 1.0 {
+            slot = slot.overflow_hidden().w(px(SIZE * shown));
+        }
+        Some(slot.into_any_element())
+    }
+
     fn render_provider_incidents(
         &mut self,
         status: &crate::providers::status::ProviderStatus,
@@ -1977,10 +2057,18 @@ impl PopupRoot {
         window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        use crate::providers::status::IncidentImpact;
+        /// Side of a close button, and its distance from the card corner.
+        const CLOSE: f32 = 24.0;
+        const CLOSE_INSET: f32 = 6.0;
+        /// Card padding and the gap between incidents.
+        const PADDING: f32 = 12.0;
+        const ROW_GAP: f32 = 10.0;
 
         let palette = self.palette.clone();
         let metrics = self.metrics(window);
+        // Each close button sits at the right edge beside its incident's
+        // first line, reaching into the card padding; the text keeps clear.
+        let text_width = available_width - (CLOSE - (PADDING - CLOSE_INSET));
         let card_key = format!("provider-incidents-{:?}", status.kind);
         let hover_id = fx::key(card_key.as_str());
         let hover = self.fx.toggle(
@@ -1988,20 +2076,32 @@ impl PopupRoot {
             self.hovered(hover_id),
             fx::FASTER,
         );
+        let kind = status.kind;
         let today = Local::now().date_naive();
+        // While any incident is open, closed ones fold out of the card one by
+        // one; closing the last one folds the whole card instead, so its rows
+        // hold still meanwhile.
+        let any_open = status.incidents.iter().any(|incident| !incident.collapsed);
         // A definite width: unbounded text would inflate the max-content
         // width of the whole provider section, and its heading resolves the
         // account column's percentage against that (squeezing the name).
-        let mut rows = div().flex().flex_col().gap(px(10.0)).w(px(available_width));
+        let mut rows = div().flex().flex_col().w(px(available_width));
         // Reveal cap: card padding, then per row the summary line, the
         // wrapped title, a possible metadata line and the row gap.
-        let mut reveal_height = 24.0;
+        let mut reveal_height = PADDING * 2.0;
+        let mut above = 0.0_f32;
         for incident in &status.incidents {
-            let severity = match incident.impact {
-                IncidentImpact::Maintenance => palette.text_secondary,
-                IncidentImpact::Degraded | IncidentImpact::PartialOutage => palette.caution,
-                IncidentImpact::MajorOutage => palette.critical,
+            let fold_id = fx::key(("provider-incident-open", incident.id.as_str()));
+            let target = if any_open {
+                !incident.collapsed
+            } else {
+                !self.fx.is_at_target(fold_id, 0.0)
             };
+            let row_open = self.fx.toggle(fold_id, target, fx::NORMAL);
+            if row_open <= 0.001 {
+                continue;
+            }
+            let severity = incident_severity(incident.impact, &palette);
             let impact = incident.impact.label();
             let since = incident.started_at.map(|started| {
                 let local = started.with_timezone(&Local);
@@ -2026,7 +2126,7 @@ impl PopupRoot {
             // The metadata shares the summary line while both fit, and
             // otherwise gets its own line under the title.
             let fits =
-                TextMetrics::fits_split(available_width, summary_width, metrics.caption(&metadata));
+                TextMetrics::fits_split(text_width, summary_width, metrics.caption(&metadata));
             let mut summary = div()
                 .flex()
                 .flex_row()
@@ -2037,8 +2137,8 @@ impl PopupRoot {
                 summary = summary.child(nowrap(caption(affected, palette.text_tertiary)));
             }
             let title = components::body_strong(incident.title.clone(), palette.text_primary)
-                .w(px(available_width));
-            let mut content = div().flex().flex_col().gap(px(1.0));
+                .w(px(text_width));
+            let mut content = div().flex().flex_col().gap(px(1.0)).w(px(text_width));
             content = if fits {
                 content
                     .child(components::split_row(
@@ -2052,29 +2152,78 @@ impl PopupRoot {
                     .child(title)
                     .child(card_metadata(metadata, &palette))
             };
-            reveal_height += 16.0
-                + (metrics.strong(&incident.title) / available_width.max(1.0)).ceil() * 20.0
-                + if fits { 0.0 } else { 16.0 }
-                + 10.0;
+            let row_height = 16.0
+                + (metrics.strong(&incident.title) / text_width.max(1.0)).ceil() * 20.0
+                + if fits { 0.0 } else { 16.0 };
+            let gap = ROW_GAP * above.min(1.0) * row_open;
+            reveal_height += row_height * row_open + gap;
+            above = above.max(row_open);
+
             let row_id = fx::key(("provider-incident-row", incident.id.as_str()));
-            let url = incident.url.clone();
-            rows = rows.child(
-                div()
-                    .id(eid(format!("provider-incident-{}", incident.id)))
-                    .on_hover(self.hover_listener(
-                        row_id,
-                        Some(crate::i18n::tr("open-status-page").into()),
-                        cx,
-                    ))
-                    .on_click(move |_: &ClickEvent, _, _| {
-                        if let Err(error) = crate::platform::shell::open_url(&url) {
-                            crate::platform::logger::info(format!(
-                                "failed to open status page {url}: {error:#}"
-                            ));
-                        }
-                    })
-                    .child(content),
+            let close_id = fx::key(("provider-incident-close", incident.id.as_str()));
+            let close_hover = self.fx.toggle(
+                fx::key(("provider-incident-close-fx", close_id)),
+                self.hovered(close_id),
+                fx::FASTER,
             );
+            let id = incident.id.clone();
+            let close = div()
+                .id(eid(format!("provider-incident-close-{}", incident.id)))
+                .flex_none()
+                .size(px(CLOSE))
+                .mt(px(CLOSE_INSET - PADDING))
+                .mr(px(CLOSE_INSET - PADDING))
+                .rounded(px(4.0))
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(palette.subtle_fill.opacity(close_hover))
+                .on_hover(self.hover_listener(
+                    close_id,
+                    Some(crate::i18n::tr("hide-incident").into()),
+                    cx,
+                ))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _, cx| {
+                    cx.stop_propagation();
+                    this.state
+                        .set_provider_incident_collapsed(kind, Some(&id), true);
+                    cx.notify();
+                }))
+                .child(icon(
+                    "fluent-dismiss",
+                    12.0,
+                    palette
+                        .chrome_icon
+                        .mix(palette.chrome_icon_hover, close_hover),
+                ));
+            let url = incident.url.clone();
+            let row = div()
+                .id(eid(format!("provider-incident-{}", incident.id)))
+                .flex()
+                .flex_row()
+                .items_start()
+                .on_hover(self.hover_listener(
+                    row_id,
+                    Some(crate::i18n::tr("open-status-page").into()),
+                    cx,
+                ))
+                .on_click(move |_: &ClickEvent, _, _| {
+                    if let Err(error) = crate::platform::shell::open_url(&url) {
+                        crate::platform::logger::info(format!(
+                            "failed to open status page {url}: {error:#}"
+                        ));
+                    }
+                })
+                .child(content)
+                .child(close);
+            let mut slot = div().mt(px(gap)).child(row);
+            if row_open < 1.0 {
+                slot = slot
+                    .overflow_hidden()
+                    .max_h(px(row_height * row_open))
+                    .opacity(row_open);
+            }
+            rows = rows.child(slot);
         }
         let mut element = card(&palette)
             .id(eid(card_key))
@@ -2083,7 +2232,7 @@ impl PopupRoot {
         if let Some(layer) = components::hover_layer(&palette, hover, palette.card_radius - 1.0) {
             element = element.child(layer);
         }
-        let element = element.child(div().relative().p(px(12.0)).child(rows));
+        let element = element.child(div().relative().p(px(PADDING)).child(rows));
         // The heading renders first, so this only grows in for an incident
         // that arrives while its section is already on screen.
         let reveal = self.fx.appear_in(
@@ -2091,15 +2240,28 @@ impl PopupRoot {
             fx::key(("provider-section", status.kind)),
             fx::NORMAL,
         );
-        if reveal >= 1.0 {
+        // Closing the last incident folds the card into the heading's
+        // warning icon, and a click on the icon unfolds it again.
+        let open = self.fx.toggle(
+            fx::key(("provider-incidents-open", hover_id)),
+            any_open,
+            fx::NORMAL,
+        );
+        let shown = reveal * open;
+        if shown >= 1.0 {
             return element.into_any_element();
         }
-        div()
+        // The section gap before the card closes along with it.
+        let gap = self.card_gap();
+        let mut folded = div()
             .overflow_hidden()
-            .max_h(px(reveal_height * reveal))
-            .opacity(reveal)
-            .child(element)
-            .into_any_element()
+            .max_h(px(reveal_height * shown))
+            .mt(px(-gap * (1.0 - open)))
+            .opacity(shown);
+        if shown <= 0.001 {
+            folded = folded.h(px(0.0));
+        }
+        folded.child(element).into_any_element()
     }
 
     /// One announced reset: a kind tile tinted by status, the title on the

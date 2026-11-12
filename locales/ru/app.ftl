@@ -2689,6 +2689,8 @@ notify-about-new-incidents-description = Показывает уведомлен
 
 # src/ui/popup_window/ui/cards.rs
 open-status-page = Открыть статус-страницу
+hide-incident = Скрыть инцидент
+show-incident = Показать инцидент
 
 # src/surfaces/notifications.rs
 provider-incident-title = { $provider }: { $impact }

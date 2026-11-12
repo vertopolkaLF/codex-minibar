@@ -2682,6 +2682,8 @@ notify-about-new-incidents-description = Shows a notification when a status page
 
 # src/ui/popup_window/ui/cards.rs
 open-status-page = Open status page
+hide-incident = Hide incident
+show-incident = Show incident
 
 # src/surfaces/notifications.rs
 provider-incident-title = { $provider }: { $impact }

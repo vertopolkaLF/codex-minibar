@@ -2661,6 +2661,8 @@ notify-about-new-incidents-description = Durum sayfası etkin bir sağlayıcı i
 
 # src/ui/popup_window/ui/cards.rs
 open-status-page = Durum sayfasını aç
+hide-incident = Olayı gizle
+show-incident = Olayı göster
 
 # src/surfaces/notifications.rs
 provider-incident-title = { $provider }: { $impact }

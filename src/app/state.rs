@@ -273,6 +273,37 @@ impl AppState {
         ));
     }
 
+    /// Closes one incident card of `kind`, or with `None` reopens every
+    /// closed one. Applied to the shared statuses at once so every surface
+    /// follows, then persisted by the status worker.
+    pub(crate) fn set_provider_incident_collapsed(
+        &self,
+        kind: ProviderKind,
+        incident: Option<&str>,
+        collapsed: bool,
+    ) {
+        let mut ids = Vec::new();
+        if let Ok(mut statuses) = self.provider_statuses.lock() {
+            let incidents = statuses
+                .iter_mut()
+                .filter(|status| status.kind == kind)
+                .flat_map(|status| status.incidents.iter_mut())
+                .filter(|current| incident.is_none_or(|id| current.id == id));
+            for current in incidents {
+                if current.collapsed != collapsed {
+                    current.collapsed = collapsed;
+                    ids.push(current.id.clone());
+                }
+            }
+            if !ids.is_empty() {
+                self.mark(Changes::FEEDS);
+            }
+        }
+        if !ids.is_empty() {
+            self.send_provider_status(ProviderStatusCommand::SetCollapsed { ids, collapsed });
+        }
+    }
+
     pub(crate) fn mark_provider_incident_notified(&self, id: String) {
         self.send_provider_status(ProviderStatusCommand::MarkNotified(id));
     }

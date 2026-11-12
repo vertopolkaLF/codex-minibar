@@ -1763,6 +1763,8 @@ notify-about-new-incidents-description = 當狀態頁報告已啟用服務供應
 
 # src/ui/popup_window/ui/cards.rs
 open-status-page = 開啟狀態頁
+hide-incident = 隱藏事件
+show-incident = 顯示事件
 
 # src/surfaces/notifications.rs
 provider-incident-title = { $provider }：{ $impact }

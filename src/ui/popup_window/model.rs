@@ -104,6 +104,9 @@ pub(crate) struct HeadingCard {
     pub(crate) balance_microusd: Option<u64>,
     pub(crate) error: Option<String>,
     pub(crate) drag_handle: bool,
+    /// Worst incident whose card the user closed: a warning icon beside the
+    /// name that reopens the closed cards.
+    pub(crate) closed_incident: Option<crate::providers::status::IncidentImpact>,
 }
 
 #[derive(Clone, Debug)]
@@ -229,6 +232,9 @@ pub(crate) fn provider_cards<'a>(
     let (monthly_label, primary_label, secondary_label) = limit_labels(kind);
     let single_openrouter_account =
         kind == ProviderKind::OpenRouter && limits.openrouter_accounts.len() == 1;
+    let status = options
+        .provider_status
+        .filter(|status| status.kind == kind && !status.incidents.is_empty());
     let heading = HeadingCard {
         provider,
         first: is_first,
@@ -254,13 +260,13 @@ pub(crate) fn provider_cards<'a>(
             .flatten(),
         error: options.provider_error.map(str::to_owned),
         drag_handle: options.drag_handle,
+        closed_incident: status
+            .and_then(crate::providers::status::ProviderStatus::worst_collapsed_impact),
     };
     let mut cards = vec![Card::Heading(heading)];
     // An outage explains missing or stale numbers, so it leads the section.
-    if let Some(status) = options
-        .provider_status
-        .filter(|status| status.kind == kind && !status.incidents.is_empty())
-    {
+    // Closed incidents stay in the plan so they can fold away and back.
+    if let Some(status) = status {
         cards.push(Card::ProviderIncidents(status.clone()));
     }
     let visible = |brick: &str| {
