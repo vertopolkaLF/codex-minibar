@@ -584,9 +584,14 @@ impl LimitNotificationTracker {
         now: DateTime<Utc>,
         defer_primary_reset: bool,
     ) -> LimitNotificationResult {
-        // Failed-key rows are diagnostics, not quota observations. Retain the
-        // last good deadlines and warning state until polling recovers.
-        if limits.all_opencode_go_keys_failed() {
+        // An incomplete key set can select a healthier sibling's aggregate
+        // without a real reset or recovery. Keep the last complete history so
+        // a failed key returning cannot repeat its low-usage warning.
+        if limits
+            .opencode_go_keys
+            .iter()
+            .any(|key| key.error.is_some())
+        {
             return LimitNotificationResult::default();
         }
         if !self.primed {
@@ -963,6 +968,103 @@ mod tests {
         assert_eq!(delivered.len(), 1);
         assert_eq!(delivered[0].0, NotificationKind::Reset);
         assert_eq!(delivered[0].1, LimitFocus::Primary);
+    }
+
+    #[test]
+    fn partial_go_failures_do_not_repeat_primary_or_weekly_warnings() {
+        let _host = test_host();
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let settings = NotificationSettings {
+            limits_changed: false,
+            low_usage_enabled: true,
+            low_usage_threshold_percent: 20,
+            weekly_low_usage_enabled: true,
+            weekly_low_usage_threshold_percent: 20,
+            ..Default::default()
+        };
+        let sample = |used, primary_reset, weekly_reset, failed: bool| {
+            let window = |used, resets_at| LimitWindow {
+                used_percent: Some(used),
+                resets_at: Some(resets_at),
+                duration_minutes: None,
+            };
+            RateLimits {
+                primary: window(used, primary_reset),
+                secondary: window(used, weekly_reset),
+                opencode_go_keys: vec![
+                    crate::quota::limits::OpenCodeGoKeySnapshot {
+                        id: "a".into(),
+                        error: failed.then(|| "Could not reach OpenCode Go".into()),
+                        rolling: if failed {
+                            LimitWindow::default()
+                        } else {
+                            window(used, primary_reset)
+                        },
+                        weekly: if failed {
+                            LimitWindow::default()
+                        } else {
+                            window(used, weekly_reset)
+                        },
+                        ..Default::default()
+                    },
+                    crate::quota::limits::OpenCodeGoKeySnapshot {
+                        id: "b".into(),
+                        rolling: window(10, primary_reset),
+                        weekly: window(10, weekly_reset),
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            }
+        };
+        let mut tracker = LimitNotificationTracker::default();
+        let name = "go-partial-warning-history";
+        tracker.named(name.into());
+        let complete = sample(90, at(14, 15), at(21, 15), false);
+        let partial = sample(10, at(14, 16), at(22, 15), true);
+        tracker.observe_at(&partial, &settings, provider, at(14, 8), false);
+        assert!(!tracker.primed);
+        tracker.observe_at(
+            &sample(50, at(14, 15), at(21, 15), false),
+            &settings,
+            provider,
+            at(14, 9),
+            false,
+        );
+        tracker.observe_at(&complete, &settings, provider, at(14, 10), false);
+        assert_eq!(delivered_for(name).len(), 2);
+        for defer in [false, true, false] {
+            tracker.observe_at(&partial, &settings, provider, at(14, 11), defer);
+            assert_eq!(tracker.primary_resets_at, Some(at(14, 15)));
+            assert_eq!(tracker.secondary_resets_at, Some(at(21, 15)));
+            tracker.observe_at(&complete, &settings, provider, at(14, 12), false);
+            assert_eq!(delivered_for(name).len(), 2);
+        }
+        // Complete samples in genuinely new windows can warn again.
+        tracker.observe_at(
+            &sample(50, at(22, 15), at(28, 15), false),
+            &settings,
+            provider,
+            at(22, 9),
+            false,
+        );
+        tracker.observe_at(
+            &sample(90, at(22, 15), at(28, 15), false),
+            &settings,
+            provider,
+            at(22, 10),
+            false,
+        );
+        let delivered = delivered_for(name);
+        assert_eq!(delivered.len(), 4);
+        assert!(
+            delivered
+                .iter()
+                .all(|alert| alert.0 == NotificationKind::Warning)
+        );
+        for focus in [LimitFocus::Primary, LimitFocus::Secondary] {
+            assert_eq!(delivered.iter().filter(|alert| alert.1 == focus).count(), 2);
+        }
     }
 
     #[test]
