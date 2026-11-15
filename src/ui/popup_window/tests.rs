@@ -1010,6 +1010,10 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
             used_percent: Some(used),
             ..LimitWindow::default()
         },
+        monthly: Some(LimitWindow {
+            used_percent: Some(used),
+            ..LimitWindow::default()
+        }),
         ..OpenCodeGoKeySnapshot::default()
     };
     fn cards_for<'a>(
@@ -1053,6 +1057,16 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
     let mut tracked = RateLimits::default();
     tracked.primary.used_percent = Some(10);
     tracked.secondary.used_percent = Some(20);
+    tracked
+        .additional_limits
+        .push(crate::quota::limits::AdditionalLimit {
+            id: crate::providers::registry::OPENCODE_GO_MONTHLY_LIMIT_ID.into(),
+            title: "Monthly".into(),
+            window: LimitWindow {
+                used_percent: Some(20),
+                ..LimitWindow::default()
+            },
+        });
     tracked.opencode_go_keys.push(key("first", 10));
     tracked.opencode_go_keys.push(key("second", 20));
     for surface in surfaces {
@@ -1066,13 +1080,14 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
     for surface in surfaces {
         assert_eq!(lists(&tracked, &hidden, surface), 0);
         assert_eq!(key_headings(&tracked, &hidden, surface), 2);
-        assert_eq!(lanes(&tracked, &hidden, surface), 4);
+        // Three lanes per key and no aggregate monthly left over.
+        assert_eq!(lanes(&tracked, &hidden, surface), 6);
     }
     // The quota switches choose the per-key columns too.
     let mut session_only = hidden.clone();
     session_only.set_brick("opencode-go.weekly", false, false);
     for surface in surfaces {
-        assert_eq!(lanes(&tracked, &session_only, surface), 2);
+        assert_eq!(lanes(&tracked, &session_only, surface), 4);
     }
     let home_only = visibility_with("opencode-go.keys", true, false);
     assert_eq!(lists(&tracked, &home_only, PopupSurface::HomeTab), 1);

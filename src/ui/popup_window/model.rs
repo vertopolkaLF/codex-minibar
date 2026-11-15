@@ -449,7 +449,11 @@ pub(crate) fn provider_cards<'a>(
     }
     // Claude can return extra windows such as Fable or Opus. They belong with
     // the ordinary limit cards, before banked resets, statistics, or credits.
-    for limit in limits.additional_limits.iter().filter(|_| !key_rows_only) {
+    for limit in limits
+        .additional_limits
+        .iter()
+        .filter(|_| !key_rows_only && !key_lanes)
+    {
         if !visible(&additional_limit_brick_id(kind, &limit.id))
             || (fable_merged && fable.is_some_and(|fable| std::ptr::eq(fable, limit)))
         {
