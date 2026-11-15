@@ -4554,3 +4554,4 @@ currency-symbol-position = Symbol position
 currency-symbol-before = Before amount
 currency-symbol-after = After amount
 currency-source = Rates by Exchange Rate API
+reads-workbuddy-token-history-from-your-local-workbuddy-transcripts = { "" }

@@ -2184,3 +2184,4 @@ currency-symbol-position = 符號位置
 currency-symbol-before = 金額之前
 currency-symbol-after = 金額之後
 currency-source = 匯率來源：Exchange Rate API
+reads-workbuddy-token-history-from-your-local-workbuddy-transcripts = 從本機 WorkBuddy 工作階段記錄讀取 token 使用歷史。

@@ -2205,3 +2205,4 @@ currency-symbol-position = Posição do símbolo
 currency-symbol-before = Antes do valor
 currency-symbol-after = Depois do valor
 currency-source = Cotações da Exchange Rate API
+reads-workbuddy-token-history-from-your-local-workbuddy-transcripts = Lê o histórico de tokens dos seus registros locais de sessões do WorkBuddy.

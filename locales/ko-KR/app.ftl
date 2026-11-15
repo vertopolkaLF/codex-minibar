@@ -3082,3 +3082,4 @@ currency-symbol-position = 기호 위치
 currency-symbol-before = 금액 앞
 currency-symbol-after = 금액 뒤
 currency-source = 환율 제공: Exchange Rate API
+reads-workbuddy-token-history-from-your-local-workbuddy-transcripts = 로컬 WorkBuddy 세션 기록에서 토큰 사용 내역을 읽습니다.

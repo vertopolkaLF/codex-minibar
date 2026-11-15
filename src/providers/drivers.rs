@@ -46,6 +46,7 @@ pub(crate) fn driver(kind: ProviderKind) -> &'static Driver {
         ProviderKind::Grok => &crate::providers::grok::DRIVER,
         ProviderKind::Kiro => &crate::providers::kiro::DRIVER,
         ProviderKind::CommandCode => &crate::providers::commandcode::DRIVER,
+        ProviderKind::WorkBuddy => &crate::providers::workbuddy::DRIVER,
     }
 }
 

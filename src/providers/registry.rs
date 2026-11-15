@@ -23,10 +23,12 @@ pub enum ProviderKind {
     Grok,
     Kiro,
     CommandCode,
+    /// Tencent's agentic IDE/CLI. Local usage only: no quota windows exist.
+    WorkBuddy,
 }
 
 impl ProviderKind {
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 11] = [
         Self::Codex,
         Self::Claude,
         Self::Cursor,
@@ -37,6 +39,7 @@ impl ProviderKind {
         Self::Grok,
         Self::Kiro,
         Self::CommandCode,
+        Self::WorkBuddy,
     ];
 
     pub const fn id(self) -> &'static str {
@@ -797,6 +800,43 @@ pub const PROVIDERS: &[ProviderDescriptor] = &[
         status_page: None,
         metrics: COMMAND_CODE_METRICS,
         default_tray_metrics: &["command-code.session", "command-code.weekly"],
+    },
+    ProviderDescriptor {
+        kind: ProviderKind::WorkBuddy,
+        id: "workbuddy",
+        display_name: "WorkBuddy",
+        icon: "workbuddy",
+        brand_rgb: (77, 124, 254),
+        icon_rgb: ThemedRgb {
+            light: (61, 100, 214),
+            dark: (77, 124, 254),
+        },
+        spend_rgb: ThemedRgb {
+            light: (61, 100, 214),
+            dark: (77, 124, 254),
+        },
+        series_rgb: ThemedRgb {
+            light: (61, 100, 214),
+            dark: (77, 124, 254),
+        },
+        supports_activation: false,
+        include_in_total_spend: true,
+        supports_multiple_instances: false,
+        config_folder: false,
+        banked_resets: BankedResets::Unsupported,
+        credits: Credits::Unsupported,
+        usage_stats: UsageStats::Local,
+        usage_value: UsageValue::EstimatedTokens,
+        spending_strips: false,
+        balance_only: false,
+        monthly_only: false,
+        limit_titles: LimitTitles::STANDARD,
+        default_refresh_seconds: 60,
+        activation_state_file: "activation-workbuddy.toml",
+        pricing_prefixes: &[],
+        status_page: None,
+        metrics: &[],
+        default_tray_metrics: &[],
     },
 ];
 

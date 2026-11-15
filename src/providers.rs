@@ -14,6 +14,7 @@ pub mod registry;
 pub mod scheduler;
 pub mod status;
 pub(crate) mod support;
+pub mod workbuddy;
 pub mod worker;
 
 use std::{collections::HashMap, path::PathBuf, sync::mpsc::Sender, thread, time::Duration};

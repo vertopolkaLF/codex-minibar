@@ -3082,3 +3082,4 @@ currency-symbol-position = Simge konumu
 currency-symbol-before = Tutardan önce
 currency-symbol-after = Tutardan sonra
 currency-source = Kurlar: Exchange Rate API
+reads-workbuddy-token-history-from-your-local-workbuddy-transcripts = Yerel WorkBuddy oturum günlüklerinizden token geçmişini okur.

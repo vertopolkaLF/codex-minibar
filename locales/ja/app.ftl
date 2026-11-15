@@ -3083,3 +3083,4 @@ currency-symbol-position = 記号の位置
 currency-symbol-before = 金額の前
 currency-symbol-after = 金額の後
 currency-source = 為替レート提供: Exchange Rate API
+reads-workbuddy-token-history-from-your-local-workbuddy-transcripts = ローカルの WorkBuddy セッションログからトークン履歴を読み取ります。
