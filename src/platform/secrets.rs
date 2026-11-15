@@ -122,6 +122,7 @@ fn decode(encoded: &str) -> Result<Option<String>> {
 /// Previous ciphertext for a set of secret names. Restores the exact stored
 /// blobs without decrypting, so a corrupt slot can still be replaced or removed.
 pub(crate) struct EncodedRollback {
+    path: PathBuf,
     entries: Vec<(String, Option<String>)>,
     applied: Vec<(String, Option<String>)>,
     generations: Vec<u64>,
@@ -130,8 +131,20 @@ pub(crate) struct EncodedRollback {
 impl EncodedRollback {
     pub(crate) fn restore(self) -> Result<()> {
         let _guard = operation_guard()?;
-        let path = crate::platform::paths::secrets()?;
-        restore_encoded_to(&path, &self)
+        restore_encoded_to(&self.path, &self)
+    }
+
+    /// Keep the secret change only if the associated settings write succeeds.
+    pub(crate) fn commit_with(self, commit: impl FnOnce() -> Result<()>) -> Result<()> {
+        match commit() {
+            Ok(()) => Ok(()),
+            Err(error) => match self.restore() {
+                Ok(()) => Err(error),
+                Err(rollback_error) => Err(anyhow::anyhow!(
+                    "could not save settings ({error:#}); restoring the protected key also failed ({rollback_error:#})"
+                )),
+            },
+        }
     }
 }
 
@@ -164,6 +177,7 @@ fn apply_with_rollback_to(
     commit_secret_file(path, &file)?;
     let generations = advance_generations(path, names);
     Ok(EncodedRollback {
+        path: path.to_owned(),
         entries,
         applied,
         generations,
@@ -430,6 +444,29 @@ fn unprotect(data: &[u8]) -> Result<Vec<u8>> {
 #[cfg(all(test, windows))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removing_a_key_restores_it_when_settings_cannot_be_saved() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("provider-secrets.json");
+        save_many_to(&path, &[("api".into(), Some("original".into()))])?;
+        let before = read_encoded(&path, "api")?;
+        let rollback = apply_with_rollback_to(&path, &[("api".into(), None)])?;
+        assert_eq!(load_from(&path, "api")?, None);
+        // A directory cannot be replaced by the settings file.
+        assert!(
+            rollback
+                .commit_with(|| crate::settings::Settings::default().save(directory.path()))
+                .is_err()
+        );
+        assert_eq!(read_encoded(&path, "api")?, before);
+        assert_eq!(load_from(&path, "api")?.as_deref(), Some("original"));
+
+        // A successful commit really removes the key.
+        apply_with_rollback_to(&path, &[("api".into(), None)])?.commit_with(|| Ok(()))?;
+        assert_eq!(load_from(&path, "api")?, None);
+        Ok(())
+    }
 
     #[test]
     fn rollback_does_not_overwrite_a_newer_secret_update() -> Result<()> {

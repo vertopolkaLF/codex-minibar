@@ -4,7 +4,16 @@
 //! windows come from its account-wide usage endpoint. Both providers use the
 //! local OpenCode SQLite history for cost-oriented activity cards.
 
-use std::{collections::BTreeMap, env, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Local, Utc};
@@ -19,7 +28,8 @@ use crate::{
     providers::instances::{ProviderId, ProviderInstance},
     providers::registry::ProviderKind,
     providers::worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
-    quota::limits::{AdditionalLimit, LimitWindow, RateLimits},
+    quota::limits::{AdditionalLimit, LimitWindow, OpenCodeGoKeySnapshot, RateLimits},
+    settings::OpenCodeKeys,
     store,
     usage::{Rollup, RollupBuilder, TokenUsage, UsageStatistics, statistics_from_daily},
 };
@@ -73,6 +83,103 @@ fn secret_name(provider: ProviderId) -> Option<String> {
     })
 }
 
+/// Protected-storage name of one tracked key. The pre-multi-key credential
+/// keeps the instance's original slot, so existing installations need no
+/// migration; additional keys are suffixed with their stable identity.
+pub fn key_secret_name(provider: ProviderId, key_id: &str) -> Option<String> {
+    let base = secret_name(provider)?;
+    Some(if key_id == OpenCodeKeys::LEGACY_KEY_ID {
+        base
+    } else {
+        format!("{base}.{key_id}")
+    })
+}
+
+/// The keys one instance reads, in settings order. Instances written before
+/// multi-key support fall back to the single legacy credential.
+pub fn tracked_key_ids(instance: &ProviderInstance) -> Vec<String> {
+    let ids = instance.opencode_keys();
+    if ids.is_empty() {
+        vec![OpenCodeKeys::LEGACY_KEY_ID.to_owned()]
+    } else {
+        ids.to_vec()
+    }
+}
+
+/// Whether one tracked key has a saved secret. The legacy key can also come
+/// from the environment or OpenCode's auth file; see [`is_installed`].
+pub fn key_is_configured(provider: ProviderId, key_id: &str) -> bool {
+    key_secret_name(provider, key_id).is_some_and(|name| secrets::has_value(&name))
+}
+
+/// Collapsed fingerprint of a saved key, never the full secret.
+pub fn key_hint(provider: ProviderId, key_id: &str) -> Result<Option<String>> {
+    let Some(value) = key_secret_name(provider, key_id)
+        .map(|name| secrets::load(&name))
+        .transpose()?
+        .flatten()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Ok(None);
+    };
+    Ok(Some(secrets::masked_hint(&value)))
+}
+
+/// Overlay locally chosen key names onto a live quota snapshot. A rename, or
+/// clearing a name, is a settings-only change and must not wait for the next
+/// worker poll or an app restart.
+pub fn apply_key_names(limits: &mut RateLimits, instance: &ProviderInstance) -> bool {
+    let keys = instance.opencode.as_ref();
+    let mut changed = false;
+    for key in &mut limits.opencode_go_keys {
+        let local_name = keys
+            .and_then(|keys| keys.name_of(&key.id))
+            .map(str::to_owned);
+        if key.local_name != local_name {
+            key.local_name = local_name;
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// The catalog metrics one tracked key reports, in display order. These are
+/// the metric ids a key-scoped widget indicator stores.
+pub fn key_metric_ids() -> Vec<String> {
+    use crate::providers::registry::{MetricSource, OPENCODE_GO_MONTHLY_LIMIT_ID, descriptor};
+    descriptor(ProviderKind::OpenCodeGo)
+        .metrics
+        .iter()
+        .filter(|metric| match metric.source {
+            MetricSource::Primary | MetricSource::Secondary => true,
+            MetricSource::Additional(id) => id == OPENCODE_GO_MONTHLY_LIMIT_ID,
+        })
+        .map(|metric| metric.id.to_owned())
+        .collect()
+}
+
+/// The window one tracked key reports for its driver's catalog metric.
+pub fn key_window<'a>(key: &'a OpenCodeGoKeySnapshot, metric_id: &str) -> Option<&'a LimitWindow> {
+    use crate::providers::registry::{MetricSource, OPENCODE_GO_MONTHLY_LIMIT_ID, metric};
+    match metric(ProviderKind::OpenCodeGo, metric_id)?.source {
+        MetricSource::Primary => Some(&key.rolling),
+        MetricSource::Secondary => Some(&key.weekly),
+        MetricSource::Additional(id) if id == OPENCODE_GO_MONTHLY_LIMIT_ID => key.monthly.as_ref(),
+        _ => None,
+    }
+}
+
+/// Replaces one tracked key and captures its prior ciphertext in one
+/// transaction, so a failed settings commit can restore it.
+pub(crate) fn apply_key(
+    provider: ProviderId,
+    key_id: &str,
+    value: Option<&str>,
+) -> Result<secrets::EncodedRollback> {
+    let name = key_secret_name(provider, key_id).context("provider is not an OpenCode catalog")?;
+    secrets::apply_with_rollback(&[(name, value.map(str::to_owned))])
+}
+
 pub fn manual_key(provider: ProviderId) -> Result<Option<String>> {
     secret_name(provider)
         .map(|name| secrets::load(&name))
@@ -84,29 +191,33 @@ pub fn save_manual_key(provider: ProviderId, value: Option<&str>) -> Result<()> 
     secrets::save(&name, value)
 }
 
-/// Replaces the key and captures its prior ciphertext in one transaction, so
-/// even a corrupt key can be restored if the following settings commit fails.
-pub(crate) fn apply_manual_key(
-    provider: ProviderId,
-    value: Option<&str>,
-) -> Result<secrets::EncodedRollback> {
-    let name = secret_name(provider).context("provider is not an OpenCode catalog")?;
-    secrets::apply_with_rollback(&[(name, value.map(str::to_owned))])
+/// Whether the instance has at least one saved key, including the legacy
+/// single-key slot.
+pub fn has_saved_key(instance: &ProviderInstance) -> bool {
+    let provider = instance.provider_id();
+    tracked_key_ids(instance)
+        .iter()
+        .any(|key_id| key_is_configured(provider, key_id))
 }
 
-pub(crate) fn restore_manual_key(rollback: secrets::EncodedRollback) -> Result<()> {
-    rollback.restore()
-}
-
-pub fn key_is_configured(provider: ProviderId) -> bool {
-    secret_name(provider).is_some_and(|name| secrets::has_value(&name))
+/// One OpenCode Go key the instance queries, in settings order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TrackedKey {
+    id: String,
+    name: Option<String>,
 }
 
 #[derive(Clone)]
 pub struct OpenCodeClient {
     catalog: Catalog,
     provider: ProviderId,
+    /// OpenCode Go keys from the instance. Empty means the pre-multi-key
+    /// credential resolved from the environment or OpenCode's auth file.
+    keys: Vec<TrackedKey>,
     agent: ureq::Agent,
+    /// Set when any key's usage request was rate limited, even if another key
+    /// still produced the instance's aggregate sample.
+    rate_limited: Arc<AtomicBool>,
 }
 
 impl OpenCodeClient {
@@ -115,8 +226,51 @@ impl OpenCodeClient {
         Ok(Self {
             catalog,
             provider,
+            keys: Vec::new(),
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
+            rate_limited: Arc::new(AtomicBool::new(false)),
         })
+    }
+
+    /// A client for one configured instance, querying every tracked key.
+    pub fn for_instance(instance: &ProviderInstance) -> Result<Self> {
+        let mut client = Self::new(instance.provider_id())?;
+        if client.catalog == Catalog::Go {
+            let keys = instance.opencode.as_ref();
+            client.keys = instance
+                .opencode_keys()
+                .iter()
+                .map(|id| TrackedKey {
+                    id: id.clone(),
+                    name: keys.and_then(|keys| keys.name_of(id)).map(str::to_owned),
+                })
+                .collect();
+        }
+        Ok(client)
+    }
+
+    /// Keys to query, including the legacy slot when settings never listed one.
+    fn go_keys(&self) -> Vec<TrackedKey> {
+        if self.keys.is_empty() {
+            vec![TrackedKey {
+                id: OpenCodeKeys::LEGACY_KEY_ID.to_owned(),
+                name: None,
+            }]
+        } else {
+            self.keys.clone()
+        }
+    }
+
+    /// Resolves one key's secret. The legacy key keeps the environment and
+    /// auth-file fallbacks; additional keys only use their own saved value.
+    fn resolve_key(&self, key: &TrackedKey) -> Result<Option<String>> {
+        if key.id == OpenCodeKeys::LEGACY_KEY_ID {
+            return resolve_api_key(self.catalog, self.provider);
+        }
+        let Some(name) = key_secret_name(self.provider, &key.id) else {
+            return Ok(None);
+        };
+        Ok(secrets::load(&name)?.filter(|value| !value.trim().is_empty()))
     }
 
     fn read_limits(&self) -> Result<RateLimits> {
@@ -154,9 +308,72 @@ impl OpenCodeClient {
     }
 
     fn read_go_limits(&self) -> Result<RateLimits> {
-        let key = resolve_api_key(self.catalog, self.provider)?.context(
-            "OpenCode Go API key not found; set OPENCODE_GO_API_KEY, OPENCODE_API_KEY, use auth.json, or save a manual key",
-        )?;
+        let snapshots = self
+            .go_keys()
+            .iter()
+            .map(|key| self.read_go_key(key))
+            .collect::<Vec<_>>();
+        Ok(aggregate_go_keys(snapshots))
+    }
+
+    /// Reads one key's usage. A failure becomes a key-local row so the other
+    /// keys still report their quotas.
+    fn read_go_key(&self, key: &TrackedKey) -> OpenCodeGoKeySnapshot {
+        let sampled_at = Utc::now();
+        let mut snapshot = OpenCodeGoKeySnapshot {
+            id: key.id.clone(),
+            local_name: key.name.clone(),
+            masked_key: key_secret_name(self.provider, &key.id)
+                .map(|name| secrets::load(&name))
+                .transpose()
+                .ok()
+                .flatten()
+                .flatten()
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| secrets::masked_hint(&value)),
+            sampled_at,
+            ..OpenCodeGoKeySnapshot::default()
+        };
+        let value = match self.resolve_key(key) {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                snapshot.error = Some(go_missing_key_message(key));
+                return snapshot;
+            }
+            Err(error) => {
+                self.note_rate_limit(&error);
+                snapshot.error = Some(go_error_message(&error));
+                return snapshot;
+            }
+        };
+        match self
+            .request_go_usage(&value)
+            .and_then(|body| parse_go_windows(&body, sampled_at))
+        {
+            Ok((rolling, weekly, monthly)) => {
+                snapshot.rolling = rolling;
+                snapshot.weekly = weekly;
+                snapshot.monthly = monthly;
+            }
+            // Key-local errors reach the log, the store and the provider tab.
+            // The row is one line wide, so only the reason is kept.
+            Err(error) => {
+                self.note_rate_limit(&error);
+                snapshot.error = Some(go_error_message(&error));
+            }
+        }
+        snapshot
+    }
+
+    /// A 429 from one key must reach the worker even when another key still
+    /// reports, so the provider's pause is honoured.
+    fn note_rate_limit(&self, error: &anyhow::Error) {
+        if http_status_of(error) == Some(429) {
+            self.rate_limited.store(true, Ordering::Relaxed);
+        }
+    }
+
+    fn request_go_usage(&self, key: &str) -> Result<String> {
         let response = self
             .agent
             .get(GO_USAGE_URL)
@@ -169,9 +386,9 @@ impl OpenCodeClient {
             .into_string()
             .context("read OpenCode Go usage response")?;
         if status != 200 {
-            return Err(api_error("OpenCode Go", status, &body));
+            return Err(anyhow::Error::new(HttpStatusError(status)));
         }
-        parse_go_usage(&body, Utc::now())
+        Ok(body)
     }
 
     fn read_local_usage(&self) -> Result<Rollup> {
@@ -247,6 +464,18 @@ impl LimitProvider for OpenCodeClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
         OpenCodeClient::read_limits(self)
     }
+
+    fn poll_error(&self, limits: &RateLimits) -> Option<String> {
+        if limits.all_opencode_go_keys_failed() {
+            limits.opencode_go_keys[0].error.clone()
+        } else {
+            None
+        }
+    }
+
+    fn take_rate_limit_response(&mut self) -> bool {
+        self.rate_limited.swap(false, Ordering::Relaxed)
+    }
 }
 
 impl UsageProvider for OpenCodeClient {
@@ -295,7 +524,7 @@ pub(crate) static GO_DRIVER: Driver = Driver {
 };
 
 fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<WorkerHandle> {
-    let client = OpenCodeClient::new(instance.provider_id())?;
+    let client = OpenCodeClient::for_instance(instance)?;
     Ok(crate::providers::worker::start_worker(
         client.clone(),
         client,
@@ -306,17 +535,28 @@ fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<W
 
 fn detect(instance: &ProviderInstance) -> InstallStatus {
     let provider = instance.provider_id();
-    // Secondary instances read only their own API key.
-    let (detected, detail) = if provider.is_primary() {
+    // Go tracks several keys per instance, so any saved key counts. Its legacy
+    // slot also falls back to the environment and OpenCode's auth file.
+    let (detected, detail) = if provider.kind() == ProviderKind::OpenCodeGo {
+        // Environment variables and OpenCode's auth file describe the first
+        // instance's login only; other instances depend on their saved keys.
+        let installed = instance.is_primary() && is_installed(instance.driver);
+        (
+            installed || has_saved_key(instance),
+            if installed {
+                crate::i18n::tr("opencode-auth-json-or-local-database")
+            } else {
+                crate::i18n::tr("saved-api-key")
+            },
+        )
+    } else if provider.is_primary() {
+        // Secondary instances read only their own API key.
         (
             is_installed(instance.driver),
             crate::i18n::tr("opencode-auth-json-or-local-database"),
         )
     } else {
-        (
-            key_is_configured(provider),
-            crate::i18n::tr("saved-api-key"),
-        )
+        (has_saved_key(instance), crate::i18n::tr("saved-api-key"))
     };
     InstallStatus {
         app: detected.then(|| detail.into()),
@@ -345,7 +585,20 @@ fn go_settings_copy() -> SettingsCopy {
 }
 
 fn forget_secrets(instance: &ProviderInstance) -> Result<()> {
-    save_manual_key(instance.provider_id(), None)
+    let provider = instance.provider_id();
+    let mut changes: Vec<(String, Option<String>)> = Vec::new();
+    for key_id in tracked_key_ids(instance) {
+        if let Some(name) = key_secret_name(provider, &key_id) {
+            changes.push((name, None));
+        }
+    }
+    // Drop the instance's legacy slot even when settings list their own ids.
+    if let Some(name) = secret_name(provider)
+        && !changes.iter().any(|(existing, _)| existing == &name)
+    {
+        changes.push((name, None));
+    }
+    secrets::save_many(&changes)
 }
 
 fn catalog(provider: ProviderKind) -> Option<Catalog> {
@@ -453,7 +706,35 @@ fn parse_model_count(body: &str) -> Result<usize> {
     Ok(models.len())
 }
 
+/// Single-key shape of the Go endpoint. The instance path reads one snapshot
+/// per tracked key and aggregates them in [`aggregate_go_keys`].
+#[cfg(test)]
 fn parse_go_usage(body: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
+    let (rolling, weekly, monthly) = parse_go_windows(body, sampled_at)?;
+    let additional_limits = monthly
+        .map(|window| AdditionalLimit {
+            id: crate::providers::registry::OPENCODE_GO_MONTHLY_LIMIT_ID.into(),
+            title: "Monthly".into(),
+            window,
+        })
+        .into_iter()
+        .collect();
+    Ok(RateLimits {
+        primary: rolling,
+        secondary: weekly,
+        sampled_at,
+        plan_type: Some("Go".into()),
+        limit_name: Some("OpenCode Go".into()),
+        additional_limits,
+        ..RateLimits::default()
+    })
+}
+
+/// The three quota windows one usage response reports.
+fn parse_go_windows(
+    body: &str,
+    sampled_at: DateTime<Utc>,
+) -> Result<(LimitWindow, LimitWindow, Option<LimitWindow>)> {
     let value: Value = serde_json::from_str(body).context("parse OpenCode Go usage response")?;
     let usage = usage_object(&value);
     let rolling = parse_window(
@@ -466,13 +747,48 @@ fn parse_go_usage(body: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
         usage,
         &["weekly", "weeklyUsage", "weekly_usage"],
         sampled_at,
-    );
+    )
+    .unwrap_or_default();
     let monthly = parse_window(
         usage,
         &["monthly", "monthlyUsage", "monthly_usage"],
         sampled_at,
     );
+    Ok((rolling, weekly, monthly))
+}
+
+/// Combines per-key samples into the instance's lanes: each window shows the
+/// most-consumed key so tray, Home and notifications keep their meaning,
+/// while every key keeps its own row for the provider tab.
+fn aggregate_go_keys(snapshots: Vec<OpenCodeGoKeySnapshot>) -> RateLimits {
+    let sampled_at = snapshots
+        .iter()
+        .map(|snapshot| snapshot.sampled_at)
+        .max()
+        .unwrap_or_else(Utc::now);
+    let rolling = worst_window(
+        snapshots
+            .iter()
+            .filter(|snapshot| snapshot.error.is_none())
+            .map(|snapshot| &snapshot.rolling),
+    );
+    let weekly = worst_window(
+        snapshots
+            .iter()
+            .filter(|snapshot| snapshot.error.is_none())
+            .map(|snapshot| &snapshot.weekly),
+    );
+    let monthly = {
+        let window = worst_window(
+            snapshots
+                .iter()
+                .filter(|snapshot| snapshot.error.is_none())
+                .filter_map(|snapshot| snapshot.monthly.as_ref()),
+        );
+        (!window.is_empty()).then_some(window)
+    };
     let additional_limits = monthly
+        .clone()
         .map(|window| AdditionalLimit {
             id: crate::providers::registry::OPENCODE_GO_MONTHLY_LIMIT_ID.into(),
             title: "Monthly".into(),
@@ -480,16 +796,88 @@ fn parse_go_usage(body: &str, sampled_at: DateTime<Utc>) -> Result<RateLimits> {
         })
         .into_iter()
         .collect();
-    Ok(RateLimits {
+    let key_count = snapshots.len();
+    RateLimits {
         primary: rolling,
-        secondary: weekly.unwrap_or_default(),
+        secondary: weekly,
         sampled_at,
-        plan_type: Some("Go".into()),
+        plan_type: Some(if key_count > 1 {
+            format!("Go · {key_count} keys")
+        } else {
+            "Go".into()
+        }),
         limit_name: Some("OpenCode Go".into()),
         additional_limits,
+        opencode_go_keys: snapshots,
         ..RateLimits::default()
+    }
+}
+
+/// The most-consumed window across keys. Ties keep the earlier key, and a
+/// reset-only window still counts when no key reports a percentage.
+fn worst_window<'a>(windows: impl Iterator<Item = &'a LimitWindow>) -> LimitWindow {
+    let mut worst: Option<&LimitWindow> = None;
+    for window in windows {
+        if window.is_empty() {
+            continue;
+        }
+        let better = worst.is_none_or(|current| {
+            window.used_percent.unwrap_or(0) > current.used_percent.unwrap_or(0)
+        });
+        if better {
+            worst = Some(window);
+        }
+    }
+    worst.cloned().unwrap_or_default()
+}
+
+/// Why one key produced no sample, phrased for the provider tab and the
+/// worker's error line.
+fn go_missing_key_message(key: &TrackedKey) -> String {
+    if key.id == OpenCodeKeys::LEGACY_KEY_ID {
+        "No OpenCode Go API key found".into()
+    } else {
+        format!(
+            "No saved value for {}",
+            key.name.as_deref().unwrap_or(&key.id)
+        )
+    }
+}
+
+/// A short reason for a failed key. The card is one line wide, so the raw
+/// transport error (URLs, retry hints) is reduced to what the row can show.
+fn go_error_message(error: &anyhow::Error) -> String {
+    if let Some(status) = http_status_of(error) {
+        return format!("OpenCode Go returned HTTP {status}");
+    }
+    if format!("{error:#}").contains("parse OpenCode Go usage response") {
+        return "OpenCode Go sent an unexpected response".into();
+    }
+    "Could not reach OpenCode Go".into()
+}
+
+/// The numeric HTTP status carried by an error chain, if it is one.
+fn http_status_of(error: &anyhow::Error) -> Option<u16> {
+    error.chain().find_map(|cause| {
+        if let Some(ureq::Error::Status(status, _)) = cause.downcast_ref::<ureq::Error>() {
+            return Some(*status);
+        }
+        cause.downcast_ref::<HttpStatusError>().map(|error| error.0)
     })
 }
+
+/// A response that was not `200`. The body never becomes part of the message,
+/// so a server echoing the credential cannot leak it.
+#[derive(Debug)]
+struct HttpStatusError(u16);
+
+impl std::fmt::Display for HttpStatusError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "OpenCode Go returned HTTP {}", self.0)
+    }
+}
+
+impl std::error::Error for HttpStatusError {}
 
 fn usage_object(value: &Value) -> &Value {
     if value.get("usage").is_some_and(Value::is_object) {
@@ -625,6 +1013,190 @@ mod tests {
         .unwrap();
         assert_eq!(limits.primary.used_percent, Some(1));
         assert!(parse_go_usage(r#"{"usage":{"weekly":{"percent":2}}}"#, Utc::now()).is_err());
+    }
+
+    #[test]
+    fn multi_key_aggregation_takes_the_most_consumed_key_for_every_lane() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 29, 10, 0, 0).unwrap();
+        let key = |id: &str, rolling: u8, weekly: u8, monthly: u8| OpenCodeGoKeySnapshot {
+            id: id.into(),
+            rolling: LimitWindow {
+                used_percent: Some(rolling),
+                resets_at: Some(sampled_at + chrono::Duration::minutes(30)),
+                duration_minutes: None,
+            },
+            weekly: LimitWindow {
+                used_percent: Some(weekly),
+                ..LimitWindow::default()
+            },
+            monthly: Some(LimitWindow {
+                used_percent: Some(monthly),
+                ..LimitWindow::default()
+            }),
+            sampled_at,
+            ..OpenCodeGoKeySnapshot::default()
+        };
+        let limits = aggregate_go_keys(vec![key("a", 12, 40, 5), key("b", 70, 20, 9)]);
+        assert_eq!(limits.primary.used_percent, Some(70));
+        assert_eq!(limits.secondary.used_percent, Some(40));
+        assert_eq!(limits.additional_limits[0].window.used_percent, Some(9));
+        assert_eq!(limits.plan_type.as_deref(), Some("Go · 2 keys"));
+        assert_eq!(limits.opencode_go_keys.len(), 2);
+        assert_eq!(limits.opencode_go_keys[0].id, "a");
+    }
+
+    #[test]
+    fn a_failed_key_keeps_its_row_without_lowering_the_instance_lanes() {
+        let sampled_at = Utc.with_ymd_and_hms(2026, 8, 29, 10, 0, 0).unwrap();
+        let good = OpenCodeGoKeySnapshot {
+            id: "good".into(),
+            rolling: LimitWindow {
+                used_percent: Some(30),
+                ..LimitWindow::default()
+            },
+            weekly: LimitWindow {
+                used_percent: Some(10),
+                ..LimitWindow::default()
+            },
+            sampled_at,
+            ..OpenCodeGoKeySnapshot::default()
+        };
+        let bad = OpenCodeGoKeySnapshot {
+            id: "bad".into(),
+            error: Some("OpenCode Go API returned HTTP 429".into()),
+            sampled_at,
+            ..OpenCodeGoKeySnapshot::default()
+        };
+        let limits = aggregate_go_keys(vec![good, bad]);
+        assert_eq!(limits.primary.used_percent, Some(30));
+        assert_eq!(
+            limits.opencode_go_keys[1].error.as_deref(),
+            Some("OpenCode Go API returned HTTP 429")
+        );
+    }
+
+    #[test]
+    fn live_key_names_overlay_onto_a_snapshot() {
+        let mut instance = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        instance.opencode = Some(crate::settings::OpenCodeKeys {
+            key_ids: vec!["a".into(), "b".into()],
+            key_names: std::collections::BTreeMap::from([("a".to_owned(), "Team A".to_owned())]),
+        });
+        let mut limits = RateLimits {
+            opencode_go_keys: vec![
+                OpenCodeGoKeySnapshot {
+                    id: "a".into(),
+                    local_name: Some("Old".into()),
+                    ..OpenCodeGoKeySnapshot::default()
+                },
+                OpenCodeGoKeySnapshot {
+                    id: "b".into(),
+                    local_name: Some("Cleared".into()),
+                    ..OpenCodeGoKeySnapshot::default()
+                },
+            ],
+            ..RateLimits::default()
+        };
+        assert!(apply_key_names(&mut limits, &instance));
+        assert_eq!(
+            limits.opencode_go_keys[0].local_name.as_deref(),
+            Some("Team A")
+        );
+        assert_eq!(limits.opencode_go_keys[1].local_name, None);
+        // Nothing left to change on the second pass.
+        assert!(!apply_key_names(&mut limits, &instance));
+    }
+
+    #[test]
+    fn all_failed_keys_keep_their_diagnostics_and_provider_error() {
+        let client = OpenCodeClient::new(ProviderId::primary(ProviderKind::OpenCodeGo)).unwrap();
+        let failed = |id: &str, error: &str| OpenCodeGoKeySnapshot {
+            id: id.into(),
+            error: Some(error.into()),
+            ..Default::default()
+        };
+        let limits = aggregate_go_keys(vec![
+            failed("first", "OpenCode Go returned HTTP 401"),
+            failed("second", "OpenCode Go returned HTTP 429"),
+        ]);
+        assert_eq!(limits.opencode_go_keys.len(), 2);
+        assert_eq!(
+            limits.opencode_go_keys[1].error.as_deref(),
+            Some("OpenCode Go returned HTTP 429")
+        );
+        assert!(limits.primary.is_empty());
+        assert!(limits.secondary.is_empty());
+        assert!(limits.additional_limits.is_empty());
+        assert_eq!(
+            client.poll_error(&limits).as_deref(),
+            Some("OpenCode Go returned HTTP 401")
+        );
+        let mut recovered = limits;
+        recovered.opencode_go_keys[1].error = None;
+        recovered.opencode_go_keys[1].rolling.used_percent = Some(20);
+        assert_eq!(client.poll_error(&recovered), None);
+        assert_eq!(client.poll_error(&RateLimits::default()), None);
+    }
+
+    #[test]
+    fn key_errors_are_short_and_never_carry_the_credential() {
+        let http = anyhow::Error::new(HttpStatusError(401));
+        assert_eq!(go_error_message(&http), "OpenCode Go returned HTTP 401");
+        let offline = anyhow!(
+            "request OpenCode Go usage: https://opencode.ai/zen/go/v1/usage: connection refused"
+        );
+        assert_eq!(go_error_message(&offline), "Could not reach OpenCode Go");
+        let parse = anyhow!("parse OpenCode Go usage response: invalid json");
+        assert_eq!(
+            go_error_message(&parse),
+            "OpenCode Go sent an unexpected response"
+        );
+        // The status comes from the typed error, not from words in the text.
+        let misleading = anyhow!("request failed near HTTP 200 docs");
+        assert_eq!(go_error_message(&misleading), "Could not reach OpenCode Go");
+    }
+
+    #[test]
+    fn a_rate_limited_key_reaches_the_worker_even_when_another_reports() {
+        let mut client =
+            OpenCodeClient::new(ProviderId::primary(ProviderKind::OpenCodeGo)).unwrap();
+        client.note_rate_limit(&anyhow::Error::new(HttpStatusError(429)));
+        assert!(LimitProvider::take_rate_limit_response(&mut client));
+        assert!(!LimitProvider::take_rate_limit_response(&mut client));
+
+        client.note_rate_limit(&anyhow::Error::new(HttpStatusError(401)));
+        assert!(!LimitProvider::take_rate_limit_response(&mut client));
+    }
+
+    #[test]
+    fn key_secret_names_keep_the_legacy_slot_and_scope_extra_keys() {
+        let primary = ProviderId::primary(ProviderKind::OpenCodeGo);
+        assert_eq!(
+            key_secret_name(primary, OpenCodeKeys::LEGACY_KEY_ID).unwrap(),
+            "opencode-go"
+        );
+        assert_eq!(key_secret_name(primary, "k1").unwrap(), "opencode-go.k1");
+        let secondary = ProviderId::new(ProviderKind::OpenCodeGo, "opencode-go-1a2b");
+        assert_eq!(
+            key_secret_name(secondary, OpenCodeKeys::LEGACY_KEY_ID).unwrap(),
+            "opencode-go.opencode-go-1a2b"
+        );
+        assert_eq!(
+            key_secret_name(secondary, "k1").unwrap(),
+            "opencode-go.opencode-go-1a2b.k1"
+        );
+    }
+
+    #[test]
+    fn instances_from_before_multi_key_tracking_query_the_legacy_slot() {
+        let mut instance = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        instance.opencode = None;
+        assert_eq!(tracked_key_ids(&instance), ["primary"]);
+        instance.opencode = Some(OpenCodeKeys {
+            key_ids: vec!["work".into(), "private".into()],
+            ..OpenCodeKeys::default()
+        });
+        assert_eq!(tracked_key_ids(&instance), ["work", "private"]);
     }
 
     #[test]

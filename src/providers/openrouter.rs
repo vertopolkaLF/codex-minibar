@@ -995,6 +995,7 @@ fn rate_limits_from_accounts(
         account_name: (accounts.len() == 1).then(|| accounts[0].name.clone()),
         spending,
         openrouter_accounts: accounts,
+        opencode_go_keys: Default::default(),
         ..RateLimits::default()
     }
 }

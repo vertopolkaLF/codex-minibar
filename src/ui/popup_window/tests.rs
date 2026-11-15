@@ -997,6 +997,146 @@ fn openrouter_provider_tab_lists_keys_instead_of_spending_cards() {
 }
 
 #[test]
+fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
+    use crate::quota::limits::{LimitWindow, OpenCodeGoKeySnapshot};
+
+    let key = |id: &str, used: u8| OpenCodeGoKeySnapshot {
+        id: id.into(),
+        rolling: LimitWindow {
+            used_percent: Some(used),
+            ..LimitWindow::default()
+        },
+        weekly: LimitWindow {
+            used_percent: Some(used),
+            ..LimitWindow::default()
+        },
+        monthly: Some(LimitWindow {
+            used_percent: Some(used),
+            ..LimitWindow::default()
+        }),
+        ..OpenCodeGoKeySnapshot::default()
+    };
+    fn cards_for<'a>(
+        limits: &'a RateLimits,
+        visibility: &PopupVisibility,
+        surface: PopupSurface,
+    ) -> Vec<Card<'a>> {
+        test_cards(
+            ProviderKind::OpenCodeGo,
+            true,
+            limits,
+            visibility,
+            surface,
+            true,
+            false,
+            false,
+        )
+    }
+    let lists = |limits: &RateLimits, visibility: &PopupVisibility, surface| {
+        cards_for(limits, visibility, surface)
+            .iter()
+            .filter(|card| matches!(card, Card::OpenCodeGoKeys { .. }))
+            .count()
+    };
+    let lanes = |limits: &RateLimits, visibility: &PopupVisibility, surface| {
+        cards_for(limits, visibility, surface)
+            .iter()
+            .filter(|card| matches!(card, Card::Limit { .. }))
+            .count()
+    };
+    let key_headings = |limits: &RateLimits, visibility: &PopupVisibility, surface| {
+        cards_for(limits, visibility, surface)
+            .iter()
+            .filter(|card| matches!(card, Card::OpenCodeGoKeyHeading { .. }))
+            .count()
+    };
+    let heading_errors = |limits: &RateLimits, visibility: &PopupVisibility, surface| {
+        cards_for(limits, visibility, surface)
+            .iter()
+            .filter_map(|card| match card {
+                Card::OpenCodeGoKeyHeading { key, .. } => Some(key.error.is_some()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let surfaces = [PopupSurface::HomeTab, PopupSurface::ProviderTab];
+
+    // Go Teams members have independent limits, so every surface lists them,
+    // and the rows replace the aggregate lanes everywhere.
+    let mut tracked = RateLimits::default();
+    tracked.primary.used_percent = Some(10);
+    tracked.secondary.used_percent = Some(20);
+    tracked
+        .additional_limits
+        .push(crate::quota::limits::AdditionalLimit {
+            id: crate::providers::registry::OPENCODE_GO_MONTHLY_LIMIT_ID.into(),
+            title: "Monthly".into(),
+            window: LimitWindow {
+                used_percent: Some(20),
+                ..LimitWindow::default()
+            },
+        });
+    tracked.opencode_go_keys.push(key("first", 10));
+    tracked.opencode_go_keys.push(key("second", 20));
+    for surface in surfaces {
+        assert_eq!(lists(&tracked, &all_visible(), surface), 1);
+        assert_eq!(lanes(&tracked, &all_visible(), surface), 0);
+    }
+
+    // The card has its own switches: hiding it keeps the lanes, but now one
+    // set per key, and each surface follows its own column.
+    let hidden = visibility_with("opencode-go.keys", false, false);
+    for surface in surfaces {
+        assert_eq!(lists(&tracked, &hidden, surface), 0);
+        assert_eq!(key_headings(&tracked, &hidden, surface), 2);
+        // Three lanes per key and no aggregate monthly left over.
+        assert_eq!(lanes(&tracked, &hidden, surface), 6);
+    }
+    // The quota switches choose the per-key columns too.
+    let mut session_only = hidden.clone();
+    session_only.set_brick("opencode-go.weekly", false, false);
+    for surface in surfaces {
+        assert_eq!(lanes(&tracked, &session_only, surface), 4);
+    }
+
+    // A failed key keeps its heading and reason, and contributes no lanes.
+    let mut mixed = tracked.clone();
+    mixed.opencode_go_keys[1].error = Some("OpenCode Go returned HTTP 401".into());
+    for surface in surfaces {
+        assert_eq!(key_headings(&mixed, &hidden, surface), 2);
+        assert_eq!(heading_errors(&mixed, &hidden, surface), vec![false, true]);
+        assert_eq!(lanes(&mixed, &hidden, surface), 3);
+    }
+    // A window the key does not report is not a lane either.
+    let mut sparse = tracked.clone();
+    sparse.opencode_go_keys[0].weekly = LimitWindow::default();
+    for surface in surfaces {
+        assert_eq!(lanes(&sparse, &hidden, surface), 5);
+    }
+    let home_only = visibility_with("opencode-go.keys", true, false);
+    assert_eq!(lists(&tracked, &home_only, PopupSurface::HomeTab), 1);
+    assert_eq!(lists(&tracked, &home_only, PopupSurface::ProviderTab), 0);
+
+    // One healthy key already has its ordinary cards.
+    let mut single = RateLimits::default();
+    single.opencode_go_keys.push(key("only", 10));
+    for surface in surfaces {
+        assert_eq!(lists(&single, &all_visible(), surface), 0);
+    }
+
+    // A failing key stays visible even when it is the only one.
+    let mut failing = RateLimits::default();
+    failing.opencode_go_keys.push(OpenCodeGoKeySnapshot {
+        id: "only".into(),
+        error: Some("OpenCode Go API returned HTTP 401".into()),
+        ..OpenCodeGoKeySnapshot::default()
+    });
+    for surface in surfaces {
+        assert_eq!(lists(&failing, &all_visible(), surface), 1);
+    }
+}
+
+#[test]
 fn duplicate_account_names_keep_separate_heading_identities() {
     let limits = RateLimits {
         openrouter_accounts: ["account-a", "account-b"]

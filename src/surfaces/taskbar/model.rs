@@ -124,8 +124,15 @@ pub(crate) struct WidgetView {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CardSection {
     pub(crate) provider: ProviderId,
+    /// Section heading: the instance, or `instance · key` for one key.
+    pub(crate) title: String,
     pub(crate) icon: Icon,
+    /// Provider plan, drawn beside the heading.
     pub(crate) plan: Option<String>,
+    /// Masked key of a key-scoped section, drawn on its own line.
+    pub(crate) key_masked: Option<String>,
+    /// Why a key-scoped section has no rows: the key's own failure.
+    pub(crate) error: Option<String>,
     pub(crate) rows: Vec<Row>,
     /// Today's tokens and their API value, or spend for pay-as-you-go
     /// providers; `None` without usage statistics.
@@ -195,11 +202,8 @@ fn resolve_row(
     now: DateTime<Utc>,
 ) -> Option<Row> {
     let provider = indicator.provider()?;
-    let metric = crate::quota::widget_data::resolve_metric(
-        provider,
-        limits.get(provider),
-        &indicator.metric_id,
-    );
+    let metric =
+        crate::quota::widget_data::resolve_indicator(provider, limits.get(provider), indicator);
     let registered = crate::providers::registry::metric(provider.kind(), &indicator.metric_id);
     let full_label = metric
         .as_ref()
@@ -296,69 +300,163 @@ fn card_sections(
     appearance: Appearance,
     now: DateTime<Utc>,
 ) -> Vec<CardSection> {
-    let mut providers = Vec::new();
-    for provider in widget.indicators.iter().filter_map(TrayIndicator::provider) {
-        if !providers.contains(&provider) {
-            providers.push(provider);
+    // One section per instance, split per key when a widget reads single keys.
+    let mut targets: Vec<(ProviderId, Option<String>)> = Vec::new();
+    for indicator in &widget.indicators {
+        let Some(provider) = indicator.provider() else {
+            continue;
+        };
+        let key_id = crate::quota::widget_data::effective_key(indicator, limits.get(provider))
+            .map(str::to_owned);
+        let target = (provider, key_id);
+        if !targets.contains(&target) {
+            targets.push(target);
         }
     }
-    providers
+    targets
         .into_iter()
-        .map(|provider| {
+        .map(|(provider, key_id)| {
             let configured = widget
                 .indicators
                 .iter()
-                .filter(|indicator| indicator.provider() == Some(provider))
+                .filter(|indicator| {
+                    indicator.provider() == Some(provider)
+                        && crate::quota::widget_data::effective_key(indicator, limits.get(provider))
+                            .map(str::to_owned)
+                            == key_id
+                })
                 .collect::<Vec<_>>();
-            let limit_value = configured
-                .first()
-                .map_or(LimitValue::Remaining, |indicator| indicator.limit_value);
-            // A metric without data of its own can resolve to another one
-            // (a reserve falling back to the session); list each quota once.
-            let mut seen = Vec::new();
-            let rows = crate::quota::widget_data::snapshot(provider, limits)
-                .metrics
-                .into_iter()
-                .filter(|metric| {
-                    let resolved = crate::quota::widget_data::resolve_metric(
-                        provider,
-                        limits.get(provider),
-                        &metric.id,
-                    )
-                    .map_or_else(|| metric.id.clone(), |resolved| resolved.resolved_id);
-                    let fresh = !seen.contains(&resolved) && !seen.contains(&metric.label);
-                    seen.push(resolved);
-                    seen.push(metric.label.clone());
-                    fresh
-                })
-                .filter_map(|metric| {
-                    let indicator = configured
-                        .iter()
-                        .find(|indicator| indicator.metric_id == metric.id)
-                        .map(|indicator| (*indicator).clone())
-                        .unwrap_or_else(|| TrayIndicator {
-                            limit_value,
-                            ..TrayIndicator::new(provider, metric.id)
-                        });
-                    resolve_row(&indicator, limits, appearance, now)
-                })
-                .collect();
+            let rows = match key_id.as_deref() {
+                Some(key_id) => key_rows(provider, key_id, &configured, limits, appearance, now),
+                None => aggregate_rows(provider, &configured, limits, appearance, now),
+            };
             let provider_limits = limits.get(provider);
+            let key = key_id.as_deref().and_then(|key_id| {
+                provider_limits
+                    .opencode_go_keys
+                    .iter()
+                    .find(|key| key.id == key_id)
+            });
+            let (plan, key_masked) = match key_id.as_deref() {
+                Some(_) => (None, key.and_then(|key| key.masked_key.clone())),
+                None => (
+                    provider_limits
+                        .plan_type
+                        .as_deref()
+                        .filter(|plan| !plan.trim().is_empty())
+                        .map(crate::format::capitalize_plan_name),
+                    None,
+                ),
+            };
+            // A failed key has no windows to draw; its reason takes their place.
+            let error = key
+                .and_then(|key| key.error.clone())
+                .filter(|_| rows.is_empty());
             CardSection {
                 provider,
+                title: match key_id.as_deref() {
+                    Some(key_id) => format!(
+                        "{} \u{00b7} {}",
+                        provider.qualified_name(),
+                        provider
+                            .key_name(key_id)
+                            .unwrap_or_else(|| key_id.to_owned())
+                    ),
+                    None => provider.qualified_name(),
+                },
                 icon: icon_for(provider, appearance),
-                plan: provider_limits
-                    .plan_type
-                    .as_deref()
-                    .filter(|plan| !plan.trim().is_empty())
-                    .map(crate::format::capitalize_plan_name),
+                plan,
+                key_masked,
+                error,
                 rows,
-                today: today_usage(provider, &provider_limits.usage),
+                today: key_id
+                    .is_none()
+                    .then(|| today_usage(provider, &provider_limits.usage))
+                    .flatten(),
             }
         })
         .collect()
 }
 
+/// The quotas of one tracked key, in catalog order.
+fn key_rows(
+    provider: ProviderId,
+    key_id: &str,
+    configured: &[&TrayIndicator],
+    limits: &ProviderLimits,
+    appearance: Appearance,
+    now: DateTime<Utc>,
+) -> Vec<Row> {
+    let limit_value = configured
+        .first()
+        .map_or(LimitValue::Remaining, |indicator| indicator.limit_value);
+    crate::providers::opencode::key_metric_ids()
+        .into_iter()
+        .filter_map(|metric_id| {
+            let indicator = configured
+                .iter()
+                .find(|indicator| indicator.metric_id == metric_id)
+                .map(|indicator| (*indicator).clone())
+                .unwrap_or_else(|| TrayIndicator {
+                    limit_value,
+                    ..TrayIndicator::for_key(provider, key_id, metric_id)
+                });
+            // A window the key does not report has no lane to draw.
+            let metric = crate::quota::widget_data::resolve_indicator(
+                provider,
+                limits.get(provider),
+                &indicator,
+            )?;
+            if metric.window.is_empty() {
+                return None;
+            }
+            resolve_row(&indicator, limits, appearance, now)
+        })
+        .collect()
+}
+
+/// Every quota an instance reports, deduplicated by the metric it resolves to.
+fn aggregate_rows(
+    provider: ProviderId,
+    configured: &[&TrayIndicator],
+    limits: &ProviderLimits,
+    appearance: Appearance,
+    now: DateTime<Utc>,
+) -> Vec<Row> {
+    let limit_value = configured
+        .first()
+        .map_or(LimitValue::Remaining, |indicator| indicator.limit_value);
+    // A metric without data of its own can resolve to another one (a reserve
+    // falling back to the session); list each quota once.
+    let mut seen = Vec::new();
+    crate::quota::widget_data::snapshot(provider, limits)
+        .metrics
+        .into_iter()
+        .filter(|metric| {
+            let resolved = crate::quota::widget_data::resolve_metric(
+                provider,
+                limits.get(provider),
+                &metric.id,
+            )
+            .map_or_else(|| metric.id.clone(), |resolved| resolved.resolved_id);
+            let fresh = !seen.contains(&resolved) && !seen.contains(&metric.label);
+            seen.push(resolved);
+            seen.push(metric.label.clone());
+            fresh
+        })
+        .filter_map(|metric| {
+            let indicator = configured
+                .iter()
+                .find(|indicator| indicator.metric_id == metric.id)
+                .map(|indicator| (*indicator).clone())
+                .unwrap_or_else(|| TrayIndicator {
+                    limit_value,
+                    ..TrayIndicator::new(provider, metric.id)
+                });
+            resolve_row(&indicator, limits, appearance, now)
+        })
+        .collect()
+}
 /// `1.2M tokens · ≈ $3.40`, or `$1.23 · 45 requests` for providers billed
 /// per request.
 fn today_usage(provider: ProviderId, usage: &crate::usage::UsageStatistics) -> Option<String> {
@@ -631,5 +729,162 @@ mod tests {
     fn retired_compact_style_reads_as_glance() {
         let widget: TaskbarWidget = toml::from_str("style = \"compact\"").unwrap();
         assert_eq!(widget.style, TaskbarWidgetStyle::Glance);
+    }
+
+    #[test]
+    fn a_removed_key_keeps_the_instance_heading_and_metadata() {
+        use crate::providers::registry::ProviderKind;
+
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let mut limits = ProviderLimits::default();
+        {
+            let snapshot = limits.get_mut(provider);
+            snapshot.primary.used_percent = Some(10);
+            snapshot.secondary.used_percent = Some(20);
+            snapshot.plan_type = Some("Go".into());
+        }
+        let widget = TaskbarWidget {
+            style: TaskbarWidgetStyle::Glance,
+            show_icon: false,
+            indicators: vec![TrayIndicator::for_key(
+                provider,
+                "gone",
+                "opencode-go.weekly",
+            )],
+            ..TaskbarWidget::for_provider(provider)
+        };
+        let view = resolve(
+            &widget,
+            &limits,
+            Appearance {
+                light: false,
+                colored_icons: false,
+                accent: [0, 0, 0],
+            },
+        );
+        assert_eq!(view.card.len(), 1);
+        assert_eq!(view.card[0].title, provider.qualified_name());
+        assert_eq!(view.card[0].plan.as_deref(), Some("Go"));
+        assert_eq!(view.card[0].key_masked, None);
+        assert_eq!(view.rows[0].value, "80%");
+    }
+
+    #[test]
+    fn a_key_section_keeps_its_masked_key_off_the_heading() {
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let mut limits = ProviderLimits::default();
+        {
+            let snapshot = limits.get_mut(provider);
+            snapshot.plan_type = Some("Go".into());
+            snapshot.opencode_go_keys = vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: "key-a".into(),
+                masked_key: Some("\u{2026}f9eV".into()),
+                rolling: LimitWindow {
+                    used_percent: Some(10),
+                    ..LimitWindow::default()
+                },
+                weekly: LimitWindow {
+                    used_percent: Some(20),
+                    ..LimitWindow::default()
+                },
+                ..Default::default()
+            }];
+        }
+        let widget = TaskbarWidget {
+            style: TaskbarWidgetStyle::Glance,
+            show_icon: false,
+            indicators: vec![TrayIndicator::for_key(
+                provider,
+                "key-a",
+                "opencode-go.weekly",
+            )],
+            ..TaskbarWidget::for_provider(provider)
+        };
+        let view = resolve(
+            &widget,
+            &limits,
+            Appearance {
+                light: false,
+                colored_icons: false,
+                accent: [0, 0, 0],
+            },
+        );
+        assert_eq!(view.card.len(), 1);
+        assert_eq!(view.card[0].plan, None);
+        assert_eq!(view.card[0].key_masked.as_deref(), Some("\u{2026}f9eV"));
+        assert!(view.card[0].title.contains("OpenCode Go"));
+        assert_eq!(view.card[0].rows.len(), 2);
+    }
+
+    #[test]
+    fn a_key_section_skips_a_window_the_key_does_not_report() {
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let mut limits = ProviderLimits::default();
+        {
+            let snapshot = limits.get_mut(provider);
+            snapshot.opencode_go_keys = vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: "key-a".into(),
+                // Only the weekly window came back; the rolling one is empty.
+                weekly: LimitWindow {
+                    used_percent: Some(20),
+                    ..LimitWindow::default()
+                },
+                ..Default::default()
+            }];
+        }
+        let widget = TaskbarWidget {
+            style: TaskbarWidgetStyle::Glance,
+            show_icon: false,
+            indicators: vec![TrayIndicator::for_key(
+                provider,
+                "key-a",
+                "opencode-go.rolling",
+            )],
+            ..TaskbarWidget::for_provider(provider)
+        };
+        let view = resolve(&widget, &limits, appearance(false));
+        let [section] = view.card.as_slice() else {
+            panic!("one key section");
+        };
+        assert_eq!(section.rows.len(), 1, "only the populated window");
+        assert_eq!(section.rows[0].label, crate::i18n::tr("short-7d"));
+        assert_eq!(section.rows[0].value, "80%");
+        assert_eq!(section.error, None);
+    }
+
+    #[test]
+    fn a_failed_key_keeps_its_reason_instead_of_empty_rows() {
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let mut limits = ProviderLimits::default();
+        {
+            let snapshot = limits.get_mut(provider);
+            snapshot.opencode_go_keys = vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: "key-a".into(),
+                masked_key: Some("…f9eV".into()),
+                error: Some("OpenCode Go returned HTTP 401".into()),
+                ..Default::default()
+            }];
+        }
+        let widget = TaskbarWidget {
+            style: TaskbarWidgetStyle::Glance,
+            show_icon: false,
+            indicators: vec![TrayIndicator::for_key(
+                provider,
+                "key-a",
+                "opencode-go.rolling",
+            )],
+            ..TaskbarWidget::for_provider(provider)
+        };
+        let view = resolve(&widget, &limits, appearance(false));
+        let [section] = view.card.as_slice() else {
+            panic!("one key section");
+        };
+        assert!(section.rows.is_empty(), "empty windows are not lanes");
+        assert_eq!(
+            section.error.as_deref(),
+            Some("OpenCode Go returned HTTP 401")
+        );
+        assert_eq!(section.key_masked.as_deref(), Some("…f9eV"));
+        assert!(section.title.contains("OpenCode Go"));
     }
 }

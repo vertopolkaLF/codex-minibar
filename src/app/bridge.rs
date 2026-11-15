@@ -354,11 +354,9 @@ impl Bridge {
         };
         crate::surfaces::taskbar::register_bridge_thread();
         // Start from the hydrated store while the first network refresh is
-        // in flight. Account names live in settings; overlay them before the
+        // in flight. Local names live in settings; overlay them before the
         // first paint.
-        bridge
-            .state
-            .apply_openrouter_account_names(&bridge.ui.settings);
+        bridge.state.apply_local_names(&bridge.ui.settings);
         bridge.state.mark(Changes::LIMITS);
         bridge.flush();
         bridge
@@ -535,7 +533,7 @@ impl Bridge {
             // rejects output already queued by the worker being replaced.
             state.replace_limits(*provider, RateLimits::default());
         }
-        state.apply_openrouter_account_names(&settings);
+        state.apply_local_names(&settings);
         state.sync_reset_feed(&settings);
         state.sync_provider_status(&settings);
         if !settings.notifications.provider_status_enabled {
@@ -1032,13 +1030,8 @@ impl Bridge {
         self.state.observe_reset_limits(provider, &limits);
         let mut limits = limits;
         // The running reader still has the names it started with.
-        if let Some(instance) = self
-            .ui
-            .settings
-            .instance(provider)
-            .filter(|instance| instance.driver == ProviderKind::OpenRouter)
-        {
-            crate::providers::openrouter::apply_account_names(&mut limits, instance);
+        if let Some(instance) = self.ui.settings.instance(provider) {
+            instance.apply_local_names(&mut limits);
         }
         self.state.replace_limits(provider, limits);
         // The tray repaint in this pass's flush reports its own failure.

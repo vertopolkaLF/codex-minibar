@@ -78,11 +78,8 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
         let Some(provider) = indicator.provider() else {
             continue;
         };
-        let metric = crate::quota::widget_data::resolve_metric(
-            provider,
-            limits.get(provider),
-            &indicator.metric_id,
-        );
+        let metric =
+            crate::quota::widget_data::resolve_indicator(provider, limits.get(provider), indicator);
         let value = crate::quota::widget_data::percent_text(metric.as_ref().and_then(|metric| {
             crate::quota::widget_data::displayed_percent(&metric.window, indicator.limit_value)
         }));
@@ -95,15 +92,26 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
             )
         });
         let item = format!("{label} {value}");
-        let source_id = provider.id();
-        let title = provider.qualified_name();
+        let key = crate::quota::widget_data::effective_key(indicator, limits.get(provider));
+        let source_id = match key {
+            Some(key) => format!("{}:{key}", provider.id()),
+            None => provider.id().to_owned(),
+        };
+        let title = match key {
+            Some(key) => format!(
+                "{} \u{00b7} {}",
+                provider.qualified_name(),
+                provider.key_name(key).unwrap_or_else(|| key.to_owned())
+            ),
+            None => provider.qualified_name(),
+        };
         if let Some((_, _, items)) = rows
             .iter_mut()
             .find(|(row_source, _, _)| *row_source == source_id)
         {
             items.push(item);
         } else {
-            rows.push((source_id.to_owned(), title, vec![item]));
+            rows.push((source_id, title, vec![item]));
         }
     }
     if rows.is_empty() {
@@ -194,10 +202,10 @@ fn resolve_indicators(
         .take(3)
         .filter_map(|indicator| {
             let provider = indicator.provider()?;
-            let metric = crate::quota::widget_data::resolve_metric(
+            let metric = crate::quota::widget_data::resolve_indicator(
                 provider,
                 limits.get(provider),
-                &indicator.metric_id,
+                indicator,
             );
             let window = metric.map(|metric| metric.window).unwrap_or_default();
             let remaining = window.remaining_percent();

@@ -32,7 +32,7 @@ use crate::ui::gui::{
 };
 use crate::{
     providers::openrouter::admin::{self, KeyPatch, LimitReset, ManagedKey, NewKey},
-    quota::limits::SpendingSummary,
+    quota::limits::{LimitWindow, SpendingSummary},
     settings::OpenRouterAccount,
     ui::popup_window::*,
 };
@@ -2730,6 +2730,189 @@ fn editor_patch(key: &ManagedKey, limit: Option<u64>, reset: LimitReset, byok: b
     }
 }
 
+/// The label for one tracked OpenCode Go key. The live settings name wins over
+/// the worker's sample, including when the settings name was cleared. Only
+/// without settings does the sampled name precede a numbered placeholder.
+fn go_key_name(
+    configured: Option<&crate::settings::OpenCodeKeys>,
+    key: &crate::quota::limits::OpenCodeGoKeySnapshot,
+    index: usize,
+) -> String {
+    configured
+        .map_or(key.local_name.as_deref(), |keys| keys.name_of(&key.id))
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::i18n::format("key-39df89", &[("v0", (index + 1).to_string())]))
+}
+
+impl PopupRoot {
+    /// The OpenCode Go tab's key list: each tracked key with its own 5-hour,
+    /// weekly and monthly windows, or the reason it could not be read.
+    pub(super) fn render_opencode_go_keys(
+        &self,
+        provider: ProviderId,
+        surface: PopupSurface,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        // Settings hold a rename before the worker samples it, so the open
+        // popup can still be showing the previous snapshot's names.
+        let configured = self
+            .ui
+            .settings
+            .instance(provider)
+            .and_then(|instance| instance.opencode.as_ref());
+        let keys = self.limits.get(provider).opencode_go_keys.clone();
+        let mut card = components::card(&palette)
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .px(px(12.0))
+            .py(px(10.0));
+        for (index, key) in keys.iter().enumerate() {
+            let name = go_key_name(configured, key, index);
+            let mut block = div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(components::split_row(
+                    nowrap(components::body_strong(name, palette.text_primary)),
+                    nowrap(components::caption(
+                        key.masked_key.clone().unwrap_or_default(),
+                        palette.text_tertiary,
+                    )),
+                ));
+            if let Some(error) = key.error.as_deref() {
+                block = block.child(nowrap(components::caption(
+                    error.to_owned(),
+                    palette.caution,
+                )));
+            } else {
+                let monthly = key.monthly.clone().unwrap_or_default();
+                // The quota toggles in Settings choose which columns this
+                // card shows, so hiding all of them leaves the key names.
+                let show_tabs = self.show_provider_tabs();
+                let mut columns = div().flex().flex_row().gap(px(12.0));
+                let mut shown = 0;
+                for metric in crate::providers::registry::descriptor(provider.kind()).metrics {
+                    if !self.ui.settings.popup_visibility.is_visible_for_instance(
+                        provider.id(),
+                        metric.id,
+                        surface,
+                        show_tabs,
+                    ) {
+                        continue;
+                    }
+                    let (label, window) = match metric.source {
+                        crate::providers::registry::MetricSource::Primary => {
+                            (crate::i18n::tr("short-5h"), &key.rolling)
+                        }
+                        crate::providers::registry::MetricSource::Secondary => {
+                            (crate::i18n::tr("short-7d"), &key.weekly)
+                        }
+                        crate::providers::registry::MetricSource::Additional(_) => {
+                            (crate::i18n::tr("monthly"), &monthly)
+                        }
+                    };
+                    columns = columns.child(self.go_key_window(label, window, &palette));
+                    shown += 1;
+                }
+                if shown > 0 {
+                    block = block.child(columns);
+                }
+            }
+            card = card.child(block);
+            if index + 1 < keys.len() {
+                card = card.child(components::rule(&palette));
+            }
+        }
+        card.into_any_element()
+    }
+
+    /// The key's name above its own lanes, for when the key list is off.
+    pub(super) fn render_opencode_go_key_heading(
+        &self,
+        provider: ProviderId,
+        key: &crate::quota::limits::OpenCodeGoKeySnapshot,
+        index: usize,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let configured = self
+            .ui
+            .settings
+            .instance(provider)
+            .and_then(|instance| instance.opencode.as_ref());
+        let name = go_key_name(configured, key, index);
+        let mut heading = div().flex().flex_col().gap(px(2.0)).px(px(2.0)).child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .child(nowrap(components::body_strong(name, palette.text_primary)))
+                .child(nowrap(components::caption(
+                    key.masked_key.clone().unwrap_or_default(),
+                    palette.text_tertiary,
+                ))),
+        );
+        if let Some(error) = key.error.as_deref() {
+            heading = heading.child(nowrap(components::caption(
+                error.to_owned(),
+                palette.caution,
+            )));
+        }
+        heading.into_any_element()
+    }
+
+    /// One labelled quota bar for a key's window, honouring the used/remaining
+    /// preference shared by every other bar in the popup.
+    fn go_key_window(
+        &self,
+        label: &'static str,
+        window: &LimitWindow,
+        palette: &super::theme::Palette,
+    ) -> AnyElement {
+        let used = window.used_percent.map(f32::from);
+        let shown = match (used, self.ui.settings.show_used_percentage) {
+            (Some(used), true) => used,
+            (Some(used), false) => 100.0 - used,
+            (None, _) => 0.0,
+        };
+        let fill = match used.unwrap_or_default() {
+            used if used >= 90.0 => palette.critical,
+            used if used >= 75.0 => palette.caution,
+            _ => palette.accent,
+        };
+        let value = if window.used_percent.is_some() {
+            format!("{shown:.0}%")
+        } else {
+            "\u{2013}".to_owned()
+        };
+        let mut column = div()
+            .flex()
+            .flex_col()
+            .gap(px(3.0))
+            .flex_1()
+            .min_w_0()
+            .child(nowrap(components::caption(
+                label.to_owned(),
+                palette.text_tertiary,
+            )))
+            .child(components::progress_track(shown, None, 0, fill, palette))
+            .child(nowrap(components::caption(value, palette.text_secondary)));
+        // Same reset presentation as the ordinary quota cards.
+        if let Some(at) = window.resets_at {
+            column = column.child(components::caption_icon_status(
+                components::RESET_ICON,
+                format_reset_in(Some(at)),
+                palette,
+            ));
+        }
+        column.into_any_element()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2817,6 +3000,39 @@ mod tests {
         assert_eq!(
             Expiry::Quarter.at(now),
             Some(now + chrono::Duration::days(90))
+        );
+    }
+
+    #[test]
+    fn go_key_labels_prefer_live_settings() {
+        let configured = crate::settings::OpenCodeKeys {
+            key_ids: vec!["a".into()],
+            key_names: std::collections::BTreeMap::from([("a".to_owned(), " Team A ".to_owned())]),
+        };
+        let sampled =
+            |id: &str, local_name: Option<&str>| crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: id.to_owned(),
+                local_name: local_name.map(str::to_owned),
+                ..Default::default()
+            };
+        // A rename in settings wins over the name the worker sampled.
+        assert_eq!(
+            go_key_name(Some(&configured), &sampled("a", Some("Old")), 0),
+            "Team A"
+        );
+        // Without a settings name the sampled one is trimmed and shown.
+        assert_eq!(go_key_name(None, &sampled("a", Some(" Old ")), 0), "Old");
+        // Existing settings without a name mean it was cleared, even when
+        // the worker still carries the name it read at startup.
+        let cleared = crate::settings::OpenCodeKeys::legacy();
+        assert_eq!(
+            go_key_name(Some(&cleared), &sampled("primary", Some("Old")), 0),
+            crate::i18n::format("key-39df89", &[("v0", "1".to_owned())])
+        );
+        // A key with no name at all falls back to its position.
+        assert_eq!(
+            go_key_name(Some(&configured), &sampled("b", None), 1),
+            crate::i18n::format("key-39df89", &[("v0", "2".to_owned())])
         );
     }
 }

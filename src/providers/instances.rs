@@ -18,7 +18,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::providers::registry::ProviderKind;
-use crate::settings::{LimitRefreshInterval, OpenRouterAccount};
+use crate::settings::{LimitRefreshInterval, OpenCodeKeys, OpenRouterAccount};
 
 /// Identity of one provider instance, `Copy` so it works as a cheap key.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -122,6 +122,18 @@ impl ProviderId {
         }
     }
 
+    /// The display name of one tracked key, as last published. Keys are
+    /// settings identities; the secret never reaches labels.
+    pub fn key_name(self, key_id: &str) -> Option<String> {
+        labels().get(self.id).and_then(|label| {
+            label
+                .keys
+                .iter()
+                .find(|(id, _)| id == key_id)
+                .map(|(_, name)| name.clone())
+        })
+    }
+
     /// Resolves a persisted instance id against the published settings.
     /// Before settings are published, a primary id resolves to its driver and
     /// a generated `<driver>-…` id to that driver.
@@ -154,6 +166,8 @@ struct InstanceLabel {
     kind: ProviderKind,
     name: String,
     badge: Option<Badge>,
+    /// Tracked OpenCode Go keys, in settings order, with their display names.
+    keys: Vec<(String, String)>,
 }
 
 static LABELS: LazyLock<RwLock<HashMap<&'static str, InstanceLabel>>> =
@@ -211,6 +225,26 @@ pub fn publish(instances: &[ProviderInstance]) {
                     kind: instance.driver,
                     name: instance.display_name(),
                     badge: shares_driver(instance, instances).then(|| instance.badge()),
+                    keys: instance
+                        .opencode
+                        .as_ref()
+                        .map(|keys| {
+                            keys.key_ids
+                                .iter()
+                                .enumerate()
+                                .map(|(index, id)| {
+                                    let name =
+                                        keys.name_of(id).map(str::to_owned).unwrap_or_else(|| {
+                                            crate::i18n::format(
+                                                "key-39df89",
+                                                &[("v0", (index + 1).to_string())],
+                                            )
+                                        });
+                                    (id.clone(), name)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 },
             )
         })
@@ -361,6 +395,9 @@ pub struct ProviderInstance {
     /// OpenRouter key identities; the key material lives in protected storage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openrouter: Option<OpenRouterAccount>,
+    /// OpenCode Go key identities; the key material lives in protected storage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opencode: Option<OpenCodeKeys>,
     /// Advanced when this instance's credential changes so queued results from
     /// the replaced worker are rejected.
     pub credentials_revision: u64,
@@ -408,6 +445,7 @@ impl ProviderInstance {
                 name: driver.display_name().into(),
                 ..OpenRouterAccount::legacy()
             }),
+            opencode: (driver == ProviderKind::OpenCodeGo).then(OpenCodeKeys::legacy),
             credentials_revision: 0,
         }
     }
@@ -471,6 +509,26 @@ impl ProviderInstance {
         self.source == InstanceSource::Manual
     }
 
+    /// The OpenCode Go keys this instance queries, in settings order. Empty
+    /// until settings normalized an instance from before multi-key support.
+    pub fn opencode_keys(&self) -> &[String] {
+        self.opencode
+            .as_ref()
+            .map_or(&[][..], |keys| keys.key_ids.as_slice())
+    }
+
+    /// Current settings override names retained by a running reader, including
+    /// names the user cleared since that reader started.
+    pub(crate) fn apply_local_names(&self, limits: &mut crate::quota::limits::RateLimits) -> bool {
+        match self.driver {
+            ProviderKind::OpenRouter => {
+                crate::providers::openrouter::apply_account_names(limits, self)
+            }
+            ProviderKind::OpenCodeGo => crate::providers::opencode::apply_key_names(limits, self),
+            _ => false,
+        }
+    }
+
     /// Whether the credential Usage Stats are read with is configured.
     pub fn has_usage_stats_credential(&self) -> bool {
         crate::providers::registry::descriptor(self.driver).usage_stats
@@ -508,6 +566,7 @@ impl ProviderInstance {
             self.openrouter
                 .as_ref()
                 .map(|account| account.api_key_ids.clone()),
+            self.opencode.as_ref().map(|keys| keys.key_ids.clone()),
             self.credentials_revision,
         )
     }
@@ -541,6 +600,12 @@ impl ProviderInstance {
                 changed = true;
             }
         } else if self.openrouter.take().is_some() {
+            changed = true;
+        }
+        if self.driver == ProviderKind::OpenCodeGo {
+            let keys = self.opencode.get_or_insert_with(OpenCodeKeys::legacy);
+            changed |= keys.normalize();
+        } else if self.opencode.take().is_some() {
             changed = true;
         }
         if self.driver != ProviderKind::Claude && self.source == InstanceSource::Manual {
@@ -838,6 +903,61 @@ mod tests {
         assert_eq!(badge_text("", "x"), "X");
         assert_eq!(badge_text(" w 1 ", "Work"), "W1");
         assert_eq!(badge_text("abcd", "Work"), "ABC");
+    }
+
+    #[test]
+    fn opencode_go_instances_track_one_legacy_key_and_zen_does_not() {
+        let go = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        assert_eq!(go.opencode_keys(), [OpenCodeKeys::LEGACY_KEY_ID]);
+        let zen = ProviderInstance::primary(ProviderKind::OpenCodeZen);
+        assert!(zen.opencode.is_none());
+        assert_eq!(zen.opencode_keys().len(), 0);
+    }
+
+    #[test]
+    fn live_names_override_every_go_poll_after_rename_and_clear() {
+        let mut instance = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        let worker_sample = crate::quota::limits::RateLimits {
+            opencode_go_keys: vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: OpenCodeKeys::LEGACY_KEY_ID.into(),
+                local_name: Some("Worker's old name".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let runtime_key = instance.runtime_key();
+        for name in [Some("Renamed"), None] {
+            let keys = instance.opencode.as_mut().unwrap();
+            keys.key_names.clear();
+            if let Some(name) = name {
+                keys.key_names
+                    .insert(OpenCodeKeys::LEGACY_KEY_ID.into(), name.into());
+            }
+            // Presentation changes leave the old reader running.
+            assert!(runtime_key == instance.runtime_key());
+            for _ in 0..2 {
+                let mut incoming = worker_sample.clone();
+                assert!(instance.apply_local_names(&mut incoming));
+                assert_eq!(incoming.opencode_go_keys[0].local_name.as_deref(), name);
+            }
+        }
+    }
+
+    #[test]
+    fn normalizing_restores_the_legacy_slot_and_drops_unknown_names() {
+        let mut instance = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        instance.opencode = Some(OpenCodeKeys {
+            key_ids: vec!["work".into(), "work".into(), " ".into()],
+            key_names: std::collections::BTreeMap::from([
+                ("work".into(), " Work ".into()),
+                ("ghost".into(), "Ghost".into()),
+            ]),
+        });
+        assert!(instance.normalize());
+        let keys = instance.opencode.as_ref().unwrap();
+        assert_eq!(keys.key_ids, ["work"]);
+        assert_eq!(keys.name_of("work"), Some("Work"));
+        assert_eq!(keys.name_of("ghost"), None);
     }
 
     #[test]

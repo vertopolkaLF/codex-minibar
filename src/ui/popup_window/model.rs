@@ -138,6 +138,18 @@ pub(crate) enum Card<'a> {
         provider: ProviderId,
         account: &'a str,
     },
+    /// The provider tab's OpenCode Go key list: one row per tracked key with
+    /// that key's own quota windows.
+    OpenCodeGoKeys {
+        provider: ProviderId,
+    },
+    /// Heading above one tracked key's ordinary lanes, used when the key
+    /// list is turned off.
+    OpenCodeGoKeyHeading {
+        provider: ProviderId,
+        key: &'a crate::quota::limits::OpenCodeGoKeySnapshot,
+        index: usize,
+    },
     AccountHeading {
         id: &'a str,
         name: &'a str,
@@ -277,6 +289,29 @@ pub(crate) fn provider_cards<'a>(
             options.show_provider_tabs,
         )
     };
+    // Go Teams members have independent limits, so Home and the provider tab
+    // both list every tracked key's own windows. A single healthy key already
+    // has its ordinary cards, and an error belongs to the key that produced it.
+    // The list is its own card: it can be turned off per surface, and stays
+    // addressable when every quota lane is hidden.
+    let keys_visible = kind == ProviderKind::OpenCodeGo
+        && visible(&crate::providers::registry::keys_brick_id(kind));
+    let multi_key = limits.opencode_go_keys.len() > 1;
+    let key_list = keys_visible
+        && (multi_key
+            || limits
+                .opencode_go_keys
+                .iter()
+                .any(|key| key.error.is_some()));
+    if key_list {
+        cards.push(Card::OpenCodeGoKeys { provider });
+    }
+    // With several keys the rows replace the aggregate lanes on every
+    // surface: the aggregate is the most consumed key, which the rows show.
+    let key_rows_only = key_list && multi_key;
+    // Turning the list off keeps the lanes, but still per key: one aggregate
+    // set would hide whose quota is which.
+    let key_lanes = kind == ProviderKind::OpenCodeGo && multi_key && !keys_visible;
 
     if kind == ProviderKind::OpenRouter {
         let spending_visible = visible(&spending_brick_id(kind));
@@ -362,7 +397,10 @@ pub(crate) fn provider_cards<'a>(
         })
         .flatten();
     let mut fable_merged = false;
-    for section in popup_sections(kind, limits, false) {
+    for section in popup_sections(kind, limits, false)
+        .into_iter()
+        .filter(|_| !key_rows_only && !key_lanes)
+    {
         if !matches!(
             section,
             PopupSection::Monthly | PopupSection::FiveHour | PopupSection::Weekly
@@ -411,7 +449,11 @@ pub(crate) fn provider_cards<'a>(
     }
     // Claude can return extra windows such as Fable or Opus. They belong with
     // the ordinary limit cards, before banked resets, statistics, or credits.
-    for limit in &limits.additional_limits {
+    for limit in limits
+        .additional_limits
+        .iter()
+        .filter(|_| !key_rows_only && !key_lanes)
+    {
         if !visible(&additional_limit_brick_id(kind, &limit.id))
             || (fable_merged && fable.is_some_and(|fable| std::ptr::eq(fable, limit)))
         {
@@ -436,6 +478,50 @@ pub(crate) fn provider_cards<'a>(
             disabled: false,
             overlay: None,
         });
+    }
+    // With the key list off, every key keeps its ordinary lanes under its own
+    // name instead of one aggregate set for the whole instance.
+    if key_lanes {
+        for (index, key) in limits.opencode_go_keys.iter().enumerate() {
+            cards.push(Card::OpenCodeGoKeyHeading {
+                provider,
+                key,
+                index,
+            });
+            // A failed key keeps its name and reason; its empty windows are
+            // not samples and must not render as quota lanes.
+            if key.error.is_some() {
+                continue;
+            }
+            for metric in crate::providers::registry::descriptor(kind).metrics {
+                if !visible(metric.id) {
+                    continue;
+                }
+                let window = match metric.source {
+                    crate::providers::registry::MetricSource::Primary => Some(&key.rolling),
+                    crate::providers::registry::MetricSource::Secondary => Some(&key.weekly),
+                    crate::providers::registry::MetricSource::Additional(id)
+                        if id == crate::providers::registry::OPENCODE_GO_MONTHLY_LIMIT_ID =>
+                    {
+                        key.monthly.as_ref()
+                    }
+                    _ => None,
+                };
+                // A window the key does not report has no lane to draw, the
+                // same rule the taskbar hover card follows.
+                let Some(window) = window.filter(|window| !window.is_empty()) else {
+                    continue;
+                };
+                cards.push(Card::Limit {
+                    key: card_key(provider, &format!("key-{}-{}", key.id, metric.id)),
+                    title: metric.localized_label().to_uppercase(),
+                    window,
+                    usage_amount: None,
+                    disabled: false,
+                    overlay: None,
+                });
+            }
+        }
     }
     // A Claude instance backed by an Admin API key reports organization
     // spend instead of subscription windows.
