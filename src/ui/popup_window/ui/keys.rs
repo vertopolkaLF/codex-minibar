@@ -2750,7 +2750,11 @@ fn go_key_name(
 impl PopupRoot {
     /// The OpenCode Go tab's key list: each tracked key with its own 5-hour,
     /// weekly and monthly windows, or the reason it could not be read.
-    pub(super) fn render_opencode_go_keys(&self, provider: ProviderId) -> AnyElement {
+    pub(super) fn render_opencode_go_keys(
+        &self,
+        provider: ProviderId,
+        surface: PopupSurface,
+    ) -> AnyElement {
         let palette = self.palette.clone();
         // Settings hold a rename before the worker samples it, so the open
         // popup can still be showing the previous snapshot's names.
@@ -2786,23 +2790,37 @@ impl PopupRoot {
                 )));
             } else {
                 let monthly = key.monthly.clone().unwrap_or_default();
-                block = block.child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap(px(12.0))
-                        .child(self.go_key_window(
-                            crate::i18n::tr("short-5h"),
-                            &key.rolling,
-                            &palette,
-                        ))
-                        .child(self.go_key_window(
-                            crate::i18n::tr("short-7d"),
-                            &key.weekly,
-                            &palette,
-                        ))
-                        .child(self.go_key_window(crate::i18n::tr("monthly"), &monthly, &palette)),
-                );
+                // The quota toggles in Settings choose which columns this
+                // card shows, so hiding all of them leaves the key names.
+                let show_tabs = self.show_provider_tabs();
+                let mut columns = div().flex().flex_row().gap(px(12.0));
+                let mut shown = 0;
+                for metric in crate::providers::registry::descriptor(provider.kind()).metrics {
+                    if !self.ui.settings.popup_visibility.is_visible_for_instance(
+                        provider.id(),
+                        metric.id,
+                        surface,
+                        show_tabs,
+                    ) {
+                        continue;
+                    }
+                    let (label, window) = match metric.source {
+                        crate::providers::registry::MetricSource::Primary => {
+                            (crate::i18n::tr("short-5h"), &key.rolling)
+                        }
+                        crate::providers::registry::MetricSource::Secondary => {
+                            (crate::i18n::tr("short-7d"), &key.weekly)
+                        }
+                        crate::providers::registry::MetricSource::Additional(_) => {
+                            (crate::i18n::tr("monthly"), &monthly)
+                        }
+                    };
+                    columns = columns.child(self.go_key_window(label, window, &palette));
+                    shown += 1;
+                }
+                if shown > 0 {
+                    block = block.child(columns);
+                }
             }
             card = card.child(block);
             if index + 1 < keys.len() {

@@ -274,23 +274,6 @@ pub(crate) fn provider_cards<'a>(
     if let Some(status) = status {
         cards.push(Card::ProviderIncidents(status.clone()));
     }
-    // Go Teams members have independent limits, so Home and the provider tab
-    // both list every tracked key's own windows. A single healthy key already
-    // has its ordinary cards, and an error belongs to the key that produced it.
-    let key_list = kind == ProviderKind::OpenCodeGo
-        && (limits.opencode_go_keys.len() > 1
-            || limits
-                .opencode_go_keys
-                .iter()
-                .any(|key| key.error.is_some()));
-    if key_list {
-        cards.push(Card::OpenCodeGoKeys { provider });
-    }
-    // The per-key rows replace the aggregate lanes on the provider tab: the
-    // aggregate is the most consumed key, which the rows already show.
-    let key_rows_only = key_list
-        && options.surface == PopupSurface::ProviderTab
-        && limits.opencode_go_keys.len() > 1;
     let visible = |brick: &str| {
         options.popup_visibility.is_visible_for_instance(
             provider.id(),
@@ -299,6 +282,24 @@ pub(crate) fn provider_cards<'a>(
             options.show_provider_tabs,
         )
     };
+    // Go Teams members have independent limits, so Home and the provider tab
+    // both list every tracked key's own windows. A single healthy key already
+    // has its ordinary cards, and an error belongs to the key that produced it.
+    // The list is its own card: it can be turned off per surface, and stays
+    // addressable when every quota lane is hidden.
+    let key_list = kind == ProviderKind::OpenCodeGo
+        && visible(&crate::providers::registry::keys_brick_id(kind))
+        && (limits.opencode_go_keys.len() > 1
+            || limits
+                .opencode_go_keys
+                .iter()
+                .any(|key| key.error.is_some()));
+    if key_list {
+        cards.push(Card::OpenCodeGoKeys { provider });
+    }
+    // With several keys the rows replace the aggregate lanes on every
+    // surface: the aggregate is the most consumed key, which the rows show.
+    let key_rows_only = key_list && limits.opencode_go_keys.len() > 1;
 
     if kind == ProviderKind::OpenRouter {
         let spending_visible = visible(&spending_brick_id(kind));

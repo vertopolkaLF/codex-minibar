@@ -864,6 +864,11 @@ pub fn spending_brick_id(provider: ProviderKind) -> String {
     format!("{}.spending", descriptor(provider).id)
 }
 
+/// The per-key list of a provider whose instances track several keys.
+pub fn keys_brick_id(provider: ProviderKind) -> String {
+    format!("{}.keys", descriptor(provider).id)
+}
+
 /// Stable popup brick ids declared for a provider before runtime discovery.
 pub fn catalog_brick_ids(provider: ProviderKind) -> Vec<String> {
     let descriptor = descriptor(provider);
@@ -872,6 +877,9 @@ pub fn catalog_brick_ids(provider: ProviderKind) -> Vec<String> {
         .iter()
         .map(|metric| metric.id.to_string())
         .collect::<Vec<_>>();
+    if provider == ProviderKind::OpenCodeGo {
+        ids.push(keys_brick_id(provider));
+    }
     if descriptor.banked_resets != BankedResets::Unsupported {
         ids.push(resets_brick_id(provider));
     }
@@ -904,6 +912,9 @@ pub fn brick_label(provider: ProviderKind, brick_id: &str) -> String {
     }
     if brick_id == spending_brick_id(provider) {
         return crate::i18n::tr("spending").into();
+    }
+    if brick_id == keys_brick_id(provider) {
+        return crate::i18n::tr("api-keys").into();
     }
     if let Some(source_id) = brick_id.strip_prefix(&format!("{provider_id}.additional.")) {
         return source_id.replace(['-', '_'], " ");

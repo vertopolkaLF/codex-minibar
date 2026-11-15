@@ -1012,51 +1012,64 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
         },
         ..OpenCodeGoKeySnapshot::default()
     };
-    fn cards_for<'a>(limits: &'a RateLimits, surface: PopupSurface) -> Vec<Card<'a>> {
+    fn cards_for<'a>(
+        limits: &'a RateLimits,
+        visibility: &PopupVisibility,
+        surface: PopupSurface,
+    ) -> Vec<Card<'a>> {
         test_cards(
             ProviderKind::OpenCodeGo,
             true,
             limits,
-            &all_visible(),
+            visibility,
             surface,
             true,
             false,
             false,
         )
     }
-    let lists = |limits: &RateLimits, surface| {
-        cards_for(limits, surface)
+    let lists = |limits: &RateLimits, visibility: &PopupVisibility, surface| {
+        cards_for(limits, visibility, surface)
             .iter()
             .filter(|card| matches!(card, Card::OpenCodeGoKeys { .. }))
             .count()
     };
-    let lanes = |limits: &RateLimits, surface| {
-        cards_for(limits, surface)
+    let lanes = |limits: &RateLimits, visibility: &PopupVisibility, surface| {
+        cards_for(limits, visibility, surface)
             .iter()
             .filter(|card| matches!(card, Card::Limit { .. }))
             .count()
     };
     let surfaces = [PopupSurface::HomeTab, PopupSurface::ProviderTab];
 
-    // Go Teams members have independent limits, so every surface lists them.
+    // Go Teams members have independent limits, so every surface lists them,
+    // and the rows replace the aggregate lanes everywhere.
     let mut tracked = RateLimits::default();
     tracked.primary.used_percent = Some(10);
     tracked.secondary.used_percent = Some(20);
     tracked.opencode_go_keys.push(key("first", 10));
     tracked.opencode_go_keys.push(key("second", 20));
     for surface in surfaces {
-        assert_eq!(lists(&tracked, surface), 1);
+        assert_eq!(lists(&tracked, &all_visible(), surface), 1);
+        assert_eq!(lanes(&tracked, &all_visible(), surface), 0);
     }
-    // The key rows replace the aggregate lanes on the provider tab; Home
-    // keeps its summary for the taskbar-style card.
-    assert_eq!(lanes(&tracked, PopupSurface::ProviderTab), 0);
-    assert_eq!(lanes(&tracked, PopupSurface::HomeTab), 2);
+
+    // The card has its own switches: hiding it brings the lanes back, and
+    // each surface follows its own column.
+    let hidden = visibility_with("opencode-go.keys", false, false);
+    for surface in surfaces {
+        assert_eq!(lists(&tracked, &hidden, surface), 0);
+        assert_eq!(lanes(&tracked, &hidden, surface), 2);
+    }
+    let home_only = visibility_with("opencode-go.keys", true, false);
+    assert_eq!(lists(&tracked, &home_only, PopupSurface::HomeTab), 1);
+    assert_eq!(lists(&tracked, &home_only, PopupSurface::ProviderTab), 0);
 
     // One healthy key already has its ordinary cards.
     let mut single = RateLimits::default();
     single.opencode_go_keys.push(key("only", 10));
     for surface in surfaces {
-        assert_eq!(lists(&single, surface), 0);
+        assert_eq!(lists(&single, &all_visible(), surface), 0);
     }
 
     // A failing key stays visible even when it is the only one.
@@ -1067,7 +1080,7 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
         ..OpenCodeGoKeySnapshot::default()
     });
     for surface in surfaces {
-        assert_eq!(lists(&failing, surface), 1);
+        assert_eq!(lists(&failing, &all_visible(), surface), 1);
     }
 }
 
