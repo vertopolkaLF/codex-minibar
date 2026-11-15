@@ -997,29 +997,26 @@ fn openrouter_provider_tab_lists_keys_instead_of_spending_cards() {
 }
 
 #[test]
-fn opencode_go_tab_lists_every_tracked_key_but_home_keeps_aggregate_cards() {
+fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
     use crate::quota::limits::{LimitWindow, OpenCodeGoKeySnapshot};
 
-    let mut limits = RateLimits::default();
-    for (id, used) in [("first", 10), ("second", 20)] {
-        limits.opencode_go_keys.push(OpenCodeGoKeySnapshot {
-            id: id.into(),
-            rolling: LimitWindow {
-                used_percent: Some(used),
-                ..LimitWindow::default()
-            },
-            weekly: LimitWindow {
-                used_percent: Some(used),
-                ..LimitWindow::default()
-            },
-            ..OpenCodeGoKeySnapshot::default()
-        });
-    }
-    let lists = |surface| {
+    let key = |id: &str, used: u8| OpenCodeGoKeySnapshot {
+        id: id.into(),
+        rolling: LimitWindow {
+            used_percent: Some(used),
+            ..LimitWindow::default()
+        },
+        weekly: LimitWindow {
+            used_percent: Some(used),
+            ..LimitWindow::default()
+        },
+        ..OpenCodeGoKeySnapshot::default()
+    };
+    let lists = |limits: &RateLimits, surface| {
         test_cards(
             ProviderKind::OpenCodeGo,
             true,
-            &limits,
+            limits,
             &all_visible(),
             surface,
             true,
@@ -1030,34 +1027,22 @@ fn opencode_go_tab_lists_every_tracked_key_but_home_keeps_aggregate_cards() {
         .filter(|card| matches!(card, Card::OpenCodeGoKeys { .. }))
         .count()
     };
-    assert_eq!(lists(PopupSurface::ProviderTab), 1);
-    assert_eq!(lists(PopupSurface::HomeTab), 0);
+    let surfaces = [PopupSurface::HomeTab, PopupSurface::ProviderTab];
+
+    // Go Teams members have independent limits, so every surface lists them.
+    let mut tracked = RateLimits::default();
+    tracked.opencode_go_keys.push(key("first", 10));
+    tracked.opencode_go_keys.push(key("second", 20));
+    for surface in surfaces {
+        assert_eq!(lists(&tracked, surface), 1);
+    }
 
     // One healthy key already has its ordinary cards.
     let mut single = RateLimits::default();
-    single.opencode_go_keys.push(OpenCodeGoKeySnapshot {
-        id: "only".into(),
-        rolling: LimitWindow {
-            used_percent: Some(10),
-            ..LimitWindow::default()
-        },
-        ..OpenCodeGoKeySnapshot::default()
-    });
-    let single_cards = test_cards(
-        ProviderKind::OpenCodeGo,
-        true,
-        &single,
-        &all_visible(),
-        PopupSurface::ProviderTab,
-        true,
-        false,
-        false,
-    );
-    assert!(
-        !single_cards
-            .iter()
-            .any(|card| matches!(card, Card::OpenCodeGoKeys { .. }))
-    );
+    single.opencode_go_keys.push(key("only", 10));
+    for surface in surfaces {
+        assert_eq!(lists(&single, surface), 0);
+    }
 
     // A failing key stays visible even when it is the only one.
     let mut failing = RateLimits::default();
@@ -1066,21 +1051,9 @@ fn opencode_go_tab_lists_every_tracked_key_but_home_keeps_aggregate_cards() {
         error: Some("OpenCode Go API returned HTTP 401".into()),
         ..OpenCodeGoKeySnapshot::default()
     });
-    let failing_cards = test_cards(
-        ProviderKind::OpenCodeGo,
-        true,
-        &failing,
-        &all_visible(),
-        PopupSurface::ProviderTab,
-        true,
-        false,
-        false,
-    );
-    assert!(
-        failing_cards
-            .iter()
-            .any(|card| matches!(card, Card::OpenCodeGoKeys { .. }))
-    );
+    for surface in surfaces {
+        assert_eq!(lists(&failing, surface), 1);
+    }
 }
 
 #[test]

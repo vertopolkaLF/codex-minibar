@@ -274,11 +274,10 @@ pub(crate) fn provider_cards<'a>(
     if let Some(status) = status {
         cards.push(Card::ProviderIncidents(status.clone()));
     }
-    // Go Teams members have independent limits, so the provider tab lists
-    // every tracked key's own windows. A single healthy key already has its
-    // ordinary cards, and an error belongs to the key that produced it.
+    // Go Teams members have independent limits, so Home and the provider tab
+    // both list every tracked key's own windows. A single healthy key already
+    // has its ordinary cards, and an error belongs to the key that produced it.
     if kind == ProviderKind::OpenCodeGo
-        && options.surface == PopupSurface::ProviderTab
         && (limits.opencode_go_keys.len() > 1
             || limits
                 .opencode_go_keys
