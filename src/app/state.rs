@@ -128,16 +128,7 @@ impl AppState {
         let mut renamed = Vec::new();
         for instance in &settings.instances {
             let provider = instance.provider_id();
-            let changed = match instance.driver {
-                ProviderKind::OpenRouter => crate::providers::openrouter::apply_account_names(
-                    current.get_mut(provider),
-                    instance,
-                ),
-                ProviderKind::OpenCodeGo => {
-                    crate::providers::opencode::apply_key_names(current.get_mut(provider), instance)
-                }
-                _ => false,
-            };
+            let changed = instance.apply_local_names(current.get_mut(provider));
             if changed {
                 renamed.push((provider, current.get(provider).clone()));
             }

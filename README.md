@@ -176,11 +176,15 @@ Browser-session access is not used.
 Open **Settings → Providers → OpenCode Go → Add API key** for every key that
 belongs to the subscription. Go Teams bills per member and gives each member
 their own limits, so a workspace can need several keys at once. Minibar queries
-each key separately and lists every key's five-hour, weekly and monthly windows
-on the OpenCode Go tab, while Home, the tray and notifications keep using the
-most consumed key. Rename a key to tell members apart, or remove it when the
-member leaves. Only the key identities live in the settings file; the keys
-themselves stay in Windows user-scoped encrypted storage. See
+each key separately and lists their quota windows on Home and the OpenCode Go
+tab. With several keys, these rows replace the aggregate cards; disabling the
+API keys card shows ordinary quota cards per key. Instance-wide tray indicators
+and notifications use the most consumed key for each window, while widget
+indicators can select an individual key. Failed keys keep their error rows,
+even when every key fails. Rename a key to tell members apart, or remove it
+when the member leaves; the last slot stays with its saved secret cleared.
+Only key identities and names live in the settings file; secrets stay in
+protected storage (DPAPI on Windows, Secret Service-backed encryption on Linux). See
 [`docs/opencode-go-keys.md`](docs/opencode-go-keys.md).
 
 ### Add another Codex account

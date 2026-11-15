@@ -103,6 +103,11 @@ fn effective_limit_poll_interval(
 
 pub trait LimitProvider: Send + 'static {
     fn read_limits(&mut self) -> Result<RateLimits>;
+    /// A failed poll can still carry per-key diagnostics worth publishing.
+    /// Report its provider error after the snapshot so it stays visible.
+    fn poll_error(&self, _limits: &RateLimits) -> Option<String> {
+        None
+    }
     /// A partial result may contain usable samples and a sibling account's 429.
     /// Consume that signal independently of whether the overall read succeeded.
     fn take_rate_limit_response(&mut self) -> bool {
@@ -865,6 +870,12 @@ fn tick(
     auto_activation_pauses: &[AutoActivationPause],
 ) -> Result<Vec<WorkerEvent>> {
     let mut limits = provider.read_limits()?;
+    if let Some(error) = provider.poll_error(&limits) {
+        return Ok(vec![
+            WorkerEvent::LimitsUpdated(limits),
+            WorkerEvent::PollFailed(error),
+        ]);
+    }
     let mut events = Vec::new();
 
     let now = Utc::now();
@@ -1012,6 +1023,52 @@ mod tests {
     struct ScriptedProvider {
         samples: Vec<RateLimits>,
         index: usize,
+    }
+
+    #[test]
+    fn failed_go_poll_publishes_key_rows_before_the_provider_error() {
+        struct FailedGoProvider;
+        impl LimitProvider for FailedGoProvider {
+            fn read_limits(&mut self) -> Result<RateLimits> {
+                Ok(RateLimits {
+                    opencode_go_keys: ["first", "second"]
+                        .into_iter()
+                        .map(|id| crate::quota::limits::OpenCodeGoKeySnapshot {
+                            id: id.into(),
+                            error: Some(format!("{id} failed")),
+                            ..Default::default()
+                        })
+                        .collect(),
+                    ..Default::default()
+                })
+            }
+            fn poll_error(&self, limits: &RateLimits) -> Option<String> {
+                crate::providers::opencode::OpenCodeClient::new(
+                    crate::providers::instances::ProviderId::primary(
+                        crate::providers::registry::ProviderKind::OpenCodeGo,
+                    ),
+                )
+                .unwrap()
+                .poll_error(limits)
+            }
+        }
+        let mut activator = CountingActivator(0);
+        let events = tick(
+            &mut FailedGoProvider,
+            Some(&mut activator),
+            &mut ActivationState::default(),
+            true,
+            &[],
+            &[],
+        )
+        .unwrap();
+        assert_eq!(activator.0, 0);
+        assert_eq!(events.len(), 2);
+        let WorkerEvent::LimitsUpdated(limits) = &events[0] else {
+            panic!("key rows must precede the error");
+        };
+        assert_eq!(limits.opencode_go_keys.len(), 2);
+        assert!(matches!(&events[1], WorkerEvent::PollFailed(error) if error == "first failed"));
     }
 
     #[test]

@@ -517,6 +517,18 @@ impl ProviderInstance {
             .map_or(&[][..], |keys| keys.key_ids.as_slice())
     }
 
+    /// Current settings override names retained by a running reader, including
+    /// names the user cleared since that reader started.
+    pub(crate) fn apply_local_names(&self, limits: &mut crate::quota::limits::RateLimits) -> bool {
+        match self.driver {
+            ProviderKind::OpenRouter => {
+                crate::providers::openrouter::apply_account_names(limits, self)
+            }
+            ProviderKind::OpenCodeGo => crate::providers::opencode::apply_key_names(limits, self),
+            _ => false,
+        }
+    }
+
     /// Whether the credential Usage Stats are read with is configured.
     pub fn has_usage_stats_credential(&self) -> bool {
         crate::providers::registry::descriptor(self.driver).usage_stats
@@ -900,6 +912,35 @@ mod tests {
         let zen = ProviderInstance::primary(ProviderKind::OpenCodeZen);
         assert!(zen.opencode.is_none());
         assert_eq!(zen.opencode_keys().len(), 0);
+    }
+
+    #[test]
+    fn live_names_override_every_go_poll_after_rename_and_clear() {
+        let mut instance = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        let worker_sample = crate::quota::limits::RateLimits {
+            opencode_go_keys: vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: OpenCodeKeys::LEGACY_KEY_ID.into(),
+                local_name: Some("Worker's old name".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let runtime_key = instance.runtime_key();
+        for name in [Some("Renamed"), None] {
+            let keys = instance.opencode.as_mut().unwrap();
+            keys.key_names.clear();
+            if let Some(name) = name {
+                keys.key_names
+                    .insert(OpenCodeKeys::LEGACY_KEY_ID.into(), name.into());
+            }
+            // Presentation changes leave the old reader running.
+            assert!(runtime_key == instance.runtime_key());
+            for _ in 0..2 {
+                let mut incoming = worker_sample.clone();
+                assert!(instance.apply_local_names(&mut incoming));
+                assert_eq!(incoming.opencode_go_keys[0].local_name.as_deref(), name);
+            }
+        }
     }
 
     #[test]

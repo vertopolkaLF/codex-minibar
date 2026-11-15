@@ -2731,16 +2731,15 @@ fn editor_patch(key: &ManagedKey, limit: Option<u64>, reset: LimitReset, byok: b
 }
 
 /// The label for one tracked OpenCode Go key. The live settings name wins over
-/// the worker's sample so a rename shows without waiting for the next poll;
-/// the sampled name is the fallback, then a numbered placeholder.
+/// the worker's sample, including when the settings name was cleared. Only
+/// without settings does the sampled name precede a numbered placeholder.
 fn go_key_name(
     configured: Option<&crate::settings::OpenCodeKeys>,
     key: &crate::quota::limits::OpenCodeGoKeySnapshot,
     index: usize,
 ) -> String {
     configured
-        .and_then(|keys| keys.name_of(&key.id))
-        .or(key.local_name.as_deref())
+        .map_or(key.local_name.as_deref(), |keys| keys.name_of(&key.id))
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(str::to_owned)
@@ -3023,6 +3022,13 @@ mod tests {
         );
         // Without a settings name the sampled one is trimmed and shown.
         assert_eq!(go_key_name(None, &sampled("a", Some(" Old ")), 0), "Old");
+        // Existing settings without a name mean it was cleared, even when
+        // the worker still carries the name it read at startup.
+        let cleared = crate::settings::OpenCodeKeys::legacy();
+        assert_eq!(
+            go_key_name(Some(&cleared), &sampled("primary", Some("Old")), 0),
+            crate::i18n::format("key-39df89", &[("v0", "1".to_owned())])
+        );
         // A key with no name at all falls back to its position.
         assert_eq!(
             go_key_name(Some(&configured), &sampled("b", None), 1),

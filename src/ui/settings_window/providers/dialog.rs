@@ -1356,28 +1356,19 @@ impl SettingsWindow {
                                     ))
                                 })?;
                         let tracked = target.clone();
-                        let saved = persist_instance(provider, move |instance| {
-                            let keys = instance
-                                .opencode
-                                .get_or_insert_with(crate::settings::OpenCodeKeys::legacy);
-                            if !keys.key_ids.iter().any(|id| id == &tracked) {
-                                keys.key_ids.push(tracked.clone());
-                            }
-                            instance.credentials_revision =
-                                instance.credentials_revision.wrapping_add(1);
-                            Ok(())
-                        });
-                        match saved {
-                            Ok(()) => Ok(()),
-                            Err(error) => match crate::providers::opencode::restore_manual_key(
-                                rollback,
-                            ) {
-                                Ok(()) => Err(error),
-                                Err(rollback_error) => Err(anyhow::anyhow!(
-                                    "could not save the key ({error:#}); restoring the previous key also failed ({rollback_error:#})"
-                                )),
-                            },
-                        }
+                        rollback.commit_with(|| {
+                            persist_instance(provider, move |instance| {
+                                let keys = instance
+                                    .opencode
+                                    .get_or_insert_with(crate::settings::OpenCodeKeys::legacy);
+                                if !keys.key_ids.iter().any(|id| id == &tracked) {
+                                    keys.key_ids.push(tracked.clone());
+                                }
+                                instance.credentials_revision =
+                                    instance.credentials_revision.wrapping_add(1);
+                                Ok(())
+                            })
+                        })
                     },
                     |this, (), cx| {
                         this.reload_settings();
@@ -1431,38 +1422,40 @@ impl SettingsWindow {
                 self.run_dialog_then(
                     cx,
                     move || {
-                        // Delete the secret first: a failed deletion must not
-                        // leave the settings row pointing at nothing. Removing
-                        // an already-absent secret stays a successful retry.
-                        crate::providers::opencode::forget_key(provider, &target).map_err(
-                            |error| {
+                        // Preserve the previous ciphertext until the settings
+                        // commit succeeds, just as when replacing a key.
+                        let rollback =
+                            crate::providers::opencode::apply_key(provider, &target, None)
+                                .map_err(|error| {
+                                    anyhow::anyhow!(crate::i18n::format(
+                                        "could-not-remove-the-key-error",
+                                        &[("error", format!("{:#}", error))],
+                                    ))
+                                })?;
+                        let tracked = target.clone();
+                        rollback
+                            .commit_with(|| {
+                                persist_instance(provider, move |instance| {
+                                    let keys = instance
+                                        .opencode
+                                        .get_or_insert_with(crate::settings::OpenCodeKeys::legacy);
+                                    // The last slot stays so the instance keeps one
+                                    // row; only its secret is cleared.
+                                    if keys.key_ids.len() > 1 {
+                                        keys.key_ids.retain(|id| id != &tracked);
+                                    }
+                                    keys.key_names.remove(&tracked);
+                                    instance.credentials_revision =
+                                        instance.credentials_revision.wrapping_add(1);
+                                    Ok(())
+                                })
+                            })
+                            .map_err(|error| {
                                 anyhow::anyhow!(crate::i18n::format(
                                     "could-not-remove-the-key-error",
                                     &[("error", format!("{:#}", error))],
                                 ))
-                            },
-                        )?;
-                        let tracked = target.clone();
-                        persist_instance(provider, move |instance| {
-                            let keys = instance
-                                .opencode
-                                .get_or_insert_with(crate::settings::OpenCodeKeys::legacy);
-                            // The last slot stays so the instance keeps one
-                            // row; only its secret is cleared.
-                            if keys.key_ids.len() > 1 {
-                                keys.key_ids.retain(|id| id != &tracked);
-                            }
-                            keys.key_names.remove(&tracked);
-                            instance.credentials_revision =
-                                instance.credentials_revision.wrapping_add(1);
-                            Ok(())
-                        })
-                        .map_err(|error| {
-                            anyhow::anyhow!(crate::i18n::format(
-                                "could-not-remove-the-key-error",
-                                &[("error", format!("{:#}", error))],
-                            ))
-                        })?;
+                            })?;
                         Ok(())
                     },
                     |this, (), cx| {

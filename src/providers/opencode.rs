@@ -180,14 +180,6 @@ pub(crate) fn apply_key(
     secrets::apply_with_rollback(&[(name, value.map(str::to_owned))])
 }
 
-/// Deletes one tracked key from protected storage.
-pub fn forget_key(provider: ProviderId, key_id: &str) -> Result<()> {
-    match key_secret_name(provider, key_id) {
-        Some(name) => secrets::save(&name, None),
-        None => Ok(()),
-    }
-}
-
 pub fn manual_key(provider: ProviderId) -> Result<Option<String>> {
     secret_name(provider)
         .map(|name| secrets::load(&name))
@@ -197,10 +189,6 @@ pub fn manual_key(provider: ProviderId) -> Result<Option<String>> {
 pub fn save_manual_key(provider: ProviderId, value: Option<&str>) -> Result<()> {
     let name = secret_name(provider).context("provider is not an OpenCode catalog")?;
     secrets::save(&name, value)
-}
-
-pub(crate) fn restore_manual_key(rollback: secrets::EncodedRollback) -> Result<()> {
-    rollback.restore()
 }
 
 /// Whether the instance has at least one saved key, including the legacy
@@ -325,17 +313,6 @@ impl OpenCodeClient {
             .iter()
             .map(|key| self.read_go_key(key))
             .collect::<Vec<_>>();
-        if snapshots.iter().all(|snapshot| snapshot.error.is_some()) {
-            let first = snapshots
-                .into_iter()
-                .next()
-                .expect("go_keys always yields one key");
-            return Err(anyhow!(
-                first
-                    .error
-                    .unwrap_or_else(|| "OpenCode Go usage failed".into())
-            ));
-        }
         Ok(aggregate_go_keys(snapshots))
     }
 
@@ -486,6 +463,15 @@ impl OpenCodeClient {
 impl LimitProvider for OpenCodeClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
         OpenCodeClient::read_limits(self)
+    }
+
+    fn poll_error(&self, limits: &RateLimits) -> Option<String> {
+        let keys = &limits.opencode_go_keys;
+        if !keys.is_empty() && keys.iter().all(|key| key.error.is_some()) {
+            keys[0].error.clone()
+        } else {
+            None
+        }
     }
 
     fn take_rate_limit_response(&mut self) -> bool {
@@ -1120,6 +1106,37 @@ mod tests {
         assert_eq!(limits.opencode_go_keys[1].local_name, None);
         // Nothing left to change on the second pass.
         assert!(!apply_key_names(&mut limits, &instance));
+    }
+
+    #[test]
+    fn all_failed_keys_keep_their_diagnostics_and_provider_error() {
+        let client = OpenCodeClient::new(ProviderId::primary(ProviderKind::OpenCodeGo)).unwrap();
+        let failed = |id: &str, error: &str| OpenCodeGoKeySnapshot {
+            id: id.into(),
+            error: Some(error.into()),
+            ..Default::default()
+        };
+        let limits = aggregate_go_keys(vec![
+            failed("first", "OpenCode Go returned HTTP 401"),
+            failed("second", "OpenCode Go returned HTTP 429"),
+        ]);
+        assert_eq!(limits.opencode_go_keys.len(), 2);
+        assert_eq!(
+            limits.opencode_go_keys[1].error.as_deref(),
+            Some("OpenCode Go returned HTTP 429")
+        );
+        assert!(limits.primary.is_empty());
+        assert!(limits.secondary.is_empty());
+        assert!(limits.additional_limits.is_empty());
+        assert_eq!(
+            client.poll_error(&limits).as_deref(),
+            Some("OpenCode Go returned HTTP 401")
+        );
+        let mut recovered = limits;
+        recovered.opencode_go_keys[1].error = None;
+        recovered.opencode_go_keys[1].rolling.used_percent = Some(20);
+        assert_eq!(client.poll_error(&recovered), None);
+        assert_eq!(client.poll_error(&RateLimits::default()), None);
     }
 
     #[test]
