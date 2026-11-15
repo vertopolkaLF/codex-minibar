@@ -1248,7 +1248,6 @@ impl SettingsWindow {
     ) -> Vec<AnyElement> {
         let provider = instance.provider_id();
         let key_ids = crate::providers::opencode::tracked_key_ids(instance);
-        let multiple = key_ids.len() > 1;
         let mut rows: Vec<AnyElement> = Vec::with_capacity(key_ids.len() + 1);
         for (index, key_id) in key_ids.iter().enumerate() {
             let hint = crate::providers::opencode::key_hint(provider, key_id)
@@ -1262,17 +1261,15 @@ impl SettingsWindow {
                 .unwrap_or_else(|| {
                     crate::i18n::format("key-39df89", &[("v0", (index + 1).to_string())])
                 });
-            let mut items = vec![
+            let items = vec![
                 MenuItem::new(crate::i18n::tr("rename-key")).icon("pencil-simple-fill"),
                 MenuItem::new(crate::i18n::tr("replace-key")).icon("arrow-clockwise-bold"),
+                // Every saved key can be removed, including the last one: its
+                // row stays and only the secret behind it is cleared.
+                MenuItem::new(crate::i18n::tr("remove-key"))
+                    .icon("trash-fill")
+                    .danger(),
             ];
-            if multiple {
-                items.push(
-                    MenuItem::new(crate::i18n::tr("remove-key"))
-                        .icon("trash-fill")
-                        .danger(),
-                );
-            }
             let key_id = key_id.clone();
             let row = Row::new(format!("opencode-go-key-{key_id}"), name)
                 .icon(kit::row_icon(k, "key-fill"))

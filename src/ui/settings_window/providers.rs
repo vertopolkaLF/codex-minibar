@@ -93,6 +93,10 @@ fn money(microusd: u64) -> String {
 
 /// Applies a change to one instance against on-disk settings, never a stale
 /// UI snapshot. The open window picks the result up through the live sync.
+///
+/// Credential dialogs are the one deliberate exception to editing through
+/// `Host::edit`: they validate the key first, so they run this from the
+/// background executor and reload the window's snapshot when the write lands.
 /// Blocks on the serial writer: call from worker threads only, never the
 /// GPUI thread.
 fn persist_instance(

@@ -2730,11 +2730,35 @@ fn editor_patch(key: &ManagedKey, limit: Option<u64>, reset: LimitReset, byok: b
     }
 }
 
+/// The label for one tracked OpenCode Go key. The live settings name wins over
+/// the worker's sample so a rename shows without waiting for the next poll;
+/// the sampled name is the fallback, then a numbered placeholder.
+fn go_key_name(
+    configured: Option<&crate::settings::OpenCodeKeys>,
+    key: &crate::quota::limits::OpenCodeGoKeySnapshot,
+    index: usize,
+) -> String {
+    configured
+        .and_then(|keys| keys.name_of(&key.id))
+        .or(key.local_name.as_deref())
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_owned)
+        .unwrap_or_else(|| crate::i18n::format("key-39df89", &[("v0", (index + 1).to_string())]))
+}
+
 impl PopupRoot {
     /// The OpenCode Go tab's key list: each tracked key with its own 5-hour,
     /// weekly and monthly windows, or the reason it could not be read.
     pub(super) fn render_opencode_go_keys(&self, provider: ProviderId) -> AnyElement {
         let palette = self.palette.clone();
+        // Settings hold a rename before the worker samples it, so the open
+        // popup can still be showing the previous snapshot's names.
+        let configured = self
+            .ui
+            .settings
+            .instance(provider)
+            .and_then(|instance| instance.opencode.as_ref());
         let keys = self.limits.get(provider).opencode_go_keys.clone();
         let mut card = components::card(&palette)
             .flex()
@@ -2743,15 +2767,7 @@ impl PopupRoot {
             .px(px(12.0))
             .py(px(10.0));
         for (index, key) in keys.iter().enumerate() {
-            let name = key
-                .local_name
-                .as_deref()
-                .map(str::trim)
-                .filter(|name| !name.is_empty())
-                .map(str::to_owned)
-                .unwrap_or_else(|| {
-                    crate::i18n::format("key-39df89", &[("v0", (index + 1).to_string())])
-                });
+            let name = go_key_name(configured, key, index);
             let mut block = div()
                 .flex()
                 .flex_col()
@@ -2923,6 +2939,32 @@ mod tests {
         assert_eq!(
             Expiry::Quarter.at(now),
             Some(now + chrono::Duration::days(90))
+        );
+    }
+
+    #[test]
+    fn go_key_labels_prefer_live_settings() {
+        let configured = crate::settings::OpenCodeKeys {
+            key_ids: vec!["a".into()],
+            key_names: std::collections::BTreeMap::from([("a".to_owned(), " Team A ".to_owned())]),
+        };
+        let sampled =
+            |id: &str, local_name: Option<&str>| crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: id.to_owned(),
+                local_name: local_name.map(str::to_owned),
+                ..Default::default()
+            };
+        // A rename in settings wins over the name the worker sampled.
+        assert_eq!(
+            go_key_name(Some(&configured), &sampled("a", Some("Old")), 0),
+            "Team A"
+        );
+        // Without a settings name the sampled one is trimmed and shown.
+        assert_eq!(go_key_name(None, &sampled("a", Some(" Old ")), 0), "Old");
+        // A key with no name at all falls back to its position.
+        assert_eq!(
+            go_key_name(Some(&configured), &sampled("b", None), 1),
+            crate::i18n::format("key-39df89", &[("v0", "2".to_owned())])
         );
     }
 }
