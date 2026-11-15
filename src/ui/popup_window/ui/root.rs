@@ -240,13 +240,16 @@ impl Host {
 
     pub(super) fn max_height(&self) -> f32 {
         self.monitor.map_or(4096.0, |monitor| {
+            // The host is as tall as the monitor, but the capsule must fit the
+            // work area: the taskbar and the edge margins are never covered.
             #[cfg(windows)]
             {
-                (f64::from(
-                    self.floating_rect
-                        .unwrap_or_else(|| super::host_rect(monitor, self.placement))
-                        .height(),
-                ) / monitor.scale()) as f32
+                let host = self
+                    .floating_rect
+                    .unwrap_or_else(|| super::host_rect(monitor, self.placement))
+                    .height();
+                let work = monitor.work.height() - crate::ui::popup::EDGE_MARGIN_PX * 2;
+                (f64::from(host.min(work).max(1)) / monitor.scale()) as f32
             }
             #[cfg(not(windows))]
             {
