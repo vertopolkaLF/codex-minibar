@@ -277,15 +277,20 @@ pub(crate) fn provider_cards<'a>(
     // Go Teams members have independent limits, so Home and the provider tab
     // both list every tracked key's own windows. A single healthy key already
     // has its ordinary cards, and an error belongs to the key that produced it.
-    if kind == ProviderKind::OpenCodeGo
+    let key_list = kind == ProviderKind::OpenCodeGo
         && (limits.opencode_go_keys.len() > 1
             || limits
                 .opencode_go_keys
                 .iter()
-                .any(|key| key.error.is_some()))
-    {
+                .any(|key| key.error.is_some()));
+    if key_list {
         cards.push(Card::OpenCodeGoKeys { provider });
     }
+    // The per-key rows replace the aggregate lanes on the provider tab: the
+    // aggregate is the most consumed key, which the rows already show.
+    let key_rows_only = key_list
+        && options.surface == PopupSurface::ProviderTab
+        && limits.opencode_go_keys.len() > 1;
     let visible = |brick: &str| {
         options.popup_visibility.is_visible_for_instance(
             provider.id(),
@@ -379,7 +384,10 @@ pub(crate) fn provider_cards<'a>(
         })
         .flatten();
     let mut fable_merged = false;
-    for section in popup_sections(kind, limits, false) {
+    for section in popup_sections(kind, limits, false)
+        .into_iter()
+        .filter(|_| !key_rows_only)
+    {
         if !matches!(
             section,
             PopupSection::Monthly | PopupSection::FiveHour | PopupSection::Weekly
@@ -428,7 +436,7 @@ pub(crate) fn provider_cards<'a>(
     }
     // Claude can return extra windows such as Fable or Opus. They belong with
     // the ordinary limit cards, before banked resets, statistics, or credits.
-    for limit in &limits.additional_limits {
+    for limit in limits.additional_limits.iter().filter(|_| !key_rows_only) {
         if !visible(&additional_limit_brick_id(kind, &limit.id))
             || (fable_merged && fable.is_some_and(|fable| std::ptr::eq(fable, limit)))
         {
