@@ -122,6 +122,18 @@ impl ProviderId {
         }
     }
 
+    /// The display name of one tracked key, as last published. Keys are
+    /// settings identities; the secret never reaches labels.
+    pub fn key_name(self, key_id: &str) -> Option<String> {
+        labels().get(self.id).and_then(|label| {
+            label
+                .keys
+                .iter()
+                .find(|(id, _)| id == key_id)
+                .map(|(_, name)| name.clone())
+        })
+    }
+
     /// Resolves a persisted instance id against the published settings.
     /// Before settings are published, a primary id resolves to its driver and
     /// a generated `<driver>-…` id to that driver.
@@ -154,6 +166,8 @@ struct InstanceLabel {
     kind: ProviderKind,
     name: String,
     badge: Option<Badge>,
+    /// Tracked OpenCode Go keys, in settings order, with their display names.
+    keys: Vec<(String, String)>,
 }
 
 static LABELS: LazyLock<RwLock<HashMap<&'static str, InstanceLabel>>> =
@@ -211,6 +225,26 @@ pub fn publish(instances: &[ProviderInstance]) {
                     kind: instance.driver,
                     name: instance.display_name(),
                     badge: shares_driver(instance, instances).then(|| instance.badge()),
+                    keys: instance
+                        .opencode
+                        .as_ref()
+                        .map(|keys| {
+                            keys.key_ids
+                                .iter()
+                                .enumerate()
+                                .map(|(index, id)| {
+                                    let name =
+                                        keys.name_of(id).map(str::to_owned).unwrap_or_else(|| {
+                                            crate::i18n::format(
+                                                "key-39df89",
+                                                &[("v0", (index + 1).to_string())],
+                                            )
+                                        });
+                                    (id.clone(), name)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 },
             )
         })

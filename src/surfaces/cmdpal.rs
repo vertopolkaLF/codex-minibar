@@ -128,6 +128,7 @@ fn summary_widget(
         if let Some(configured) = indicators.iter().find(|configured| {
             configured.provider_id == indicator.provider_id
                 && configured.metric_id == indicator.metric_id
+                && configured.key_id == indicator.key_id
         }) {
             indicator.limit_value = configured.limit_value;
         }

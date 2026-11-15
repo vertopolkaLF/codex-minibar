@@ -1463,6 +1463,10 @@ pub struct TrayIndicator {
     /// Provider instance id.
     #[serde(rename = "provider")]
     pub provider_id: String,
+    /// One tracked OpenCode Go key, when this indicator reads a single key
+    /// instead of the instance's aggregate lanes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key_id: Option<String>,
     pub metric_id: String,
     #[serde(default)]
     pub limit_value: LimitValue,
@@ -1476,10 +1480,23 @@ impl TrayIndicator {
     pub fn new(provider: ProviderId, metric_id: impl Into<String>) -> Self {
         Self {
             provider_id: provider.id().into(),
+            key_id: None,
             metric_id: metric_id.into(),
             limit_value: LimitValue::Remaining,
             color_mode: TrayColorMode::Status,
             fixed_color: TrayFixedColor::default(),
+        }
+    }
+
+    /// An indicator bound to one tracked key of an OpenCode Go instance.
+    pub fn for_key(
+        provider: ProviderId,
+        key_id: impl Into<String>,
+        metric_id: impl Into<String>,
+    ) -> Self {
+        Self {
+            key_id: Some(key_id.into()),
+            ..Self::new(provider, metric_id)
         }
     }
 
@@ -4045,5 +4062,22 @@ enabled = true
         let reloaded = Settings::load_or_create(&path).unwrap();
         assert!(reloaded.start_at_login);
         assert!(!reloaded.check_for_updates);
+    }
+
+    #[test]
+    fn tray_indicators_keep_a_key_scope() {
+        let indicator = TrayIndicator::for_key(
+            ProviderId::primary(ProviderKind::OpenCodeGo),
+            "key-a",
+            "opencode-go.weekly",
+        );
+        let encoded = toml::to_string(&indicator).unwrap();
+        assert!(encoded.contains("key_id = \"key-a\""));
+        let loaded: TrayIndicator = toml::from_str(&encoded).unwrap();
+        assert_eq!(loaded, indicator);
+
+        // Instance-wide indicators stay key-less and keep their old shape.
+        let plain = TrayIndicator::new(ProviderId::primary(ProviderKind::Codex), "codex.session");
+        assert!(!toml::to_string(&plain).unwrap().contains("key_id"));
     }
 }

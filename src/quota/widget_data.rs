@@ -194,6 +194,50 @@ pub fn resolve_metric(
     })
 }
 
+/// Resolve the metric one indicator points at. A key-scoped OpenCode Go
+/// indicator reads that key's own window; every other indicator reads the
+/// instance's lanes.
+pub fn resolve_indicator(
+    provider: ProviderId,
+    limits: &RateLimits,
+    indicator: &TrayIndicator,
+) -> Option<WidgetMetric> {
+    let Some(key_id) = indicator.key_id.as_deref() else {
+        return resolve_metric(provider, limits, &indicator.metric_id);
+    };
+    if limits.opencode_go_keys.iter().any(|key| key.id == key_id) {
+        return resolve_key_metric(provider, limits, key_id, &indicator.metric_id);
+    }
+    // The tracked key was removed from Settings; keep the widget alive on the
+    // instance's aggregate lanes instead of leaving an empty row.
+    resolve_metric(provider, limits, &indicator.metric_id)
+}
+
+/// One tracked OpenCode Go key's own window for a catalog metric.
+pub fn resolve_key_metric(
+    provider: ProviderId,
+    limits: &RateLimits,
+    key_id: &str,
+    metric_id: &str,
+) -> Option<WidgetMetric> {
+    if provider.kind() != ProviderKind::OpenCodeGo {
+        return None;
+    }
+    let key = limits
+        .opencode_go_keys
+        .iter()
+        .find(|key| key.id == key_id)?;
+    let window = crate::providers::opencode::key_window(key, metric_id)?;
+    let metric = registry::metric(provider.kind(), metric_id)?;
+    Some(WidgetMetric {
+        source_id: format!("{}:key:{key_id}:metric:{metric_id}", provider.id()),
+        id: metric_id.to_owned(),
+        resolved_id: metric_id.to_owned(),
+        label: metric.localized_label().to_owned(),
+        window: window.clone(),
+    })
+}
+
 fn codex_five_hour_reserve_override<'a>(
     provider: ProviderKind,
     limits: &'a RateLimits,
@@ -431,6 +475,60 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn key_scoped_indicators_read_that_keys_own_window() {
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let limits = RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(1),
+                ..LimitWindow::default()
+            },
+            secondary: LimitWindow {
+                used_percent: Some(2),
+                ..LimitWindow::default()
+            },
+            opencode_go_keys: vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: "key-a".into(),
+                rolling: LimitWindow {
+                    used_percent: Some(10),
+                    ..LimitWindow::default()
+                },
+                weekly: LimitWindow {
+                    used_percent: Some(40),
+                    ..LimitWindow::default()
+                },
+                monthly: Some(LimitWindow {
+                    used_percent: Some(70),
+                    ..LimitWindow::default()
+                }),
+                ..Default::default()
+            }],
+            ..RateLimits::default()
+        };
+        let indicator = TrayIndicator::for_key(provider, "key-a", "opencode-go.weekly");
+        let metric = resolve_indicator(provider, &limits, &indicator).unwrap();
+        assert_eq!(metric.window.used_percent, Some(40));
+        assert!(metric.source_id.contains("key-a"));
+        // A key that is gone falls back to the instance lanes.
+        let missing = TrayIndicator::for_key(provider, "gone", "opencode-go.weekly");
+        assert_eq!(
+            resolve_indicator(provider, &limits, &missing)
+                .unwrap()
+                .window
+                .used_percent,
+            Some(2)
+        );
+        // The instance lanes still ignore the key scope.
+        let aggregate = TrayIndicator::new(provider, "opencode-go.weekly");
+        assert_eq!(
+            resolve_indicator(provider, &limits, &aggregate)
+                .unwrap()
+                .window
+                .used_percent,
+            Some(2)
+        );
     }
 
     #[test]

@@ -1710,7 +1710,7 @@ impl Renderer {
                 y += 12.0;
             }
             // Mark, name and plan.
-            let name = self.line(&section.provider.qualified_name(), 14.0, Weight::Semibold)?;
+            let name = self.line(&section.title, 14.0, Weight::Semibold)?;
             prims.push(Prim::Icon {
                 icon: section.icon.clone(),
                 x: CARD_PAD,

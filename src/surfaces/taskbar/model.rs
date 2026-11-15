@@ -124,6 +124,8 @@ pub(crate) struct WidgetView {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct CardSection {
     pub(crate) provider: ProviderId,
+    /// Section heading: the instance, or `instance · key` for one key.
+    pub(crate) title: String,
     pub(crate) icon: Icon,
     pub(crate) plan: Option<String>,
     pub(crate) rows: Vec<Row>,
@@ -195,11 +197,8 @@ fn resolve_row(
     now: DateTime<Utc>,
 ) -> Option<Row> {
     let provider = indicator.provider()?;
-    let metric = crate::quota::widget_data::resolve_metric(
-        provider,
-        limits.get(provider),
-        &indicator.metric_id,
-    );
+    let metric =
+        crate::quota::widget_data::resolve_indicator(provider, limits.get(provider), indicator);
     let registered = crate::providers::registry::metric(provider.kind(), &indicator.metric_id);
     let full_label = metric
         .as_ref()
@@ -296,69 +295,138 @@ fn card_sections(
     appearance: Appearance,
     now: DateTime<Utc>,
 ) -> Vec<CardSection> {
-    let mut providers = Vec::new();
-    for provider in widget.indicators.iter().filter_map(TrayIndicator::provider) {
-        if !providers.contains(&provider) {
-            providers.push(provider);
+    // One section per instance, split per key when a widget reads single keys.
+    let mut targets: Vec<(ProviderId, Option<String>)> = Vec::new();
+    for indicator in &widget.indicators {
+        let Some(provider) = indicator.provider() else {
+            continue;
+        };
+        let target = (provider, indicator.key_id.clone());
+        if !targets.contains(&target) {
+            targets.push(target);
         }
     }
-    providers
+    targets
         .into_iter()
-        .map(|provider| {
+        .map(|(provider, key_id)| {
             let configured = widget
                 .indicators
                 .iter()
-                .filter(|indicator| indicator.provider() == Some(provider))
+                .filter(|indicator| {
+                    indicator.provider() == Some(provider) && indicator.key_id == key_id
+                })
                 .collect::<Vec<_>>();
-            let limit_value = configured
-                .first()
-                .map_or(LimitValue::Remaining, |indicator| indicator.limit_value);
-            // A metric without data of its own can resolve to another one
-            // (a reserve falling back to the session); list each quota once.
-            let mut seen = Vec::new();
-            let rows = crate::quota::widget_data::snapshot(provider, limits)
-                .metrics
-                .into_iter()
-                .filter(|metric| {
-                    let resolved = crate::quota::widget_data::resolve_metric(
-                        provider,
-                        limits.get(provider),
-                        &metric.id,
-                    )
-                    .map_or_else(|| metric.id.clone(), |resolved| resolved.resolved_id);
-                    let fresh = !seen.contains(&resolved) && !seen.contains(&metric.label);
-                    seen.push(resolved);
-                    seen.push(metric.label.clone());
-                    fresh
-                })
-                .filter_map(|metric| {
-                    let indicator = configured
-                        .iter()
-                        .find(|indicator| indicator.metric_id == metric.id)
-                        .map(|indicator| (*indicator).clone())
-                        .unwrap_or_else(|| TrayIndicator {
-                            limit_value,
-                            ..TrayIndicator::new(provider, metric.id)
-                        });
-                    resolve_row(&indicator, limits, appearance, now)
-                })
-                .collect();
+            let rows = match key_id.as_deref() {
+                Some(key_id) => key_rows(provider, key_id, &configured, limits, appearance, now),
+                None => aggregate_rows(provider, &configured, limits, appearance, now),
+            };
             let provider_limits = limits.get(provider);
-            CardSection {
-                provider,
-                icon: icon_for(provider, appearance),
-                plan: provider_limits
+            let plan = match key_id.as_deref() {
+                Some(key_id) => provider_limits
+                    .opencode_go_keys
+                    .iter()
+                    .find(|key| key.id == key_id)
+                    .and_then(|key| key.masked_key.clone()),
+                None => provider_limits
                     .plan_type
                     .as_deref()
                     .filter(|plan| !plan.trim().is_empty())
                     .map(crate::format::capitalize_plan_name),
+            };
+            CardSection {
+                provider,
+                title: match key_id.as_deref() {
+                    Some(key_id) => format!(
+                        "{} \u{00b7} {}",
+                        provider.qualified_name(),
+                        provider
+                            .key_name(key_id)
+                            .unwrap_or_else(|| key_id.to_owned())
+                    ),
+                    None => provider.qualified_name(),
+                },
+                icon: icon_for(provider, appearance),
+                plan,
                 rows,
-                today: today_usage(provider, &provider_limits.usage),
+                today: key_id
+                    .is_none()
+                    .then(|| today_usage(provider, &provider_limits.usage))
+                    .flatten(),
             }
         })
         .collect()
 }
 
+/// The quotas of one tracked key, in catalog order.
+fn key_rows(
+    provider: ProviderId,
+    key_id: &str,
+    configured: &[&TrayIndicator],
+    limits: &ProviderLimits,
+    appearance: Appearance,
+    now: DateTime<Utc>,
+) -> Vec<Row> {
+    let limit_value = configured
+        .first()
+        .map_or(LimitValue::Remaining, |indicator| indicator.limit_value);
+    crate::providers::opencode::key_metric_ids()
+        .into_iter()
+        .filter_map(|metric_id| {
+            let indicator = configured
+                .iter()
+                .find(|indicator| indicator.metric_id == metric_id)
+                .map(|indicator| (*indicator).clone())
+                .unwrap_or_else(|| TrayIndicator {
+                    limit_value,
+                    ..TrayIndicator::for_key(provider, key_id, metric_id)
+                });
+            resolve_row(&indicator, limits, appearance, now)
+        })
+        .collect()
+}
+
+/// Every quota an instance reports, deduplicated by the metric it resolves to.
+fn aggregate_rows(
+    provider: ProviderId,
+    configured: &[&TrayIndicator],
+    limits: &ProviderLimits,
+    appearance: Appearance,
+    now: DateTime<Utc>,
+) -> Vec<Row> {
+    let limit_value = configured
+        .first()
+        .map_or(LimitValue::Remaining, |indicator| indicator.limit_value);
+    // A metric without data of its own can resolve to another one (a reserve
+    // falling back to the session); list each quota once.
+    let mut seen = Vec::new();
+    crate::quota::widget_data::snapshot(provider, limits)
+        .metrics
+        .into_iter()
+        .filter(|metric| {
+            let resolved = crate::quota::widget_data::resolve_metric(
+                provider,
+                limits.get(provider),
+                &metric.id,
+            )
+            .map_or_else(|| metric.id.clone(), |resolved| resolved.resolved_id);
+            let fresh = !seen.contains(&resolved) && !seen.contains(&metric.label);
+            seen.push(resolved);
+            seen.push(metric.label.clone());
+            fresh
+        })
+        .filter_map(|metric| {
+            let indicator = configured
+                .iter()
+                .find(|indicator| indicator.metric_id == metric.id)
+                .map(|indicator| (*indicator).clone())
+                .unwrap_or_else(|| TrayIndicator {
+                    limit_value,
+                    ..TrayIndicator::new(provider, metric.id)
+                });
+            resolve_row(&indicator, limits, appearance, now)
+        })
+        .collect()
+}
 /// `1.2M tokens · ≈ $3.40`, or `$1.23 · 45 requests` for providers billed
 /// per request.
 fn today_usage(provider: ProviderId, usage: &crate::usage::UsageStatistics) -> Option<String> {

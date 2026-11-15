@@ -228,13 +228,69 @@ pub(super) fn widget_providers(
         .collect()
 }
 
+/// One selectable row in a widget indicator: an instance, or one tracked key
+/// of an OpenCode Go instance that has several.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct WidgetTarget {
+    pub(super) provider: ProviderId,
+    pub(super) key_id: Option<String>,
+}
+
+impl WidgetTarget {
+    fn matches(&self, indicator: &TrayIndicator) -> bool {
+        indicator.provider() == Some(self.provider) && indicator.key_id == self.key_id
+    }
+}
+
+/// Every selectable target in display order. A multi-key OpenCode Go instance
+/// contributes its instance row and one row per tracked key.
+pub(super) fn widget_targets(
+    instances: &[ProviderInstance],
+    enabled_only: bool,
+) -> Vec<WidgetTarget> {
+    let mut targets = Vec::new();
+    for provider in widget_providers(instances, enabled_only) {
+        targets.push(WidgetTarget {
+            provider,
+            key_id: None,
+        });
+        let Some(instance) = instances
+            .iter()
+            .find(|instance| instance.provider_id() == provider)
+        else {
+            continue;
+        };
+        if instance.driver != ProviderKind::OpenCodeGo {
+            continue;
+        }
+        let key_ids = crate::providers::opencode::tracked_key_ids(instance);
+        if key_ids.len() < 2 {
+            continue;
+        }
+        for key_id in key_ids {
+            targets.push(WidgetTarget {
+                provider,
+                key_id: Some(key_id),
+            });
+        }
+    }
+    targets
+}
+
 pub(super) fn default_indicator(provider: ProviderId) -> TrayIndicator {
+    default_indicator_for(provider, None)
+}
+
+pub(super) fn default_indicator_for(provider: ProviderId, key_id: Option<&str>) -> TrayIndicator {
     let metric = crate::providers::registry::descriptor(provider.kind())
         .default_tray_metrics
         .first()
         .copied()
         .unwrap_or("unknown");
-    TrayIndicator::new(provider, metric)
+    match key_id {
+        Some(key_id) => TrayIndicator::for_key(provider, key_id, metric),
+        None => TrayIndicator::new(provider, metric),
+    }
 }
 
 /// Used percentages handed out to sample windows, in metric order.
@@ -369,7 +425,7 @@ fn color_mode_label(mode: TrayColorMode) -> &'static str {
 
 /// Applies a dropdown choice to an indicator, given the provider and metric
 /// options the dropdown listed.
-type IndicatorEdit = fn(&mut TrayIndicator, usize, &[ProviderId], &[(String, String)]);
+type IndicatorEdit = fn(&mut TrayIndicator, usize, &[WidgetTarget], &[(String, String)]);
 
 /// Fixed-color presets offered next to the hex field.
 const SWATCHES: [(u8, u8, u8); 12] = [
@@ -721,8 +777,12 @@ impl SettingsWindow {
         if count < max {
             let fallback = indicators
                 .last()
-                .and_then(TrayIndicator::provider)
-                .unwrap_or(first_enabled);
+                .and_then(|indicator| {
+                    indicator
+                        .provider()
+                        .map(|provider| (provider, indicator.key_id.clone()))
+                })
+                .unwrap_or((first_enabled, None));
             column = column.child(
                 div().flex().child(
                     Button::new(
@@ -732,7 +792,8 @@ impl SettingsWindow {
                     .with_icon("plus-bold")
                     .on_click(Self::h(cx, move |this, (), _, cx| {
                         this.edit_indicators::<L>(index, cx, |indicators| {
-                            indicators.push(default_indicator(fallback));
+                            indicators
+                                .push(default_indicator_for(fallback.0, fallback.1.as_deref()));
                         });
                         this.set_widget_dialog::<L>(cx, |dialog| dialog.expanded = Some(count));
                     }))
@@ -825,7 +886,10 @@ impl SettingsWindow {
             Some(provider) => (
                 crate::providers::registry::icon(provider.kind()),
                 crate::ui::gui::color::brand(provider.kind(), theme.dark),
-                provider.qualified_name().to_string(),
+                self.indicator_target_label(&WidgetTarget {
+                    provider,
+                    key_id: indicator.key_id.clone(),
+                }),
             ),
             None => (
                 "warning-fill",
@@ -889,6 +953,22 @@ impl SettingsWindow {
         kit::expander(k, id, header, expanded, toggle, move |_| fields)
     }
 
+    /// `OpenCode Go · Key 1`, with the instance marked off when it is
+    /// disabled.
+    fn indicator_target_label(&self, target: &WidgetTarget) -> String {
+        let base = self.indicator_provider_label(target.provider);
+        let Some(key_id) = target.key_id.as_deref() else {
+            return base;
+        };
+        let name = self
+            .instance(target.provider)
+            .and_then(|instance| instance.opencode.as_ref())
+            .and_then(|keys| keys.name_of(key_id).map(str::to_owned))
+            .or_else(|| target.provider.key_name(key_id))
+            .unwrap_or_else(|| key_id.to_owned());
+        format!("{base} \u{00b7} {name}")
+    }
+
     /// `Claude · Work`, marked as off when the instance is turned off.
     fn indicator_provider_label(&self, provider: ProviderId) -> String {
         if self
@@ -916,15 +996,25 @@ impl SettingsWindow {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        // Every instance with tray metrics, so a disabled one stays selectable.
-        let options = widget_providers(&self.settings.instances, false);
+        // Every target with tray metrics, so a disabled one stays selectable.
+        let targets = widget_targets(&self.settings.instances, false);
         let known = indicator.provider();
-        let mut provider_labels = options
+        let mut provider_labels = targets
             .iter()
-            .map(|provider| SharedString::from(self.indicator_provider_label(*provider)))
+            .map(|target| SharedString::from(self.indicator_target_label(target)))
             .collect::<Vec<_>>();
-        let provider_index = known
-            .and_then(|provider| options.iter().position(|option| *option == provider))
+        let provider_index = targets
+            .iter()
+            .position(|target| target.matches(indicator))
+            .or_else(|| {
+                // A removed key still belongs to its instance: keep the
+                // instance row selected instead of flagging the indicator.
+                known.and_then(|provider| {
+                    targets
+                        .iter()
+                        .position(|target| target.provider == provider && target.key_id.is_none())
+                })
+            })
             .unwrap_or_else(|| {
                 provider_labels.push(
                     crate::i18n::format(
@@ -959,19 +1049,20 @@ impl SettingsWindow {
         let key = format!("{}-{widget_index}-{slot}", L::TAG);
         let edit = |cx: &mut Context<Self>,
                     f: IndicatorEdit,
-                    options: Vec<ProviderId>,
+                    targets: Vec<WidgetTarget>,
                     metrics: Vec<(String, String)>| {
             Self::h(cx, move |this, choice: usize, _, cx| {
-                let options = options.clone();
+                let targets = targets.clone();
                 let metrics = metrics.clone();
                 this.edit_indicators::<L>(widget_index, cx, move |indicators| {
                     if indicators.is_empty() {
-                        indicators.push(default_indicator(
-                            options.first().copied().unwrap_or_default(),
-                        ));
+                        let fallback = targets
+                            .first()
+                            .map_or_else(ProviderId::default, |target| target.provider);
+                        indicators.push(default_indicator(fallback));
                     }
                     if let Some(indicator) = indicators.get_mut(slot) {
-                        f(indicator, choice, &options, &metrics);
+                        f(indicator, choice, &targets, &metrics);
                     }
                 })
             })
@@ -985,16 +1076,17 @@ impl SettingsWindow {
             0.0,
             edit(
                 cx,
-                |indicator, choice, options, _| {
-                    if let Some(provider) = options.get(choice).copied() {
+                |indicator, choice, targets, _| {
+                    if let Some(target) = targets.get(choice) {
                         *indicator = TrayIndicator {
-                            provider_id: provider.id().into(),
-                            metric_id: default_indicator(provider).metric_id,
+                            provider_id: target.provider.id().into(),
+                            key_id: target.key_id.clone(),
+                            metric_id: default_indicator(target.provider).metric_id,
                             ..indicator.clone()
                         };
                     }
                 },
-                options.clone(),
+                targets.clone(),
                 Vec::new(),
             ),
         );
@@ -1222,5 +1314,28 @@ mod tests {
                 assert_eq!(resolved.map(|(id, _, _)| id).as_deref(), Some(*metric));
             }
         }
+    }
+
+    #[test]
+    fn multi_key_go_instances_offer_a_target_per_key() {
+        let mut instance = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        instance.enabled = true;
+        instance.opencode = Some(crate::settings::OpenCodeKeys {
+            key_ids: vec!["first".into(), "second".into()],
+            key_names: std::collections::BTreeMap::from([("first".to_owned(), "Key A".to_owned())]),
+        });
+        let targets = widget_targets(&[instance.clone()], false);
+        assert_eq!(targets.len(), 3);
+        assert!(targets[0].key_id.is_none());
+        assert_eq!(targets[1].key_id.as_deref(), Some("first"));
+        assert_eq!(targets[2].key_id.as_deref(), Some("second"));
+
+        // One tracked key is the instance itself, so it needs no extra row.
+        let mut single = instance;
+        single.opencode = Some(crate::settings::OpenCodeKeys {
+            key_ids: vec!["only".into()],
+            key_names: Default::default(),
+        });
+        assert_eq!(widget_targets(&[single], false).len(), 1);
     }
 }

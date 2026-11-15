@@ -134,6 +134,32 @@ pub fn apply_key_names(limits: &mut RateLimits, instance: &ProviderInstance) -> 
     changed
 }
 
+/// The catalog metrics one tracked key reports, in display order. These are
+/// the metric ids a key-scoped widget indicator stores.
+pub fn key_metric_ids() -> Vec<String> {
+    use crate::providers::registry::{MetricSource, OPENCODE_GO_MONTHLY_LIMIT_ID, descriptor};
+    descriptor(ProviderKind::OpenCodeGo)
+        .metrics
+        .iter()
+        .filter(|metric| match metric.source {
+            MetricSource::Primary | MetricSource::Secondary => true,
+            MetricSource::Additional(id) => id == OPENCODE_GO_MONTHLY_LIMIT_ID,
+        })
+        .map(|metric| metric.id.to_owned())
+        .collect()
+}
+
+/// The window one tracked key reports for its driver's catalog metric.
+pub fn key_window<'a>(key: &'a OpenCodeGoKeySnapshot, metric_id: &str) -> Option<&'a LimitWindow> {
+    use crate::providers::registry::{MetricSource, OPENCODE_GO_MONTHLY_LIMIT_ID, metric};
+    match metric(ProviderKind::OpenCodeGo, metric_id)?.source {
+        MetricSource::Primary => Some(&key.rolling),
+        MetricSource::Secondary => Some(&key.weekly),
+        MetricSource::Additional(id) if id == OPENCODE_GO_MONTHLY_LIMIT_ID => key.monthly.as_ref(),
+        _ => None,
+    }
+}
+
 /// Replaces one tracked key and captures its prior ciphertext in one
 /// transaction, so a failed settings commit can restore it.
 pub(crate) fn apply_key(
@@ -325,7 +351,7 @@ impl OpenCodeClient {
                 return snapshot;
             }
             Err(error) => {
-                snapshot.error = Some(format!("{error:#}"));
+                snapshot.error = Some(go_error_message(&error));
                 return snapshot;
             }
         };
@@ -338,9 +364,9 @@ impl OpenCodeClient {
                 snapshot.weekly = weekly;
                 snapshot.monthly = monthly;
             }
-            // Key-local errors reach the log, the store and the provider tab;
-            // servers occasionally echo credentials in error bodies.
-            Err(error) => snapshot.error = Some(redact_secret(&value, format!("{error:#}"))),
+            // Key-local errors reach the log, the store and the provider tab.
+            // The row is one line wide, so only the reason is kept.
+            Err(error) => snapshot.error = Some(go_error_message(&error)),
         }
         snapshot
     }
@@ -791,28 +817,38 @@ fn worst_window<'a>(windows: impl Iterator<Item = &'a LimitWindow>) -> LimitWind
     worst.cloned().unwrap_or_default()
 }
 
-/// Removes a credential from text that can reach logs, the store or the UI.
-/// The masked form keeps the error recognizable without exposing the key.
-fn redact_secret(secret: &str, message: String) -> String {
-    let secret = secret.trim();
-    if secret.is_empty() || !message.contains(secret) {
-        return message;
-    }
-    message.replace(secret, &secrets::masked_hint(secret))
-}
-
 /// Why one key produced no sample, phrased for the provider tab and the
 /// worker's error line.
 fn go_missing_key_message(key: &TrackedKey) -> String {
     if key.id == OpenCodeKeys::LEGACY_KEY_ID {
-        "OpenCode Go API key not found; set OPENCODE_GO_API_KEY, OPENCODE_API_KEY, use auth.json, or save a manual key"
-            .into()
+        "No OpenCode Go API key found".into()
     } else {
         format!(
-            "OpenCode Go key {} has no saved value",
+            "No saved value for {}",
             key.name.as_deref().unwrap_or(&key.id)
         )
     }
+}
+
+/// A short reason for a failed key. The card is one line wide, so the raw
+/// transport error (URLs, retry hints) is reduced to what the row can show.
+fn go_error_message(error: &anyhow::Error) -> String {
+    let text = format!("{error:#}");
+    if let Some(status) = http_status(&text) {
+        return format!("OpenCode Go returned HTTP {status}");
+    }
+    if text.contains("parse OpenCode Go usage response") {
+        return "OpenCode Go sent an unexpected response".into();
+    }
+    "Could not reach OpenCode Go".into()
+}
+
+fn http_status(message: &str) -> Option<u16> {
+    let rest = message.split("HTTP ").nth(1)?;
+    let digits = rest
+        .split(|character: char| !character.is_ascii_digit())
+        .next()?;
+    digits.parse().ok()
 }
 
 fn usage_object(value: &Value) -> &Value {
@@ -1044,13 +1080,19 @@ mod tests {
     }
 
     #[test]
-    fn key_errors_never_carry_the_credential() {
+    fn key_errors_are_short_and_never_carry_the_credential() {
         let key = "oc_sk_live_0123456789abcdef";
-        let message = format!("OpenCode Go API returned HTTP 401: invalid key {key}");
-        let redacted = redact_secret(key, message);
-        assert!(!redacted.contains("0123456789abcdef"));
-        assert!(redacted.contains('…'));
-        assert_eq!(redact_secret(key, "HTTP 429".into()), "HTTP 429");
+        let http = anyhow!("OpenCode Go API returned HTTP 401: invalid key {key}");
+        assert_eq!(go_error_message(&http), "OpenCode Go returned HTTP 401");
+        let offline = anyhow!(
+            "request OpenCode Go usage: https://opencode.ai/zen/go/v1/usage: connection refused"
+        );
+        assert_eq!(go_error_message(&offline), "Could not reach OpenCode Go");
+        let parse = anyhow!("parse OpenCode Go usage response: invalid json");
+        assert_eq!(
+            go_error_message(&parse),
+            "OpenCode Go sent an unexpected response"
+        );
     }
 
     #[test]
