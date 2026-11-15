@@ -584,6 +584,11 @@ impl LimitNotificationTracker {
         now: DateTime<Utc>,
         defer_primary_reset: bool,
     ) -> LimitNotificationResult {
+        // Failed-key rows are diagnostics, not quota observations. Retain the
+        // last good deadlines and warning state until polling recovers.
+        if limits.all_opencode_go_keys_failed() {
+            return LimitNotificationResult::default();
+        }
         if !self.primed {
             self.capture(limits);
             self.startup_low_usage_primary = low_usage_state(
@@ -901,6 +906,63 @@ mod tests {
             resets_at: Some(resets_at),
             duration_minutes: Some(10_080),
         }
+    }
+
+    #[test]
+    fn failed_go_polls_preserve_reset_notifications_on_recovery() {
+        let _host = test_host();
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let settings = NotificationSettings {
+            limits_changed: true,
+            low_usage_enabled: false,
+            weekly_low_usage_enabled: false,
+            ..Default::default()
+        };
+        let failed = RateLimits {
+            opencode_go_keys: ["first", "second"]
+                .into_iter()
+                .map(|id| crate::quota::limits::OpenCodeGoKeySnapshot {
+                    id: id.into(),
+                    error: Some("Could not reach OpenCode Go".into()),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        let sample = |reset| RateLimits {
+            primary: LimitWindow {
+                used_percent: Some(40),
+                resets_at: Some(reset),
+                duration_minutes: None,
+            },
+            ..Default::default()
+        };
+        let mut tracker = LimitNotificationTracker::default();
+        let name = "go-recovery-reset";
+        tracker.named(name.into());
+
+        // An initial failed poll must not prime quota notification history.
+        tracker.observe_at(&failed, &settings, provider, at(14, 8), false);
+        assert!(!tracker.primed);
+        tracker.observe_at(&sample(at(14, 10)), &settings, provider, at(14, 9), false);
+        assert!(delivered_for(name).is_empty());
+
+        // Both normal and deferred notification paths must ignore diagnostics.
+        for defer in [false, true] {
+            let result = tracker.observe_at(&failed, &settings, provider, at(14, 10), defer);
+            assert!(!result.primary_reset);
+            assert_eq!(tracker.primary_resets_at, Some(at(14, 10)));
+        }
+        assert!(delivered_for(name).is_empty());
+
+        let recovered = sample(at(14, 15));
+        let result = tracker.observe_at(&recovered, &settings, provider, at(14, 11), false);
+        assert!(result.primary_reset);
+        tracker.observe_at(&recovered, &settings, provider, at(14, 12), false);
+        let delivered = delivered_for(name);
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(delivered[0].0, NotificationKind::Reset);
+        assert_eq!(delivered[0].1, LimitFocus::Primary);
     }
 
     #[test]

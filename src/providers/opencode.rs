@@ -466,9 +466,8 @@ impl LimitProvider for OpenCodeClient {
     }
 
     fn poll_error(&self, limits: &RateLimits) -> Option<String> {
-        let keys = &limits.opencode_go_keys;
-        if !keys.is_empty() && keys.iter().all(|key| key.error.is_some()) {
-            keys[0].error.clone()
+        if limits.all_opencode_go_keys_failed() {
+            limits.opencode_go_keys[0].error.clone()
         } else {
             None
         }

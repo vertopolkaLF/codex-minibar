@@ -18,6 +18,8 @@ the other keys still report their quotas. When every key fails, a fresh
 snapshot still publishes every key's error and clears the old quota windows;
 the instance also reports the first error. A single failing key keeps its
 error row too. HTTP errors expose only the status, never the response body.
+Failed-poll diagnostics do not replace the last successful quota observation
+used by notifications, so a reset is still detected when polling recovers.
 
 Requests run sequentially, with a 15-second timeout per request, so a slow
 key delays the following keys. HTTP 429 from any key pauses automatic polling

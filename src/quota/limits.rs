@@ -396,6 +396,13 @@ impl ProviderLimits {
 }
 
 impl RateLimits {
+    /// A diagnostic snapshot with no successful OpenCode Go quota samples.
+    /// Keep its key rows visible without treating it as a quota observation.
+    pub fn all_opencode_go_keys_failed(&self) -> bool {
+        !self.opencode_go_keys.is_empty()
+            && self.opencode_go_keys.iter().all(|key| key.error.is_some())
+    }
+
     /// OpenAI sometimes drops the 5h window and leaves weekly data in `primary`.
     /// Remap that so the UI/tray keep treating primary as the short session.
     pub fn normalized(mut self, now: DateTime<Utc>) -> Self {
