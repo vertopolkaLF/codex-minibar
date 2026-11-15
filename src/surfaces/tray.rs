@@ -92,11 +92,12 @@ fn widget_tooltip(widget: &TrayWidget, limits: &ProviderLimits) -> String {
             )
         });
         let item = format!("{label} {value}");
-        let source_id = match indicator.key_id.as_deref() {
+        let key = crate::quota::widget_data::effective_key(indicator, limits.get(provider));
+        let source_id = match key {
             Some(key) => format!("{}:{key}", provider.id()),
             None => provider.id().to_owned(),
         };
-        let title = match indicator.key_id.as_deref() {
+        let title = match key {
             Some(key) => format!(
                 "{} \u{00b7} {}",
                 provider.qualified_name(),

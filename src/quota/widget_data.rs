@@ -202,15 +202,24 @@ pub fn resolve_indicator(
     limits: &RateLimits,
     indicator: &TrayIndicator,
 ) -> Option<WidgetMetric> {
-    let Some(key_id) = indicator.key_id.as_deref() else {
-        return resolve_metric(provider, limits, &indicator.metric_id);
-    };
-    if limits.opencode_go_keys.iter().any(|key| key.id == key_id) {
-        return resolve_key_metric(provider, limits, key_id, &indicator.metric_id);
+    match effective_key(indicator, limits) {
+        Some(key_id) => resolve_key_metric(provider, limits, key_id, &indicator.metric_id),
+        // The tracked key was removed from Settings; keep the widget alive on
+        // the instance's aggregate lanes instead of leaving an empty row.
+        None => resolve_metric(provider, limits, &indicator.metric_id),
     }
-    // The tracked key was removed from Settings; keep the widget alive on the
-    // instance's aggregate lanes instead of leaving an empty row.
-    resolve_metric(provider, limits, &indicator.metric_id)
+}
+
+/// The key an indicator effectively reads. A key no longer present in the
+/// instance snapshot falls back to the aggregate lanes, so its stale id must
+/// not scope labels or hover cards either.
+pub fn effective_key<'a>(indicator: &'a TrayIndicator, limits: &RateLimits) -> Option<&'a str> {
+    let key_id = indicator.key_id.as_deref()?;
+    limits
+        .opencode_go_keys
+        .iter()
+        .any(|key| key.id == key_id)
+        .then_some(key_id)
 }
 
 /// One tracked OpenCode Go key's own window for a catalog metric.

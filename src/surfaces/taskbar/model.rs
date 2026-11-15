@@ -301,7 +301,9 @@ fn card_sections(
         let Some(provider) = indicator.provider() else {
             continue;
         };
-        let target = (provider, indicator.key_id.clone());
+        let key_id = crate::quota::widget_data::effective_key(indicator, limits.get(provider))
+            .map(str::to_owned);
+        let target = (provider, key_id);
         if !targets.contains(&target) {
             targets.push(target);
         }
@@ -313,7 +315,10 @@ fn card_sections(
                 .indicators
                 .iter()
                 .filter(|indicator| {
-                    indicator.provider() == Some(provider) && indicator.key_id == key_id
+                    indicator.provider() == Some(provider)
+                        && crate::quota::widget_data::effective_key(indicator, limits.get(provider))
+                            .map(str::to_owned)
+                            == key_id
                 })
                 .collect::<Vec<_>>();
             let rows = match key_id.as_deref() {
@@ -699,5 +704,42 @@ mod tests {
     fn retired_compact_style_reads_as_glance() {
         let widget: TaskbarWidget = toml::from_str("style = \"compact\"").unwrap();
         assert_eq!(widget.style, TaskbarWidgetStyle::Glance);
+    }
+
+    #[test]
+    fn a_removed_key_keeps_the_instance_heading_and_metadata() {
+        use crate::providers::registry::ProviderKind;
+
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let mut limits = ProviderLimits::default();
+        {
+            let snapshot = limits.get_mut(provider);
+            snapshot.primary.used_percent = Some(10);
+            snapshot.secondary.used_percent = Some(20);
+            snapshot.plan_type = Some("Go".into());
+        }
+        let widget = TaskbarWidget {
+            style: TaskbarWidgetStyle::Glance,
+            show_icon: false,
+            indicators: vec![TrayIndicator::for_key(
+                provider,
+                "gone",
+                "opencode-go.weekly",
+            )],
+            ..TaskbarWidget::for_provider(provider)
+        };
+        let view = resolve(
+            &widget,
+            &limits,
+            Appearance {
+                light: false,
+                colored_icons: false,
+                accent: [0, 0, 0],
+            },
+        );
+        assert_eq!(view.card.len(), 1);
+        assert_eq!(view.card[0].title, provider.qualified_name());
+        assert_eq!(view.card[0].plan.as_deref(), Some("Go"));
+        assert_eq!(view.rows[0].value, "80%");
     }
 }

@@ -281,6 +281,26 @@ pub(super) fn default_indicator(provider: ProviderId) -> TrayIndicator {
     default_indicator_for(provider, None)
 }
 
+/// Point an indicator at another target. Its display settings survive; the
+/// metric survives a key change on the same provider, while a provider change
+/// falls back to that provider's default metric.
+pub(super) fn retarget_indicator(
+    indicator: &TrayIndicator,
+    target: &WidgetTarget,
+) -> TrayIndicator {
+    let metric_id = if target.provider.id() == indicator.provider_id.as_str() {
+        indicator.metric_id.clone()
+    } else {
+        default_indicator(target.provider).metric_id
+    };
+    TrayIndicator {
+        provider_id: target.provider.id().into(),
+        key_id: target.key_id.clone(),
+        metric_id,
+        ..indicator.clone()
+    }
+}
+
 pub(super) fn default_indicator_for(provider: ProviderId, key_id: Option<&str>) -> TrayIndicator {
     let metric = crate::providers::registry::descriptor(provider.kind())
         .default_tray_metrics
@@ -1078,12 +1098,7 @@ impl SettingsWindow {
                 cx,
                 |indicator, choice, targets, _| {
                     if let Some(target) = targets.get(choice) {
-                        *indicator = TrayIndicator {
-                            provider_id: target.provider.id().into(),
-                            key_id: target.key_id.clone(),
-                            metric_id: default_indicator(target.provider).metric_id,
-                            ..indicator.clone()
-                        };
+                        *indicator = retarget_indicator(indicator, target);
                     }
                 },
                 targets.clone(),
@@ -1337,5 +1352,34 @@ mod tests {
             key_names: Default::default(),
         });
         assert_eq!(widget_targets(&[single], false).len(), 1);
+    }
+
+    #[test]
+    fn changing_the_key_keeps_the_metric_but_a_new_provider_uses_its_default() {
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let weekly = TrayIndicator::for_key(provider, "first", "opencode-go.weekly");
+        let same_provider = retarget_indicator(
+            &weekly,
+            &WidgetTarget {
+                provider,
+                key_id: Some("second".into()),
+            },
+        );
+        assert_eq!(same_provider.metric_id, "opencode-go.weekly");
+        assert_eq!(same_provider.key_id.as_deref(), Some("second"));
+
+        let codex = ProviderId::primary(ProviderKind::Codex);
+        let moved = retarget_indicator(
+            &weekly,
+            &WidgetTarget {
+                provider: codex,
+                key_id: None,
+            },
+        );
+        assert_eq!(
+            moved.metric_id,
+            crate::providers::registry::descriptor(ProviderKind::Codex).default_tray_metrics[0]
+        );
+        assert!(moved.key_id.is_none());
     }
 }
