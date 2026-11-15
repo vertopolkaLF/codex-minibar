@@ -116,6 +116,24 @@ pub fn key_hint(provider: ProviderId, key_id: &str) -> Result<Option<String>> {
     Ok(Some(secrets::masked_hint(&value)))
 }
 
+/// Overlay locally chosen key names onto a live quota snapshot. A rename, or
+/// clearing a name, is a settings-only change and must not wait for the next
+/// worker poll or an app restart.
+pub fn apply_key_names(limits: &mut RateLimits, instance: &ProviderInstance) -> bool {
+    let keys = instance.opencode.as_ref();
+    let mut changed = false;
+    for key in &mut limits.opencode_go_keys {
+        let local_name = keys
+            .and_then(|keys| keys.name_of(&key.id))
+            .map(str::to_owned);
+        if key.local_name != local_name {
+            key.local_name = local_name;
+            changed = true;
+        }
+    }
+    changed
+}
+
 /// Replaces one tracked key and captures its prior ciphertext in one
 /// transaction, so a failed settings commit can restore it.
 pub(crate) fn apply_key(
@@ -991,6 +1009,38 @@ mod tests {
             limits.opencode_go_keys[1].error.as_deref(),
             Some("OpenCode Go API returned HTTP 429")
         );
+    }
+
+    #[test]
+    fn live_key_names_overlay_onto_a_snapshot() {
+        let mut instance = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        instance.opencode = Some(crate::settings::OpenCodeKeys {
+            key_ids: vec!["a".into(), "b".into()],
+            key_names: std::collections::BTreeMap::from([("a".to_owned(), "Team A".to_owned())]),
+        });
+        let mut limits = RateLimits {
+            opencode_go_keys: vec![
+                OpenCodeGoKeySnapshot {
+                    id: "a".into(),
+                    local_name: Some("Old".into()),
+                    ..OpenCodeGoKeySnapshot::default()
+                },
+                OpenCodeGoKeySnapshot {
+                    id: "b".into(),
+                    local_name: Some("Cleared".into()),
+                    ..OpenCodeGoKeySnapshot::default()
+                },
+            ],
+            ..RateLimits::default()
+        };
+        assert!(apply_key_names(&mut limits, &instance));
+        assert_eq!(
+            limits.opencode_go_keys[0].local_name.as_deref(),
+            Some("Team A")
+        );
+        assert_eq!(limits.opencode_go_keys[1].local_name, None);
+        // Nothing left to change on the second pass.
+        assert!(!apply_key_names(&mut limits, &instance));
     }
 
     #[test]

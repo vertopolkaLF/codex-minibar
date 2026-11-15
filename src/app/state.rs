@@ -117,24 +117,28 @@ impl AppState {
             .unwrap_or_default()
     }
 
-    /// Overlay locally chosen OpenRouter account names onto the live quota
-    /// snapshot. A rename is a settings-only change and must not wait for the
-    /// next worker poll or an app restart.
-    pub(crate) fn apply_openrouter_account_names(&self, settings: &Settings) {
+    /// Overlay locally chosen names onto the live quota snapshot: OpenRouter
+    /// account and key names, and OpenCode Go key names. A rename is a
+    /// settings-only change and must not wait for the next worker poll or an
+    /// app restart.
+    pub(crate) fn apply_local_names(&self, settings: &Settings) {
         let Ok(mut current) = self.limits.lock() else {
             return;
         };
         let mut renamed = Vec::new();
-        for instance in settings
-            .instances
-            .iter()
-            .filter(|instance| instance.driver == ProviderKind::OpenRouter)
-        {
+        for instance in &settings.instances {
             let provider = instance.provider_id();
-            if crate::providers::openrouter::apply_account_names(
-                current.get_mut(provider),
-                instance,
-            ) {
+            let changed = match instance.driver {
+                ProviderKind::OpenRouter => crate::providers::openrouter::apply_account_names(
+                    current.get_mut(provider),
+                    instance,
+                ),
+                ProviderKind::OpenCodeGo => {
+                    crate::providers::opencode::apply_key_names(current.get_mut(provider), instance)
+                }
+                _ => false,
+            };
+            if changed {
                 renamed.push((provider, current.get(provider).clone()));
             }
         }
