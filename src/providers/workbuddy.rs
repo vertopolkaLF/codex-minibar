@@ -20,7 +20,7 @@ use std::{
     time::{Duration as StdDuration, SystemTime},
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Local, Utc};
 use serde::Deserialize;
 
@@ -47,10 +47,8 @@ impl WorkBuddyClient {
     }
 
     fn read_local_usage(&self) -> Result<Rollup> {
-        match transcripts_root() {
-            Some(root) => scan_root(&root, Local::now()),
-            None => Ok(Rollup::default()),
-        }
+        let root = transcripts_root().context("WorkBuddy home directory is unavailable")?;
+        scan_root(&root, Local::now())
     }
 }
 
@@ -74,7 +72,17 @@ impl UsageProvider for WorkBuddyClient {
     }
 
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
-        let rollup = self.read_local_usage()?;
+        let rollup = match self.read_local_usage() {
+            Ok(rollup) => rollup,
+            Err(error) => {
+                // A partial scan is not authoritative. Preserve all stored
+                // daily/hourly rows and keep showing the last complete scan.
+                crate::platform::logger::info(format!("WorkBuddy usage scan failed: {error:#}"));
+                return store::with_store(|store| {
+                    store.load_usage_daily(self.provider, history_days)
+                });
+            }
+        };
         store::with_store(|store| store.save_rollup(self.provider, &rollup, None))?;
         Ok(statistics_from_daily(&rollup.daily, history_days))
     }
@@ -168,15 +176,15 @@ fn scan_root(root: &Path, now: DateTime<Local>) -> Result<Rollup> {
         ))
         .unwrap_or(SystemTime::UNIX_EPOCH);
 
-    for path in transcripts(root) {
-        if !modified_after(&path, cutoff) {
+    for path in transcripts(root)? {
+        if !modified_after(&path, cutoff)? {
             continue;
         }
-        let Ok(file) = File::open(&path) else {
-            continue;
-        };
+        let file = File::open(&path)
+            .with_context(|| format!("open WorkBuddy transcript {}", path.display()))?;
         for line in BufReader::new(file).lines() {
-            let Ok(line) = line else { break };
+            let line =
+                line.with_context(|| format!("read WorkBuddy transcript {}", path.display()))?;
             // Most lines are prompts and tool output with no accounting at all.
             if !line.contains("\"rawUsage\"") {
                 continue;
@@ -212,36 +220,45 @@ fn scan_root(root: &Path, now: DateTime<Local>) -> Result<Rollup> {
     Ok(rollup.finish())
 }
 
-fn modified_after(path: &Path, cutoff: SystemTime) -> bool {
-    path.metadata()
+fn modified_after(path: &Path, cutoff: SystemTime) -> Result<bool> {
+    let modified = path
+        .metadata()
         .and_then(|meta| meta.modified())
-        .map(|modified| modified >= cutoff)
-        .unwrap_or(true)
+        .with_context(|| format!("read WorkBuddy transcript metadata {}", path.display()))?;
+    Ok(modified >= cutoff)
 }
 
-fn transcripts(root: &Path) -> Vec<PathBuf> {
+fn transcripts(root: &Path) -> Result<Vec<PathBuf>> {
     let mut found = Vec::new();
-    if !root.is_dir() {
-        return found;
+    match root.try_exists() {
+        Ok(false) => return Ok(found),
+        Ok(true) => (),
+        Err(error) => return Err(error).context("inspect WorkBuddy transcript root"),
     }
     let mut stack = vec![root.to_path_buf()];
     while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
+        let entries = std::fs::read_dir(&dir)
+            .with_context(|| format!("read WorkBuddy transcript directory {}", dir.display()))?;
+        for entry in entries {
+            let entry = entry.with_context(|| format!("read entry in {}", dir.display()))?;
             let path = entry.path();
-            if path.is_dir() {
+            let kind = entry
+                .file_type()
+                .with_context(|| format!("read WorkBuddy entry type {}", path.display()))?;
+            // Inspect the entry itself: following links can duplicate history
+            // or recurse indefinitely through a link to an ancestor.
+            if kind.is_dir() {
                 stack.push(path);
-            } else if path
-                .extension()
-                .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
+            } else if kind.is_file()
+                && path
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("jsonl"))
             {
                 found.push(path);
             }
         }
     }
-    found
+    Ok(found)
 }
 
 #[cfg(test)]
@@ -271,12 +288,23 @@ mod tests {
             .set_times(std::fs::FileTimes::new().set_modified(SystemTime::from(fixture_now())))
             .unwrap();
         let rollup = scan_root(root.path(), fixture_now()).expect("scan fixture");
-        let expected_date = DateTime::<Utc>::from_timestamp_millis(1_793_110_006_000)
-            .unwrap()
-            .with_timezone(&Local)
-            .date_naive();
-        assert_eq!(rollup.daily.len(), 1);
-        assert_eq!(rollup.daily[0].date, expected_date);
+        // The third accounting event can be on the next local day (UTC+09).
+        let mut expected_days = std::collections::BTreeMap::new();
+        for stamp in [1_793_110_006_000, 1_793_110_007_000, 1_793_113_600_000] {
+            let date = DateTime::<Utc>::from_timestamp_millis(stamp)
+                .unwrap()
+                .with_timezone(&Local)
+                .date_naive();
+            *expected_days.entry(date).or_insert(0_u64) += 1;
+        }
+        assert_eq!(
+            rollup
+                .daily
+                .iter()
+                .map(|day| (day.date, day.usage.requests))
+                .collect::<Vec<_>>(),
+            expected_days.into_iter().collect::<Vec<_>>()
+        );
         let mut total = TokenUsage::default();
         for day in &rollup.daily {
             total.add(&day.usage);
@@ -312,5 +340,37 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let rollup = scan_root(&root.path().join("missing"), fixture_now()).expect("scan");
         assert!(rollup.daily.is_empty());
+    }
+
+    #[test]
+    fn unreadable_transcript_does_not_return_a_partial_rollup() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("good.jsonl"),
+            include_str!("../../fixtures/workbuddy/sample-session.jsonl"),
+        )
+        .unwrap();
+        std::fs::write(root.path().join("bad.jsonl"), [0xff, b'\n']).unwrap();
+        assert!(scan_root(root.path(), fixture_now()).is_err());
+        // Discovery and metadata failures must not look like empty history.
+        assert!(scan_root(&root.path().join("good.jsonl"), fixture_now()).is_err());
+        assert!(
+            modified_after(&root.path().join("missing.jsonl"), SystemTime::UNIX_EPOCH).is_err()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn discovery_skips_symlinked_files_and_directory_cycles() {
+        use std::os::unix::fs::symlink;
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let path = project.join("session.jsonl");
+        std::fs::write(&path, "").unwrap();
+        symlink(&project, root.path().join("alias")).unwrap();
+        symlink(root.path(), project.join("cycle")).unwrap();
+        symlink(&path, project.join("alias.jsonl")).unwrap();
+        assert_eq!(transcripts(root.path()).unwrap(), vec![path]);
     }
 }
