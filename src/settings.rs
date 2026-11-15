@@ -657,6 +657,77 @@ impl PopupTabMode {
     }
 }
 
+/// OpenCode Go API keys tracked together in one provider instance. Go Teams
+/// members have independent limits, so a single instance can query several
+/// keys at once. The key material itself lives in the protected secret store.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct OpenCodeKeys {
+    /// Stable key identities in display order.
+    pub key_ids: Vec<String>,
+    /// Optional local display names, keyed by the stable identity.
+    pub key_names: std::collections::BTreeMap<String, String>,
+}
+
+impl Default for OpenCodeKeys {
+    fn default() -> Self {
+        Self::legacy()
+    }
+}
+
+impl OpenCodeKeys {
+    /// The single key that predates multi-key tracking. Its secret keeps the
+    /// original name, so existing installations need no migration.
+    pub const LEGACY_KEY_ID: &'static str = "primary";
+
+    /// An account whose only key is the pre-multi-key credential.
+    pub fn legacy() -> Self {
+        Self {
+            key_ids: vec![Self::LEGACY_KEY_ID.into()],
+            key_names: Default::default(),
+        }
+    }
+
+    pub fn new_key_id() -> String {
+        new_id("opencode-key")
+    }
+
+    /// The user-visible name for a key, when one was chosen.
+    pub fn name_of(&self, id: &str) -> Option<&str> {
+        self.key_names
+            .get(id)
+            .map(String::as_str)
+            .filter(|name| !name.trim().is_empty())
+    }
+
+    /// Drops empty and duplicate identities, keeps the chosen names aligned,
+    /// and guarantees one key so the instance always has something to query.
+    pub fn normalize(&mut self) -> bool {
+        let mut changed = false;
+        let mut ids = Vec::with_capacity(self.key_ids.len());
+        for id in std::mem::take(&mut self.key_ids) {
+            let id = id.trim().to_owned();
+            if id.is_empty() || ids.contains(&id) {
+                changed = true;
+                continue;
+            }
+            ids.push(id);
+        }
+        if ids.is_empty() {
+            ids.push(Self::LEGACY_KEY_ID.into());
+            changed = true;
+        }
+        self.key_ids = ids;
+        let before = self.key_names.clone();
+        self.key_names.retain(|id, name| {
+            *name = name.trim().to_owned();
+            self.key_ids.contains(id) && !name.is_empty()
+        });
+        changed |= before != self.key_names;
+        changed
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct OpenRouterAccount {

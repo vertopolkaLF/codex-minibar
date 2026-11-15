@@ -18,7 +18,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 
 use crate::providers::registry::ProviderKind;
-use crate::settings::{LimitRefreshInterval, OpenRouterAccount};
+use crate::settings::{LimitRefreshInterval, OpenCodeKeys, OpenRouterAccount};
 
 /// Identity of one provider instance, `Copy` so it works as a cheap key.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -361,6 +361,9 @@ pub struct ProviderInstance {
     /// OpenRouter key identities; the key material lives in protected storage.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub openrouter: Option<OpenRouterAccount>,
+    /// OpenCode Go key identities; the key material lives in protected storage.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub opencode: Option<OpenCodeKeys>,
     /// Advanced when this instance's credential changes so queued results from
     /// the replaced worker are rejected.
     pub credentials_revision: u64,
@@ -408,6 +411,7 @@ impl ProviderInstance {
                 name: driver.display_name().into(),
                 ..OpenRouterAccount::legacy()
             }),
+            opencode: (driver == ProviderKind::OpenCodeGo).then(OpenCodeKeys::legacy),
             credentials_revision: 0,
         }
     }
@@ -471,6 +475,14 @@ impl ProviderInstance {
         self.source == InstanceSource::Manual
     }
 
+    /// The OpenCode Go keys this instance queries, in settings order. Empty
+    /// until settings normalized an instance from before multi-key support.
+    pub fn opencode_keys(&self) -> &[String] {
+        self.opencode
+            .as_ref()
+            .map_or(&[][..], |keys| keys.key_ids.as_slice())
+    }
+
     /// Whether the credential Usage Stats are read with is configured.
     pub fn has_usage_stats_credential(&self) -> bool {
         crate::providers::registry::descriptor(self.driver).usage_stats
@@ -508,6 +520,7 @@ impl ProviderInstance {
             self.openrouter
                 .as_ref()
                 .map(|account| account.api_key_ids.clone()),
+            self.opencode.as_ref().map(|keys| keys.key_ids.clone()),
             self.credentials_revision,
         )
     }
@@ -541,6 +554,12 @@ impl ProviderInstance {
                 changed = true;
             }
         } else if self.openrouter.take().is_some() {
+            changed = true;
+        }
+        if self.driver == ProviderKind::OpenCodeGo {
+            let keys = self.opencode.get_or_insert_with(OpenCodeKeys::legacy);
+            changed |= keys.normalize();
+        } else if self.opencode.take().is_some() {
             changed = true;
         }
         if self.driver != ProviderKind::Claude && self.source == InstanceSource::Manual {
@@ -838,6 +857,32 @@ mod tests {
         assert_eq!(badge_text("", "x"), "X");
         assert_eq!(badge_text(" w 1 ", "Work"), "W1");
         assert_eq!(badge_text("abcd", "Work"), "ABC");
+    }
+
+    #[test]
+    fn opencode_go_instances_track_one_legacy_key_and_zen_does_not() {
+        let go = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        assert_eq!(go.opencode_keys(), [OpenCodeKeys::LEGACY_KEY_ID]);
+        let zen = ProviderInstance::primary(ProviderKind::OpenCodeZen);
+        assert!(zen.opencode.is_none());
+        assert_eq!(zen.opencode_keys().len(), 0);
+    }
+
+    #[test]
+    fn normalizing_restores_the_legacy_slot_and_drops_unknown_names() {
+        let mut instance = ProviderInstance::primary(ProviderKind::OpenCodeGo);
+        instance.opencode = Some(OpenCodeKeys {
+            key_ids: vec!["work".into(), "work".into(), " ".into()],
+            key_names: std::collections::BTreeMap::from([
+                ("work".into(), " Work ".into()),
+                ("ghost".into(), "Ghost".into()),
+            ]),
+        });
+        assert!(instance.normalize());
+        let keys = instance.opencode.as_ref().unwrap();
+        assert_eq!(keys.key_ids, ["work"]);
+        assert_eq!(keys.name_of("work"), Some("Work"));
+        assert_eq!(keys.name_of("ghost"), None);
     }
 
     #[test]

@@ -15,7 +15,7 @@ limits, not an execution environment, so it does not have to be a folder.
 | Claude | yes | `CLAUDE_CONFIG_DIR` or manual credential |
 | Codex | yes | `CODEX_HOME` |
 | OpenCode Zen | yes | API key |
-| OpenCode Go | yes | API key |
+| OpenCode Go | yes | API key (several keys per instance, see [`opencode-go-keys.md`](opencode-go-keys.md)) |
 | OpenRouter | yes | API keys (former OpenRouter accounts) |
 | Cursor, Grok, Kiro, Antigravity | no (one instance) | none added |
 

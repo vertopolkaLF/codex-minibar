@@ -116,19 +116,6 @@ fn bump_credentials(provider: ProviderId) -> anyhow::Result<()> {
     })
 }
 
-fn persist_opencode_manual_key(provider: ProviderId, value: Option<String>) -> anyhow::Result<()> {
-    let rollback = crate::providers::opencode::apply_manual_key(provider, value.as_deref())?;
-    if let Err(error) = bump_credentials(provider) {
-        return match crate::providers::opencode::restore_manual_key(rollback) {
-            Ok(()) => Err(error),
-            Err(rollback_error) => Err(anyhow::anyhow!(
-                "could not save credential revision ({error:#}); restoring the protected key also failed ({rollback_error:#})"
-            )),
-        };
-    }
-    Ok(())
-}
-
 /// Keep the existing credential when validation or the settings commit fails.
 fn persist_claude_manual_credential(provider: ProviderId, credential: &str) -> anyhow::Result<()> {
     let previous = crate::providers::claude::load_manual_credential(provider.id())?;

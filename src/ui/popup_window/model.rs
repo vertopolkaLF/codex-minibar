@@ -138,6 +138,11 @@ pub(crate) enum Card<'a> {
         provider: ProviderId,
         account: &'a str,
     },
+    /// The provider tab's OpenCode Go key list: one row per tracked key with
+    /// that key's own quota windows.
+    OpenCodeGoKeys {
+        provider: ProviderId,
+    },
     AccountHeading {
         id: &'a str,
         name: &'a str,
@@ -268,6 +273,19 @@ pub(crate) fn provider_cards<'a>(
     // Closed incidents stay in the plan so they can fold away and back.
     if let Some(status) = status {
         cards.push(Card::ProviderIncidents(status.clone()));
+    }
+    // Go Teams members have independent limits, so the provider tab lists
+    // every tracked key's own windows. A single healthy key already has its
+    // ordinary cards, and an error belongs to the key that produced it.
+    if kind == ProviderKind::OpenCodeGo
+        && options.surface == PopupSurface::ProviderTab
+        && (limits.opencode_go_keys.len() > 1
+            || limits
+                .opencode_go_keys
+                .iter()
+                .any(|key| key.error.is_some()))
+    {
+        cards.push(Card::OpenCodeGoKeys { provider });
     }
     let visible = |brick: &str| {
         options.popup_visibility.is_visible_for_instance(

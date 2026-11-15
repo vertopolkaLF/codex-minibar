@@ -77,7 +77,7 @@ fn status_line(instance: &ProviderInstance, status: &InstallStatus) -> (String, 
         },
         ProviderReadiness::Ready => match copy.credential {
             Credential::ApiKey => {
-                if crate::providers::opencode::key_is_configured(instance.provider_id()) {
+                if crate::providers::opencode::has_saved_key(instance) {
                     crate::i18n::tr("using-a-saved-api-key").to_owned()
                 } else {
                     crate::i18n::tr("using-opencode-sign-in-or-local-history").to_owned()
@@ -474,6 +474,9 @@ impl SettingsWindow {
         let provider = instance.provider_id();
         match crate::providers::drivers::settings_copy(instance.driver).credential {
             Credential::KeyAccounts => return self.openrouter_section(instance, k, cx),
+            Credential::ApiKey if instance.driver == ProviderKind::OpenCodeGo => {
+                return self.opencode_go_keys_section(instance, k, cx);
+            }
             Credential::ApiKey => return self.opencode_key_section(instance, k, cx),
             Credential::Login
                 if !crate::providers::registry::descriptor(instance.driver).config_folder =>
@@ -1189,10 +1192,14 @@ impl SettingsWindow {
                     ],
                     Self::h(cx, move |this, choice: usize, window, cx| {
                         let kind = if choice == 1 {
-                            ProviderDialogKind::RemoveOpenCodeKey { provider }
+                            ProviderDialogKind::RemoveOpenCodeKey {
+                                provider,
+                                key_id: None,
+                            }
                         } else {
                             ProviderDialogKind::OpenCodeKey {
                                 provider,
+                                key_id: None,
                                 replace: true,
                             }
                         };
@@ -1215,6 +1222,7 @@ impl SettingsWindow {
                             this.open_provider_dialog(
                                 ProviderDialog::new(ProviderDialogKind::OpenCodeKey {
                                     provider,
+                                    key_id: None,
                                     replace: false,
                                 }),
                                 window,
@@ -1227,6 +1235,104 @@ impl SettingsWindow {
         vec![
             kit::section_heading(k, crate::i18n::tr("account")),
             kit::row_card(k, row),
+        ]
+    }
+
+    /// One row per tracked OpenCode Go key, plus the add row. Go Teams members
+    /// have independent limits, so every key is queried on its own.
+    fn opencode_go_keys_section(
+        &mut self,
+        instance: &ProviderInstance,
+        k: &mut Kit,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let provider = instance.provider_id();
+        let key_ids = crate::providers::opencode::tracked_key_ids(instance);
+        let multiple = key_ids.len() > 1;
+        let mut rows: Vec<AnyElement> = Vec::with_capacity(key_ids.len() + 1);
+        for (index, key_id) in key_ids.iter().enumerate() {
+            let hint = crate::providers::opencode::key_hint(provider, key_id)
+                .ok()
+                .flatten();
+            let name = instance
+                .opencode
+                .as_ref()
+                .and_then(|keys| keys.name_of(key_id))
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    crate::i18n::format("key-39df89", &[("v0", (index + 1).to_string())])
+                });
+            let mut items = vec![
+                MenuItem::new(crate::i18n::tr("rename-key")).icon("pencil-simple-fill"),
+                MenuItem::new(crate::i18n::tr("replace-key")).icon("arrow-clockwise-bold"),
+            ];
+            if multiple {
+                items.push(
+                    MenuItem::new(crate::i18n::tr("remove-key"))
+                        .icon("trash-fill")
+                        .danger(),
+                );
+            }
+            let key_id = key_id.clone();
+            let row = Row::new(format!("opencode-go-key-{key_id}"), name)
+                .icon(kit::row_icon(k, "key-fill"))
+                .description(
+                    k,
+                    hint.unwrap_or_else(|| crate::i18n::tr("not-saved").to_owned()),
+                )
+                .trailing(kit::more_menu(
+                    k,
+                    format!("opencode-go-key-menu-{key_id}"),
+                    items,
+                    Self::h(cx, move |this, choice: usize, window, cx| {
+                        let key_id = key_id.clone();
+                        let kind = match choice {
+                            0 => ProviderDialogKind::RenameOpenCodeKey { provider, key_id },
+                            1 => ProviderDialogKind::OpenCodeKey {
+                                provider,
+                                key_id: Some(key_id),
+                                replace: true,
+                            },
+                            _ => ProviderDialogKind::RemoveOpenCodeKey {
+                                provider,
+                                key_id: Some(key_id),
+                            },
+                        };
+                        this.open_provider_dialog(ProviderDialog::new(kind), window, cx)
+                    }),
+                ));
+            rows.push(row.render(k));
+        }
+        rows.push(
+            Row::new("opencode-go-add-key", crate::i18n::tr("api-keys"))
+                .icon(kit::row_icon(k, "plus-bold"))
+                .description(
+                    k,
+                    crate::i18n::tr("add-the-key-of-the-account-this-instance-tracks"),
+                )
+                .trailing(
+                    Button::new("opencode-go-add-key-button", crate::i18n::tr("add-api-key"))
+                        .with_icon("plus-bold")
+                        .on_click(Self::h(cx, move |this, (), window, cx| {
+                            this.open_provider_dialog(
+                                ProviderDialog::new(ProviderDialogKind::OpenCodeKey {
+                                    provider,
+                                    // A new row needs its own identity; the
+                                    // legacy slot holds the existing key.
+                                    key_id: Some(crate::settings::OpenCodeKeys::new_key_id()),
+                                    replace: false,
+                                }),
+                                window,
+                                cx,
+                            )
+                        }))
+                        .render(k),
+                )
+                .render(k),
+        );
+        vec![
+            kit::section_heading(k, crate::i18n::tr("account")),
+            kit::card(k, rows),
         ]
     }
 

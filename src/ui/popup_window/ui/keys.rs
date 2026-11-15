@@ -32,7 +32,7 @@ use crate::ui::gui::{
 };
 use crate::{
     providers::openrouter::admin::{self, KeyPatch, LimitReset, ManagedKey, NewKey},
-    quota::limits::SpendingSummary,
+    quota::limits::{LimitWindow, SpendingSummary},
     settings::OpenRouterAccount,
     ui::popup_window::*,
 };
@@ -2727,6 +2727,112 @@ fn editor_patch(key: &ManagedKey, limit: Option<u64>, reset: LimitReset, byok: b
         limit_reset: (reset != key.limit_reset).then_some(reset),
         include_byok_in_limit: (byok != key.include_byok_in_limit).then_some(byok),
         disabled: None,
+    }
+}
+
+impl PopupRoot {
+    /// The OpenCode Go tab's key list: each tracked key with its own 5-hour,
+    /// weekly and monthly windows, or the reason it could not be read.
+    pub(super) fn render_opencode_go_keys(&self, provider: ProviderId) -> AnyElement {
+        let palette = self.palette.clone();
+        let keys = self.limits.get(provider).opencode_go_keys.clone();
+        let mut card = components::card(&palette)
+            .flex()
+            .flex_col()
+            .gap(px(12.0))
+            .px(px(12.0))
+            .py(px(10.0));
+        for (index, key) in keys.iter().enumerate() {
+            let name = key
+                .local_name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    crate::i18n::format("key-39df89", &[("v0", (index + 1).to_string())])
+                });
+            let mut block = div()
+                .flex()
+                .flex_col()
+                .gap(px(6.0))
+                .child(components::split_row(
+                    nowrap(components::body_strong(name, palette.text_primary)),
+                    nowrap(components::caption(
+                        key.masked_key.clone().unwrap_or_default(),
+                        palette.text_tertiary,
+                    )),
+                ));
+            if let Some(error) = key.error.as_deref() {
+                block = block.child(nowrap(components::caption(
+                    error.to_owned(),
+                    palette.caution,
+                )));
+            } else {
+                let monthly = key.monthly.clone().unwrap_or_default();
+                block = block.child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap(px(12.0))
+                        .child(self.go_key_window(
+                            crate::i18n::tr("short-5h"),
+                            &key.rolling,
+                            &palette,
+                        ))
+                        .child(self.go_key_window(
+                            crate::i18n::tr("short-7d"),
+                            &key.weekly,
+                            &palette,
+                        ))
+                        .child(self.go_key_window(crate::i18n::tr("monthly"), &monthly, &palette)),
+                );
+            }
+            card = card.child(block);
+            if index + 1 < keys.len() {
+                card = card.child(components::rule(&palette));
+            }
+        }
+        card.into_any_element()
+    }
+
+    /// One labelled quota bar for a key's window, honouring the used/remaining
+    /// preference shared by every other bar in the popup.
+    fn go_key_window(
+        &self,
+        label: &'static str,
+        window: &LimitWindow,
+        palette: &super::theme::Palette,
+    ) -> AnyElement {
+        let used = window.used_percent.map(f32::from);
+        let shown = match (used, self.ui.settings.show_used_percentage) {
+            (Some(used), true) => used,
+            (Some(used), false) => 100.0 - used,
+            (None, _) => 0.0,
+        };
+        let fill = match used.unwrap_or_default() {
+            used if used >= 90.0 => palette.critical,
+            used if used >= 75.0 => palette.caution,
+            _ => palette.accent,
+        };
+        let value = if window.used_percent.is_some() {
+            format!("{shown:.0}%")
+        } else {
+            "\u{2013}".to_owned()
+        };
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(3.0))
+            .flex_1()
+            .min_w_0()
+            .child(nowrap(components::caption(
+                label.to_owned(),
+                palette.text_tertiary,
+            )))
+            .child(components::progress_track(shown, None, 0, fill, palette))
+            .child(nowrap(components::caption(value, palette.text_secondary)))
+            .into_any_element()
     }
 }
 

@@ -57,12 +57,20 @@ pub(crate) enum ProviderDialogKind {
     RemoveOpenRouterManagementKey {
         account_id: String,
     },
+    /// `key_id: None` addresses the legacy slot (Zen's single key and a
+    /// pre-multi-key Go instance); `Some` replaces that tracked key.
     OpenCodeKey {
         provider: ProviderId,
+        key_id: Option<String>,
         replace: bool,
+    },
+    RenameOpenCodeKey {
+        provider: ProviderId,
+        key_id: String,
     },
     RemoveOpenCodeKey {
         provider: ProviderId,
+        key_id: Option<String>,
     },
 }
 
@@ -795,7 +803,9 @@ impl SettingsWindow {
                     crate::i18n::tr("remove"),
                 )
             }
-            ProviderDialogKind::OpenCodeKey { provider, replace } => {
+            ProviderDialogKind::OpenCodeKey {
+                provider, replace, ..
+            } => {
                 fields.push(kit::caption(
                     k,
                     crate::i18n::format("for", &[("v0", (instance_name(provider)).to_string())]),
@@ -826,7 +836,37 @@ impl SettingsWindow {
                     crate::i18n::tr("save-key"),
                 )
             }
-            ProviderDialogKind::RemoveOpenCodeKey { provider } => {
+            ProviderDialogKind::RenameOpenCodeKey {
+                provider, key_id, ..
+            } => {
+                let current = crate::settings::store::read()
+                    .instance(*provider)
+                    .and_then(|instance| instance.opencode.as_ref())
+                    .and_then(|keys| keys.name_of(key_id))
+                    .unwrap_or_default()
+                    .to_owned();
+                fields.push(kit::caption(
+                    k,
+                    crate::i18n::format("for", &[("v0", (instance_name(provider)).to_string())]),
+                ));
+                fields.push(self.dialog_input(
+                    k,
+                    FIELD_NAME,
+                    crate::i18n::tr("key-name"),
+                    crate::i18n::tr("e-g-personal"),
+                    &current,
+                    false,
+                    Some(crate::i18n::tr("key-name-optional")),
+                    window,
+                    cx,
+                ));
+                first_input = Some(FIELD_NAME);
+                (
+                    crate::i18n::tr("rename-key").to_owned(),
+                    crate::i18n::tr("save"),
+                )
+            }
+            ProviderDialogKind::RemoveOpenCodeKey { provider, .. } => {
                 fields.push(kit::caption(
                     k,
                     crate::i18n::format(
@@ -1296,19 +1336,48 @@ impl SettingsWindow {
                     },
                 );
             }
-            ProviderDialogKind::OpenCodeKey { provider, .. } => {
+            ProviderDialogKind::OpenCodeKey {
+                provider, key_id, ..
+            } => {
                 if key.is_empty() {
                     return self.fail_dialog(crate::i18n::tr("paste-a-key-first"), cx);
                 }
+                let target = key_id
+                    .unwrap_or_else(|| crate::settings::OpenCodeKeys::LEGACY_KEY_ID.to_owned());
                 self.run_dialog_then(
                     cx,
                     move || {
-                        persist_opencode_manual_key(provider, Some(key)).map_err(|error| {
-                            anyhow::anyhow!(crate::i18n::format(
-                                "could-not-save-the-key-error",
-                                &[("error", format!("{:#}", error))],
-                            ))
-                        })
+                        let rollback =
+                            crate::providers::opencode::apply_key(provider, &target, Some(&key))
+                                .map_err(|error| {
+                                    anyhow::anyhow!(crate::i18n::format(
+                                        "could-not-save-the-key-error",
+                                        &[("error", format!("{:#}", error))],
+                                    ))
+                                })?;
+                        let tracked = target.clone();
+                        let saved = persist_instance(provider, move |instance| {
+                            let keys = instance
+                                .opencode
+                                .get_or_insert_with(crate::settings::OpenCodeKeys::legacy);
+                            if !keys.key_ids.iter().any(|id| id == &tracked) {
+                                keys.key_ids.push(tracked.clone());
+                            }
+                            instance.credentials_revision =
+                                instance.credentials_revision.wrapping_add(1);
+                            Ok(())
+                        });
+                        match saved {
+                            Ok(()) => Ok(()),
+                            Err(error) => match crate::providers::opencode::restore_manual_key(
+                                rollback,
+                            ) {
+                                Ok(()) => Err(error),
+                                Err(rollback_error) => Err(anyhow::anyhow!(
+                                    "could not save the key ({error:#}); restoring the previous key also failed ({rollback_error:#})"
+                                )),
+                            },
+                        }
                     },
                     |this, (), cx| {
                         this.reload_settings();
@@ -1321,16 +1390,69 @@ impl SettingsWindow {
                     },
                 );
             }
-            ProviderDialogKind::RemoveOpenCodeKey { provider } => {
+            ProviderDialogKind::RenameOpenCodeKey { provider, key_id } => {
                 self.run_dialog_then(
                     cx,
                     move || {
-                        persist_opencode_manual_key(provider, None).map_err(|error| {
+                        let tracked = key_id.clone();
+                        let chosen = name.clone();
+                        persist_instance(provider, move |instance| {
+                            let keys = instance
+                                .opencode
+                                .get_or_insert_with(crate::settings::OpenCodeKeys::legacy);
+                            if chosen.is_empty() {
+                                keys.key_names.remove(&tracked);
+                            } else {
+                                keys.key_names.insert(tracked.clone(), chosen.clone());
+                            }
+                            Ok(())
+                        })
+                        .map_err(|error| {
+                            anyhow::anyhow!(crate::i18n::format(
+                                "could-not-rename-the-key-error",
+                                &[("error", format!("{:#}", error))],
+                            ))
+                        })
+                    },
+                    |this, (), cx| {
+                        this.reload_settings();
+                        this.finish_dialog(
+                            DialogOutcome {
+                                notice: crate::i18n::tr("api-key-renamed").into(),
+                            },
+                            cx,
+                        );
+                    },
+                );
+            }
+            ProviderDialogKind::RemoveOpenCodeKey { provider, key_id } => {
+                let target = key_id
+                    .unwrap_or_else(|| crate::settings::OpenCodeKeys::LEGACY_KEY_ID.to_owned());
+                self.run_dialog_then(
+                    cx,
+                    move || {
+                        let tracked = target.clone();
+                        persist_instance(provider, move |instance| {
+                            let keys = instance
+                                .opencode
+                                .get_or_insert_with(crate::settings::OpenCodeKeys::legacy);
+                            // The last slot stays so the instance keeps one
+                            // row; only its secret is cleared.
+                            if keys.key_ids.len() > 1 {
+                                keys.key_ids.retain(|id| id != &tracked);
+                            }
+                            keys.key_names.remove(&tracked);
+                            instance.credentials_revision =
+                                instance.credentials_revision.wrapping_add(1);
+                            Ok(())
+                        })
+                        .map_err(|error| {
                             anyhow::anyhow!(crate::i18n::format(
                                 "could-not-remove-the-key-error",
                                 &[("error", format!("{:#}", error))],
                             ))
-                        })
+                        })?;
+                        crate::providers::opencode::forget_key(provider, &target)
                     },
                     |this, (), cx| {
                         this.reload_settings();

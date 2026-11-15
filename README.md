@@ -120,6 +120,8 @@ See spending per key and manage OpenRouter API keys from the popup's OpenRouter 
   on weekends.
 - Usage pace indicators show whether you are burning a window faster than it resets.
 - Kiro's monthly included credits and reset date, and Claude cloud-session credit balances.
+- Several OpenCode Go API keys per provider, each with its own five-hour, weekly and monthly
+  windows, for Go Teams members and extra workspaces.
 - Command Code's five-hour, weekly and monthly credit windows, plus any purchased top-up balance.
 - Warnings before a Claude login stops renewing.
 - An optional Stream Deck companion with quota keys that open the popup or a provider tab and
@@ -168,6 +170,18 @@ shows only the rolling windows. Usage statistics come from the CLI's local sessi
 `~/.commandcode/projects`, using the credit cost the CLI recorded for each response; transcripts
 written by CLI versions that did not record token usage contribute nothing.
 Browser-session access is not used.
+
+### Add another OpenCode Go key
+
+Open **Settings → Providers → OpenCode Go → Add API key** for every key that
+belongs to the subscription. Go Teams bills per member and gives each member
+their own limits, so a workspace can need several keys at once. Minibar queries
+each key separately and lists every key's five-hour, weekly and monthly windows
+on the OpenCode Go tab, while Home, the tray and notifications keep using the
+most consumed key. Rename a key to tell members apart, or remove it when the
+member leaves. Only the key identities live in the settings file; the keys
+themselves stay in Windows user-scoped encrypted storage. See
+[`docs/opencode-go-keys.md`](docs/opencode-go-keys.md).
 
 ### Add another Codex account
 

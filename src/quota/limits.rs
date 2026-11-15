@@ -129,6 +129,46 @@ pub struct OpenRouterAccountSnapshot {
     pub total_credits_microusd: Option<u64>,
 }
 
+/// One tracked OpenCode Go API key and the quota windows its own usage
+/// endpoint reported. Go Teams members have independent limits, so one
+/// provider instance can hold several keys.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OpenCodeGoKeySnapshot {
+    /// Stable key identity from settings. The key material never leaves the
+    /// protected secret store.
+    pub id: String,
+    /// User-selected name, separate from the stored key.
+    #[serde(default)]
+    pub local_name: Option<String>,
+    /// Collapsed key fingerprint for display, never the full secret.
+    #[serde(default)]
+    pub masked_key: Option<String>,
+    /// Five-hour window for this key.
+    pub rolling: LimitWindow,
+    /// Weekly window for this key.
+    pub weekly: LimitWindow,
+    /// Monthly window, absent when the API omits it.
+    #[serde(default)]
+    pub monthly: Option<LimitWindow>,
+    /// Why this key produced no sample, such as an HTTP error or a missing
+    /// credential. Successful keys keep their windows.
+    #[serde(default)]
+    pub error: Option<String>,
+    pub sampled_at: DateTime<Utc>,
+}
+
+impl OpenCodeGoKeySnapshot {
+    /// Whether the endpoint reported at least one usable window.
+    pub fn has_windows(&self) -> bool {
+        !self.rolling.is_empty()
+            || !self.weekly.is_empty()
+            || self
+                .monthly
+                .as_ref()
+                .is_some_and(|monthly| !monthly.is_empty())
+    }
+}
+
 /// A per-account sample cached before accounts became provider instances.
 /// Only read, so startup can seed each migrated instance with its last quota.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -299,6 +339,10 @@ pub struct RateLimits {
     /// configured. Other providers leave this empty.
     #[serde(default)]
     pub openrouter_accounts: Vec<OpenRouterAccountSnapshot>,
+    /// OpenCode Go keys tracked for this instance, in settings order. Other
+    /// providers leave this empty.
+    #[serde(default)]
+    pub opencode_go_keys: Vec<OpenCodeGoKeySnapshot>,
     /// Per-account samples written before provider instances existed.
     #[serde(
         default,

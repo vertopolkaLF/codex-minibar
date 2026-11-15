@@ -195,6 +195,7 @@ impl PopupRoot {
             Card::OpenRouterKeys { provider, account } => self
                 .render_keys_section(*provider, account, window, cx)
                 .unwrap_or_else(|| div().into_any_element()),
+            Card::OpenCodeGoKeys { provider } => self.render_opencode_go_keys(*provider),
             Card::AccountHeading {
                 id,
                 name,

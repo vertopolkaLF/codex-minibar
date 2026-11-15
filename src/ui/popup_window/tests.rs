@@ -997,6 +997,93 @@ fn openrouter_provider_tab_lists_keys_instead_of_spending_cards() {
 }
 
 #[test]
+fn opencode_go_tab_lists_every_tracked_key_but_home_keeps_aggregate_cards() {
+    use crate::quota::limits::{LimitWindow, OpenCodeGoKeySnapshot};
+
+    let mut limits = RateLimits::default();
+    for (id, used) in [("first", 10), ("second", 20)] {
+        limits.opencode_go_keys.push(OpenCodeGoKeySnapshot {
+            id: id.into(),
+            rolling: LimitWindow {
+                used_percent: Some(used),
+                ..LimitWindow::default()
+            },
+            weekly: LimitWindow {
+                used_percent: Some(used),
+                ..LimitWindow::default()
+            },
+            ..OpenCodeGoKeySnapshot::default()
+        });
+    }
+    let lists = |surface| {
+        test_cards(
+            ProviderKind::OpenCodeGo,
+            true,
+            &limits,
+            &all_visible(),
+            surface,
+            true,
+            false,
+            false,
+        )
+        .iter()
+        .filter(|card| matches!(card, Card::OpenCodeGoKeys { .. }))
+        .count()
+    };
+    assert_eq!(lists(PopupSurface::ProviderTab), 1);
+    assert_eq!(lists(PopupSurface::HomeTab), 0);
+
+    // One healthy key already has its ordinary cards.
+    let mut single = RateLimits::default();
+    single.opencode_go_keys.push(OpenCodeGoKeySnapshot {
+        id: "only".into(),
+        rolling: LimitWindow {
+            used_percent: Some(10),
+            ..LimitWindow::default()
+        },
+        ..OpenCodeGoKeySnapshot::default()
+    });
+    let single_cards = test_cards(
+        ProviderKind::OpenCodeGo,
+        true,
+        &single,
+        &all_visible(),
+        PopupSurface::ProviderTab,
+        true,
+        false,
+        false,
+    );
+    assert!(
+        !single_cards
+            .iter()
+            .any(|card| matches!(card, Card::OpenCodeGoKeys { .. }))
+    );
+
+    // A failing key stays visible even when it is the only one.
+    let mut failing = RateLimits::default();
+    failing.opencode_go_keys.push(OpenCodeGoKeySnapshot {
+        id: "only".into(),
+        error: Some("OpenCode Go API returned HTTP 401".into()),
+        ..OpenCodeGoKeySnapshot::default()
+    });
+    let failing_cards = test_cards(
+        ProviderKind::OpenCodeGo,
+        true,
+        &failing,
+        &all_visible(),
+        PopupSurface::ProviderTab,
+        true,
+        false,
+        false,
+    );
+    assert!(
+        failing_cards
+            .iter()
+            .any(|card| matches!(card, Card::OpenCodeGoKeys { .. }))
+    );
+}
+
+#[test]
 fn duplicate_account_names_keep_separate_heading_identities() {
     let limits = RateLimits {
         openrouter_accounts: ["account-a", "account-b"]
