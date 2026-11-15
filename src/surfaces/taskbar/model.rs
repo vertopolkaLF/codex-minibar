@@ -127,7 +127,10 @@ pub(crate) struct CardSection {
     /// Section heading: the instance, or `instance · key` for one key.
     pub(crate) title: String,
     pub(crate) icon: Icon,
+    /// Provider plan, drawn beside the heading.
     pub(crate) plan: Option<String>,
+    /// Masked key of a key-scoped section, drawn on its own line.
+    pub(crate) key_masked: Option<String>,
     pub(crate) rows: Vec<Row>,
     /// Today's tokens and their API value, or spend for pay-as-you-go
     /// providers; `None` without usage statistics.
@@ -326,17 +329,23 @@ fn card_sections(
                 None => aggregate_rows(provider, &configured, limits, appearance, now),
             };
             let provider_limits = limits.get(provider);
-            let plan = match key_id.as_deref() {
-                Some(key_id) => provider_limits
-                    .opencode_go_keys
-                    .iter()
-                    .find(|key| key.id == key_id)
-                    .and_then(|key| key.masked_key.clone()),
-                None => provider_limits
-                    .plan_type
-                    .as_deref()
-                    .filter(|plan| !plan.trim().is_empty())
-                    .map(crate::format::capitalize_plan_name),
+            let (plan, key_masked) = match key_id.as_deref() {
+                Some(key_id) => (
+                    None,
+                    provider_limits
+                        .opencode_go_keys
+                        .iter()
+                        .find(|key| key.id == key_id)
+                        .and_then(|key| key.masked_key.clone()),
+                ),
+                None => (
+                    provider_limits
+                        .plan_type
+                        .as_deref()
+                        .filter(|plan| !plan.trim().is_empty())
+                        .map(crate::format::capitalize_plan_name),
+                    None,
+                ),
             };
             CardSection {
                 provider,
@@ -352,6 +361,7 @@ fn card_sections(
                 },
                 icon: icon_for(provider, appearance),
                 plan,
+                key_masked,
                 rows,
                 today: key_id
                     .is_none()
@@ -385,6 +395,12 @@ fn key_rows(
                     limit_value,
                     ..TrayIndicator::for_key(provider, key_id, metric_id)
                 });
+            // A window the key does not report has no lane to draw.
+            crate::quota::widget_data::resolve_indicator(
+                provider,
+                limits.get(provider),
+                &indicator,
+            )?;
             resolve_row(&indicator, limits, appearance, now)
         })
         .collect()
@@ -740,6 +756,54 @@ mod tests {
         assert_eq!(view.card.len(), 1);
         assert_eq!(view.card[0].title, provider.qualified_name());
         assert_eq!(view.card[0].plan.as_deref(), Some("Go"));
+        assert_eq!(view.card[0].key_masked, None);
         assert_eq!(view.rows[0].value, "80%");
+    }
+
+    #[test]
+    fn a_key_section_keeps_its_masked_key_off_the_heading() {
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let mut limits = ProviderLimits::default();
+        {
+            let snapshot = limits.get_mut(provider);
+            snapshot.plan_type = Some("Go".into());
+            snapshot.opencode_go_keys = vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: "key-a".into(),
+                masked_key: Some("\u{2026}f9eV".into()),
+                rolling: LimitWindow {
+                    used_percent: Some(10),
+                    ..LimitWindow::default()
+                },
+                weekly: LimitWindow {
+                    used_percent: Some(20),
+                    ..LimitWindow::default()
+                },
+                ..Default::default()
+            }];
+        }
+        let widget = TaskbarWidget {
+            style: TaskbarWidgetStyle::Glance,
+            show_icon: false,
+            indicators: vec![TrayIndicator::for_key(
+                provider,
+                "key-a",
+                "opencode-go.weekly",
+            )],
+            ..TaskbarWidget::for_provider(provider)
+        };
+        let view = resolve(
+            &widget,
+            &limits,
+            Appearance {
+                light: false,
+                colored_icons: false,
+                accent: [0, 0, 0],
+            },
+        );
+        assert_eq!(view.card.len(), 1);
+        assert_eq!(view.card[0].plan, None);
+        assert_eq!(view.card[0].key_masked.as_deref(), Some("\u{2026}f9eV"));
+        assert!(view.card[0].title.contains("OpenCode Go"));
+        assert_eq!(view.card[0].rows.len(), 2);
     }
 }

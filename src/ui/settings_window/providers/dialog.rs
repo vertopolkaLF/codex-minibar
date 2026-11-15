@@ -1431,6 +1431,17 @@ impl SettingsWindow {
                 self.run_dialog_then(
                     cx,
                     move || {
+                        // Delete the secret first: a failed deletion must not
+                        // leave the settings row pointing at nothing. Removing
+                        // an already-absent secret stays a successful retry.
+                        crate::providers::opencode::forget_key(provider, &target).map_err(
+                            |error| {
+                                anyhow::anyhow!(crate::i18n::format(
+                                    "could-not-remove-the-key-error",
+                                    &[("error", format!("{:#}", error))],
+                                ))
+                            },
+                        )?;
                         let tracked = target.clone();
                         persist_instance(provider, move |instance| {
                             let keys = instance
@@ -1452,7 +1463,7 @@ impl SettingsWindow {
                                 &[("error", format!("{:#}", error))],
                             ))
                         })?;
-                        crate::providers::opencode::forget_key(provider, &target)
+                        Ok(())
                     },
                     |this, (), cx| {
                         this.reload_settings();

@@ -4,7 +4,16 @@
 //! windows come from its account-wide usage endpoint. Both providers use the
 //! local OpenCode SQLite history for cost-oriented activity cards.
 
-use std::{collections::BTreeMap, env, path::PathBuf, time::Duration};
+use std::{
+    collections::BTreeMap,
+    env,
+    path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Local, Utc};
@@ -218,6 +227,9 @@ pub struct OpenCodeClient {
     /// credential resolved from the environment or OpenCode's auth file.
     keys: Vec<TrackedKey>,
     agent: ureq::Agent,
+    /// Set when any key's usage request was rate limited, even if another key
+    /// still produced the instance's aggregate sample.
+    rate_limited: Arc<AtomicBool>,
 }
 
 impl OpenCodeClient {
@@ -228,6 +240,7 @@ impl OpenCodeClient {
             provider,
             keys: Vec::new(),
             agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
+            rate_limited: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -351,6 +364,7 @@ impl OpenCodeClient {
                 return snapshot;
             }
             Err(error) => {
+                self.note_rate_limit(&error);
                 snapshot.error = Some(go_error_message(&error));
                 return snapshot;
             }
@@ -366,9 +380,20 @@ impl OpenCodeClient {
             }
             // Key-local errors reach the log, the store and the provider tab.
             // The row is one line wide, so only the reason is kept.
-            Err(error) => snapshot.error = Some(go_error_message(&error)),
+            Err(error) => {
+                self.note_rate_limit(&error);
+                snapshot.error = Some(go_error_message(&error));
+            }
         }
         snapshot
+    }
+
+    /// A 429 from one key must reach the worker even when another key still
+    /// reports, so the provider's pause is honoured.
+    fn note_rate_limit(&self, error: &anyhow::Error) {
+        if http_status_of(error) == Some(429) {
+            self.rate_limited.store(true, Ordering::Relaxed);
+        }
     }
 
     fn request_go_usage(&self, key: &str) -> Result<String> {
@@ -384,7 +409,7 @@ impl OpenCodeClient {
             .into_string()
             .context("read OpenCode Go usage response")?;
         if status != 200 {
-            return Err(api_error("OpenCode Go", status, &body));
+            return Err(anyhow::Error::new(HttpStatusError(status)));
         }
         Ok(body)
     }
@@ -461,6 +486,10 @@ impl OpenCodeClient {
 impl LimitProvider for OpenCodeClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
         OpenCodeClient::read_limits(self)
+    }
+
+    fn take_rate_limit_response(&mut self) -> bool {
+        self.rate_limited.swap(false, Ordering::Relaxed)
     }
 }
 
@@ -833,23 +862,37 @@ fn go_missing_key_message(key: &TrackedKey) -> String {
 /// A short reason for a failed key. The card is one line wide, so the raw
 /// transport error (URLs, retry hints) is reduced to what the row can show.
 fn go_error_message(error: &anyhow::Error) -> String {
-    let text = format!("{error:#}");
-    if let Some(status) = http_status(&text) {
+    if let Some(status) = http_status_of(error) {
         return format!("OpenCode Go returned HTTP {status}");
     }
-    if text.contains("parse OpenCode Go usage response") {
+    if format!("{error:#}").contains("parse OpenCode Go usage response") {
         return "OpenCode Go sent an unexpected response".into();
     }
     "Could not reach OpenCode Go".into()
 }
 
-fn http_status(message: &str) -> Option<u16> {
-    let rest = message.split("HTTP ").nth(1)?;
-    let digits = rest
-        .split(|character: char| !character.is_ascii_digit())
-        .next()?;
-    digits.parse().ok()
+/// The numeric HTTP status carried by an error chain, if it is one.
+fn http_status_of(error: &anyhow::Error) -> Option<u16> {
+    error.chain().find_map(|cause| {
+        if let Some(ureq::Error::Status(status, _)) = cause.downcast_ref::<ureq::Error>() {
+            return Some(*status);
+        }
+        cause.downcast_ref::<HttpStatusError>().map(|error| error.0)
+    })
 }
+
+/// A response that was not `200`. The body never becomes part of the message,
+/// so a server echoing the credential cannot leak it.
+#[derive(Debug)]
+struct HttpStatusError(u16);
+
+impl std::fmt::Display for HttpStatusError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "OpenCode Go returned HTTP {}", self.0)
+    }
+}
+
+impl std::error::Error for HttpStatusError {}
 
 fn usage_object(value: &Value) -> &Value {
     if value.get("usage").is_some_and(Value::is_object) {
@@ -1081,8 +1124,7 @@ mod tests {
 
     #[test]
     fn key_errors_are_short_and_never_carry_the_credential() {
-        let key = "oc_sk_live_0123456789abcdef";
-        let http = anyhow!("OpenCode Go API returned HTTP 401: invalid key {key}");
+        let http = anyhow::Error::new(HttpStatusError(401));
         assert_eq!(go_error_message(&http), "OpenCode Go returned HTTP 401");
         let offline = anyhow!(
             "request OpenCode Go usage: https://opencode.ai/zen/go/v1/usage: connection refused"
@@ -1093,6 +1135,21 @@ mod tests {
             go_error_message(&parse),
             "OpenCode Go sent an unexpected response"
         );
+        // The status comes from the typed error, not from words in the text.
+        let misleading = anyhow!("request failed near HTTP 200 docs");
+        assert_eq!(go_error_message(&misleading), "Could not reach OpenCode Go");
+    }
+
+    #[test]
+    fn a_rate_limited_key_reaches_the_worker_even_when_another_reports() {
+        let mut client =
+            OpenCodeClient::new(ProviderId::primary(ProviderKind::OpenCodeGo)).unwrap();
+        client.note_rate_limit(&anyhow::Error::new(HttpStatusError(429)));
+        assert!(LimitProvider::take_rate_limit_response(&mut client));
+        assert!(!LimitProvider::take_rate_limit_response(&mut client));
+
+        client.note_rate_limit(&anyhow::Error::new(HttpStatusError(401)));
+        assert!(!LimitProvider::take_rate_limit_response(&mut client));
     }
 
     #[test]

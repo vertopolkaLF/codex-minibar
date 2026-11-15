@@ -2844,19 +2844,26 @@ impl PopupRoot {
             .instance(provider)
             .and_then(|instance| instance.opencode.as_ref());
         let name = go_key_name(configured, key, index);
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .gap(px(8.0))
-            .px(px(2.0))
-            .child(nowrap(components::body_strong(name, palette.text_primary)))
-            .child(nowrap(components::caption(
-                key.masked_key.clone().unwrap_or_default(),
-                palette.text_tertiary,
-            )))
-            .into_any_element()
+        let mut heading = div().flex().flex_col().gap(px(2.0)).px(px(2.0)).child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .gap(px(8.0))
+                .child(nowrap(components::body_strong(name, palette.text_primary)))
+                .child(nowrap(components::caption(
+                    key.masked_key.clone().unwrap_or_default(),
+                    palette.text_tertiary,
+                ))),
+        );
+        if let Some(error) = key.error.as_deref() {
+            heading = heading.child(nowrap(components::caption(
+                error.to_owned(),
+                palette.caution,
+            )));
+        }
+        heading.into_any_element()
     }
 
     /// One labelled quota bar for a key's window, honouring the used/remaining
@@ -2883,7 +2890,7 @@ impl PopupRoot {
         } else {
             "\u{2013}".to_owned()
         };
-        div()
+        let mut column = div()
             .flex()
             .flex_col()
             .gap(px(3.0))
@@ -2894,8 +2901,16 @@ impl PopupRoot {
                 palette.text_tertiary,
             )))
             .child(components::progress_track(shown, None, 0, fill, palette))
-            .child(nowrap(components::caption(value, palette.text_secondary)))
-            .into_any_element()
+            .child(nowrap(components::caption(value, palette.text_secondary)));
+        // Same reset presentation as the ordinary quota cards.
+        if let Some(at) = window.resets_at {
+            column = column.child(components::caption_icon_status(
+                components::RESET_ICON,
+                format_reset_in(Some(at)),
+                palette,
+            ));
+        }
+        column.into_any_element()
     }
 }
 

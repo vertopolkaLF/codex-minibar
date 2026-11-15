@@ -488,6 +488,11 @@ pub(crate) fn provider_cards<'a>(
                 key,
                 index,
             });
+            // A failed key keeps its name and reason; its empty windows are
+            // not samples and must not render as quota lanes.
+            if key.error.is_some() {
+                continue;
+            }
             for metric in crate::providers::registry::descriptor(kind).metrics {
                 if !visible(metric.id) {
                     continue;

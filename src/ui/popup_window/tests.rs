@@ -1050,6 +1050,15 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
             .filter(|card| matches!(card, Card::OpenCodeGoKeyHeading { .. }))
             .count()
     };
+    let heading_errors = |limits: &RateLimits, visibility: &PopupVisibility, surface| {
+        cards_for(limits, visibility, surface)
+            .iter()
+            .filter_map(|card| match card {
+                Card::OpenCodeGoKeyHeading { key, .. } => Some(key.error.is_some()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
     let surfaces = [PopupSurface::HomeTab, PopupSurface::ProviderTab];
 
     // Go Teams members have independent limits, so every surface lists them,
@@ -1088,6 +1097,15 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
     session_only.set_brick("opencode-go.weekly", false, false);
     for surface in surfaces {
         assert_eq!(lanes(&tracked, &session_only, surface), 4);
+    }
+
+    // A failed key keeps its heading and reason, and contributes no lanes.
+    let mut mixed = tracked.clone();
+    mixed.opencode_go_keys[1].error = Some("OpenCode Go returned HTTP 401".into());
+    for surface in surfaces {
+        assert_eq!(key_headings(&mixed, &hidden, surface), 2);
+        assert_eq!(heading_errors(&mixed, &hidden, surface), vec![false, true]);
+        assert_eq!(lanes(&mixed, &hidden, surface), 3);
     }
     let home_only = visibility_with("opencode-go.keys", true, false);
     assert_eq!(lists(&tracked, &home_only, PopupSurface::HomeTab), 1);

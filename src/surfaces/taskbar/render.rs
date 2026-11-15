@@ -392,6 +392,43 @@ impl Renderer {
         }
     }
 
+    /// A line that wraps inside `max_width`, for headings whose suffix must
+    /// stay readable.
+    fn wrapped(
+        &mut self,
+        text: &str,
+        size: f32,
+        weight: Weight,
+        max_width: f32,
+    ) -> windows::core::Result<Line> {
+        let wide = text.encode_utf16().collect::<Vec<_>>();
+        unsafe {
+            let format = self.dwrite.CreateTextFormat(
+                PCWSTR(self.family.as_ptr()),
+                None,
+                match weight {
+                    Weight::Regular => DWRITE_FONT_WEIGHT_NORMAL,
+                    Weight::Semibold => DWRITE_FONT_WEIGHT_SEMI_BOLD,
+                },
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                size,
+                w!(""),
+            )?;
+            format.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP).ok()?;
+            let layout = self
+                .dwrite
+                .CreateTextLayout(&wide, &format, max_width, 256.0)?;
+            let mut metrics = DWRITE_TEXT_METRICS::default();
+            layout.GetMetrics(&mut metrics).ok()?;
+            Ok(Line {
+                layout,
+                width: metrics.widthIncludingTrailingWhitespace,
+                height: metrics.height,
+            })
+        }
+    }
+
     fn icon_bitmap(&mut self, icon: &Icon, size: f32) -> Option<ID2D1Bitmap> {
         let pixels = (size * self.dpi / 96.0).round().max(1.0) as u32;
         let key = IconKey {
@@ -1709,32 +1746,45 @@ impl Renderer {
                 });
                 y += 12.0;
             }
-            // Mark, name and plan.
-            let name = self.line(&section.title, 14.0, Weight::Semibold)?;
+            // Mark, name and plan. The heading wraps so a long instance/key
+            // suffix stays readable; the masked key gets its own line.
+            let name = self.wrapped(&section.title, 14.0, Weight::Semibold, inner - 24.0)?;
+            let name_height = name.height;
             prims.push(Prim::Icon {
                 icon: section.icon.clone(),
                 x: CARD_PAD,
-                y: y + (name.height - 16.0) / 2.0,
+                y: y + 1.0,
                 size: 16.0,
             });
             let name_x = CARD_PAD + 16.0 + 8.0;
-            let (name_width, name_height) = (name.width, name.height);
             prims.push(Prim::Text {
                 layout: name.layout,
                 x: name_x,
                 y,
                 tone: Tone::Primary,
             });
+            y += name_height;
             if let Some(plan) = &section.plan {
                 let plan = self.line(plan, 12.0, Weight::Regular)?;
                 prims.push(Prim::Text {
-                    x: name_x + name_width + 6.0,
-                    y: y + name_height - plan.height - 1.0,
                     layout: plan.layout,
+                    x: name_x,
+                    y,
                     tone: Tone::Secondary,
                 });
+                y += plan.height;
             }
-            y += name_height + 10.0;
+            if let Some(masked) = &section.key_masked {
+                let masked = self.line(masked, 12.0, Weight::Regular)?;
+                prims.push(Prim::Text {
+                    layout: masked.layout,
+                    x: name_x,
+                    y,
+                    tone: Tone::Secondary,
+                });
+                y += masked.height;
+            }
+            y += 10.0;
             for (row_index, row) in section.rows.iter().enumerate() {
                 if row_index > 0 {
                     y += 12.0;
