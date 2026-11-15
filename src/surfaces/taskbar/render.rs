@@ -1784,6 +1784,17 @@ impl Renderer {
                 });
                 y += masked.height;
             }
+            // A failed key has no rows to draw; its reason takes their place.
+            if let Some(error) = &section.error {
+                let error = self.wrapped(error, 12.0, Weight::Regular, inner)?;
+                prims.push(Prim::Text {
+                    layout: error.layout,
+                    x: CARD_PAD,
+                    y,
+                    tone: Tone::Secondary,
+                });
+                y += error.height;
+            }
             y += 10.0;
             for (row_index, row) in section.rows.iter().enumerate() {
                 if row_index > 0 {

@@ -1107,6 +1107,12 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
         assert_eq!(heading_errors(&mixed, &hidden, surface), vec![false, true]);
         assert_eq!(lanes(&mixed, &hidden, surface), 3);
     }
+    // A window the key does not report is not a lane either.
+    let mut sparse = tracked.clone();
+    sparse.opencode_go_keys[0].weekly = LimitWindow::default();
+    for surface in surfaces {
+        assert_eq!(lanes(&sparse, &hidden, surface), 5);
+    }
     let home_only = visibility_with("opencode-go.keys", true, false);
     assert_eq!(lists(&tracked, &home_only, PopupSurface::HomeTab), 1);
     assert_eq!(lists(&tracked, &home_only, PopupSurface::ProviderTab), 0);

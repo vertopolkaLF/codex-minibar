@@ -507,7 +507,9 @@ pub(crate) fn provider_cards<'a>(
                     }
                     _ => None,
                 };
-                let Some(window) = window else {
+                // A window the key does not report has no lane to draw, the
+                // same rule the taskbar hover card follows.
+                let Some(window) = window.filter(|window| !window.is_empty()) else {
                     continue;
                 };
                 cards.push(Card::Limit {

@@ -131,6 +131,8 @@ pub(crate) struct CardSection {
     pub(crate) plan: Option<String>,
     /// Masked key of a key-scoped section, drawn on its own line.
     pub(crate) key_masked: Option<String>,
+    /// Why a key-scoped section has no rows: the key's own failure.
+    pub(crate) error: Option<String>,
     pub(crate) rows: Vec<Row>,
     /// Today's tokens and their API value, or spend for pay-as-you-go
     /// providers; `None` without usage statistics.
@@ -329,15 +331,14 @@ fn card_sections(
                 None => aggregate_rows(provider, &configured, limits, appearance, now),
             };
             let provider_limits = limits.get(provider);
+            let key = key_id.as_deref().and_then(|key_id| {
+                provider_limits
+                    .opencode_go_keys
+                    .iter()
+                    .find(|key| key.id == key_id)
+            });
             let (plan, key_masked) = match key_id.as_deref() {
-                Some(key_id) => (
-                    None,
-                    provider_limits
-                        .opencode_go_keys
-                        .iter()
-                        .find(|key| key.id == key_id)
-                        .and_then(|key| key.masked_key.clone()),
-                ),
+                Some(_) => (None, key.and_then(|key| key.masked_key.clone())),
                 None => (
                     provider_limits
                         .plan_type
@@ -347,6 +348,10 @@ fn card_sections(
                     None,
                 ),
             };
+            // A failed key has no windows to draw; its reason takes their place.
+            let error = key
+                .and_then(|key| key.error.clone())
+                .filter(|_| rows.is_empty());
             CardSection {
                 provider,
                 title: match key_id.as_deref() {
@@ -362,6 +367,7 @@ fn card_sections(
                 icon: icon_for(provider, appearance),
                 plan,
                 key_masked,
+                error,
                 rows,
                 today: key_id
                     .is_none()
@@ -396,11 +402,14 @@ fn key_rows(
                     ..TrayIndicator::for_key(provider, key_id, metric_id)
                 });
             // A window the key does not report has no lane to draw.
-            crate::quota::widget_data::resolve_indicator(
+            let metric = crate::quota::widget_data::resolve_indicator(
                 provider,
                 limits.get(provider),
                 &indicator,
             )?;
+            if metric.window.is_empty() {
+                return None;
+            }
             resolve_row(&indicator, limits, appearance, now)
         })
         .collect()
@@ -805,5 +814,77 @@ mod tests {
         assert_eq!(view.card[0].key_masked.as_deref(), Some("\u{2026}f9eV"));
         assert!(view.card[0].title.contains("OpenCode Go"));
         assert_eq!(view.card[0].rows.len(), 2);
+    }
+
+    #[test]
+    fn a_key_section_skips_a_window_the_key_does_not_report() {
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let mut limits = ProviderLimits::default();
+        {
+            let snapshot = limits.get_mut(provider);
+            snapshot.opencode_go_keys = vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: "key-a".into(),
+                // Only the weekly window came back; the rolling one is empty.
+                weekly: LimitWindow {
+                    used_percent: Some(20),
+                    ..LimitWindow::default()
+                },
+                ..Default::default()
+            }];
+        }
+        let widget = TaskbarWidget {
+            style: TaskbarWidgetStyle::Glance,
+            show_icon: false,
+            indicators: vec![TrayIndicator::for_key(
+                provider,
+                "key-a",
+                "opencode-go.rolling",
+            )],
+            ..TaskbarWidget::for_provider(provider)
+        };
+        let view = resolve(&widget, &limits, appearance(false));
+        let [section] = view.card.as_slice() else {
+            panic!("one key section");
+        };
+        assert_eq!(section.rows.len(), 1, "only the populated window");
+        assert_eq!(section.rows[0].label, crate::i18n::tr("short-7d"));
+        assert_eq!(section.rows[0].value, "80%");
+        assert_eq!(section.error, None);
+    }
+
+    #[test]
+    fn a_failed_key_keeps_its_reason_instead_of_empty_rows() {
+        let provider = ProviderId::primary(ProviderKind::OpenCodeGo);
+        let mut limits = ProviderLimits::default();
+        {
+            let snapshot = limits.get_mut(provider);
+            snapshot.opencode_go_keys = vec![crate::quota::limits::OpenCodeGoKeySnapshot {
+                id: "key-a".into(),
+                masked_key: Some("…f9eV".into()),
+                error: Some("OpenCode Go returned HTTP 401".into()),
+                ..Default::default()
+            }];
+        }
+        let widget = TaskbarWidget {
+            style: TaskbarWidgetStyle::Glance,
+            show_icon: false,
+            indicators: vec![TrayIndicator::for_key(
+                provider,
+                "key-a",
+                "opencode-go.rolling",
+            )],
+            ..TaskbarWidget::for_provider(provider)
+        };
+        let view = resolve(&widget, &limits, appearance(false));
+        let [section] = view.card.as_slice() else {
+            panic!("one key section");
+        };
+        assert!(section.rows.is_empty(), "empty windows are not lanes");
+        assert_eq!(
+            section.error.as_deref(),
+            Some("OpenCode Go returned HTTP 401")
+        );
+        assert_eq!(section.key_masked.as_deref(), Some("…f9eV"));
+        assert!(section.title.contains("OpenCode Go"));
     }
 }
