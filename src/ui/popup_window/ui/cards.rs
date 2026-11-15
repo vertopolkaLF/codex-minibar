@@ -196,6 +196,11 @@ impl PopupRoot {
                 .render_keys_section(*provider, account, window, cx)
                 .unwrap_or_else(|| div().into_any_element()),
             Card::OpenCodeGoKeys { provider } => self.render_opencode_go_keys(*provider, surface),
+            Card::OpenCodeGoKeyHeading {
+                provider,
+                key,
+                index,
+            } => self.render_opencode_go_key_heading(*provider, key, *index),
             Card::AccountHeading {
                 id,
                 name,

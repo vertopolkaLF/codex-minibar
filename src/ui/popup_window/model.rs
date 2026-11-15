@@ -143,6 +143,13 @@ pub(crate) enum Card<'a> {
     OpenCodeGoKeys {
         provider: ProviderId,
     },
+    /// Heading above one tracked key's ordinary lanes, used when the key
+    /// list is turned off.
+    OpenCodeGoKeyHeading {
+        provider: ProviderId,
+        key: &'a crate::quota::limits::OpenCodeGoKeySnapshot,
+        index: usize,
+    },
     AccountHeading {
         id: &'a str,
         name: &'a str,
@@ -287,9 +294,11 @@ pub(crate) fn provider_cards<'a>(
     // has its ordinary cards, and an error belongs to the key that produced it.
     // The list is its own card: it can be turned off per surface, and stays
     // addressable when every quota lane is hidden.
-    let key_list = kind == ProviderKind::OpenCodeGo
-        && visible(&crate::providers::registry::keys_brick_id(kind))
-        && (limits.opencode_go_keys.len() > 1
+    let keys_visible = kind == ProviderKind::OpenCodeGo
+        && visible(&crate::providers::registry::keys_brick_id(kind));
+    let multi_key = limits.opencode_go_keys.len() > 1;
+    let key_list = keys_visible
+        && (multi_key
             || limits
                 .opencode_go_keys
                 .iter()
@@ -299,7 +308,10 @@ pub(crate) fn provider_cards<'a>(
     }
     // With several keys the rows replace the aggregate lanes on every
     // surface: the aggregate is the most consumed key, which the rows show.
-    let key_rows_only = key_list && limits.opencode_go_keys.len() > 1;
+    let key_rows_only = key_list && multi_key;
+    // Turning the list off keeps the lanes, but still per key: one aggregate
+    // set would hide whose quota is which.
+    let key_lanes = kind == ProviderKind::OpenCodeGo && multi_key && !keys_visible;
 
     if kind == ProviderKind::OpenRouter {
         let spending_visible = visible(&spending_brick_id(kind));
@@ -387,7 +399,7 @@ pub(crate) fn provider_cards<'a>(
     let mut fable_merged = false;
     for section in popup_sections(kind, limits, false)
         .into_iter()
-        .filter(|_| !key_rows_only)
+        .filter(|_| !key_rows_only && !key_lanes)
     {
         if !matches!(
             section,
@@ -462,6 +474,43 @@ pub(crate) fn provider_cards<'a>(
             disabled: false,
             overlay: None,
         });
+    }
+    // With the key list off, every key keeps its ordinary lanes under its own
+    // name instead of one aggregate set for the whole instance.
+    if key_lanes {
+        for (index, key) in limits.opencode_go_keys.iter().enumerate() {
+            cards.push(Card::OpenCodeGoKeyHeading {
+                provider,
+                key,
+                index,
+            });
+            for metric in crate::providers::registry::descriptor(kind).metrics {
+                if !visible(metric.id) {
+                    continue;
+                }
+                let window = match metric.source {
+                    crate::providers::registry::MetricSource::Primary => Some(&key.rolling),
+                    crate::providers::registry::MetricSource::Secondary => Some(&key.weekly),
+                    crate::providers::registry::MetricSource::Additional(id)
+                        if id == crate::providers::registry::OPENCODE_GO_MONTHLY_LIMIT_ID =>
+                    {
+                        key.monthly.as_ref()
+                    }
+                    _ => None,
+                };
+                let Some(window) = window else {
+                    continue;
+                };
+                cards.push(Card::Limit {
+                    key: card_key(provider, &format!("key-{}-{}", key.id, metric.id)),
+                    title: metric.localized_label().to_uppercase(),
+                    window,
+                    usage_amount: None,
+                    disabled: false,
+                    overlay: None,
+                });
+            }
+        }
     }
     // A Claude instance backed by an Admin API key reports organization
     // spend instead of subscription windows.

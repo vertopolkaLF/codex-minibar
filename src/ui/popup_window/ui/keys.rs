@@ -2830,6 +2830,35 @@ impl PopupRoot {
         card.into_any_element()
     }
 
+    /// The key's name above its own lanes, for when the key list is off.
+    pub(super) fn render_opencode_go_key_heading(
+        &self,
+        provider: ProviderId,
+        key: &crate::quota::limits::OpenCodeGoKeySnapshot,
+        index: usize,
+    ) -> AnyElement {
+        let palette = self.palette.clone();
+        let configured = self
+            .ui
+            .settings
+            .instance(provider)
+            .and_then(|instance| instance.opencode.as_ref());
+        let name = go_key_name(configured, key, index);
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .gap(px(8.0))
+            .px(px(2.0))
+            .child(nowrap(components::body_strong(name, palette.text_primary)))
+            .child(nowrap(components::caption(
+                key.masked_key.clone().unwrap_or_default(),
+                palette.text_tertiary,
+            )))
+            .into_any_element()
+    }
+
     /// One labelled quota bar for a key's window, honouring the used/remaining
     /// preference shared by every other bar in the popup.
     fn go_key_window(

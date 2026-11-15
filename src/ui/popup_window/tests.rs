@@ -1040,6 +1040,12 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
             .filter(|card| matches!(card, Card::Limit { .. }))
             .count()
     };
+    let key_headings = |limits: &RateLimits, visibility: &PopupVisibility, surface| {
+        cards_for(limits, visibility, surface)
+            .iter()
+            .filter(|card| matches!(card, Card::OpenCodeGoKeyHeading { .. }))
+            .count()
+    };
     let surfaces = [PopupSurface::HomeTab, PopupSurface::ProviderTab];
 
     // Go Teams members have independent limits, so every surface lists them,
@@ -1054,12 +1060,19 @@ fn opencode_go_lists_every_tracked_key_on_home_and_provider_tab() {
         assert_eq!(lanes(&tracked, &all_visible(), surface), 0);
     }
 
-    // The card has its own switches: hiding it brings the lanes back, and
-    // each surface follows its own column.
+    // The card has its own switches: hiding it keeps the lanes, but now one
+    // set per key, and each surface follows its own column.
     let hidden = visibility_with("opencode-go.keys", false, false);
     for surface in surfaces {
         assert_eq!(lists(&tracked, &hidden, surface), 0);
-        assert_eq!(lanes(&tracked, &hidden, surface), 2);
+        assert_eq!(key_headings(&tracked, &hidden, surface), 2);
+        assert_eq!(lanes(&tracked, &hidden, surface), 4);
+    }
+    // The quota switches choose the per-key columns too.
+    let mut session_only = hidden.clone();
+    session_only.set_brick("opencode-go.weekly", false, false);
+    for surface in surfaces {
+        assert_eq!(lanes(&tracked, &session_only, surface), 2);
     }
     let home_only = visibility_with("opencode-go.keys", true, false);
     assert_eq!(lists(&tracked, &home_only, PopupSurface::HomeTab), 1);
