@@ -115,13 +115,13 @@ group-tokens-or-cost-by-model = Agrupar tokens ou custo por modelo
 
 model = Modelo
 
-# src/popup_window/ui/usage.rs
+# src/ui/popup_window/ui/usage.rs
 project = Projeto
 
-# src/usage_overview.rs
+# src/usage/overview.rs
 unknown-project = Projeto desconhecido
 
-# src/popup_window/ui/usage.rs
+# src/ui/popup_window/ui/usage.rs
 no-project-usage = Sem dados de projetos neste período
 
 tokens = Tokens
@@ -196,8 +196,9 @@ refreshing-limits-and-usage = Atualizando limites e uso…
 updated = Atualizado{ " " }
 
 refresh-last-updated-relative = Atualizar · Última atualização { $relative }
+refresh-provider = Atualizar { $provider }
 
-# src/popup_window/ui/footer.rs
+# src/ui/popup_window/ui/footer.rs
 popup-pin = Fixar no topo e manter aberto
 popup-unpin = Desafixar e fechar ao perder o foco
 
@@ -277,6 +278,18 @@ spending-limit = Limite de gastos
 gemini = Gemini
 
 claude-gpt = Claude + GPT
+
+# src/providers/registry.rs
+gemini-5h = Gemini 5h
+
+# src/providers/registry.rs
+gemini-weekly = Gemini semanal
+
+# src/providers/registry.rs
+claude-gpt-5h = Claude + GPT 5h
+
+# src/providers/registry.rs
+claude-gpt-weekly = Claude + GPT semanal
 
 credits = Créditos
 
@@ -693,10 +706,10 @@ msg-1-hour = 1 hora
 
 msg-3-hours = 3 horas
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 msg-2-hours = 2 horas
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 msg-5-hours = 5 horas
 
 msg-6-hours = 6 horas
@@ -825,10 +838,10 @@ found-an-official-grok-cli-sign-in-on-this-pc = Encontrado um login oficial da C
 
 not-found-run-grok-login-before-enabling-it = Não encontrado. Execute grok login antes de ativar.
 
-# src/settings_window/onboarding.rs
+# src/ui/settings_window/onboarding.rs
 found-an-official-command-code-cli-sign-in-on-this-pc = Encontrado um login oficial da CLI do Command Code neste PC.
 
-# src/settings_window/onboarding.rs
+# src/ui/settings_window/onboarding.rs
 not-found-run-cmdc-login-before-enabling-it = Não encontrado. Execute cmdc login antes de ativar.
 
 found-kiro-ide-kiro-crew-or-a-signed-in-kiro-cli = Encontrado Kiro IDE, Kiro Crew ou uma CLI do Kiro conectada.
@@ -1096,6 +1109,8 @@ no-providers-yet-add-one-to-start-reading-limits = Ainda não há provedores. Ad
 is-off-so-it-doesn-t-appear-in-the-minibar-or-tray-turn-it-on-to = { $v0 } está desativado e não aparece no minibar nem na bandeja. Ative para começar a ler o uso.
 
 replace-chatgpt-logo-with-codex = Substituir logo do ChatGPT pelo Codex
+show-fable-inside-the-weekly-bar = Mostrar Fable dentro da barra semanal
+draws-the-fable-only-limit-as-a-colored-segment-of-the-weekly-bar = Mostra o limite exclusivo do Fable como um segmento colorido da barra semanal em vez de um cartão separado.
 
 limits-only = Somente limites
 
@@ -1249,7 +1264,7 @@ cursor-app-folder = Pasta do aplicativo Cursor
 
 grok-cli-folder = Pasta da CLI do Grok
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 command-code-cli-folder = Pasta da CLI do Command Code
 
 kiro-ide-folder = Pasta do Kiro IDE
@@ -1274,7 +1289,7 @@ reads-subscription-quota-from-your-existing-official-agy-windows = Lê a cota da
 
 reads-supergrok-subscription-credits-from-your-existing-official = Lê os créditos da assinatura SuperGrok a partir do seu login oficial existente da CLI do Grok.
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 reads-command-code-5h-weekly-and-monthly-credits-from-your-existin = Lê os créditos de 5 horas, semanais e mensais do Command Code a partir do seu login oficial existente da CLI.
 
 fetches-kiro-s-live-monthly-credits-with-its-shared-sign-in-recog = Obtém os créditos mensais atuais do Kiro com seu login compartilhado; reconhece instalações do IDE, Crew e CLI.
@@ -1293,7 +1308,7 @@ antigravity-app = Aplicativo Antigravity
 
 grok-cli = Grok CLI
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 command-code-cli = Command Code CLI
 
 kiro-ide = Kiro IDE
@@ -1434,10 +1449,6 @@ exit = Sair
 
 update-available-67fd3a = Atualização disponível
 
-monthly-credits-976559 = Créditos mensais
-
-msg-5h-session-de7ce8 = Sessão de 5h
-
 name-weekly = { $name } semanal
 
 tokens-94e0b9 = { $v0 }: { $v1 } tokens
@@ -1518,7 +1529,7 @@ folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Pasta com ag
 
 folder-with-grok-exe-grok-cmd-or-grok-ps1-leave-empty-to-find-it = Pasta com grok.exe, grok.cmd ou grok.ps1. Deixe em branco para encontrar automaticamente.
 
-# src/settings_window/providers.rs
+# src/ui/settings_window/providers.rs
 folder-with-cmdc-cmd-or-cmdc-ps1-leave-empty-to-find-it-automati = Pasta com cmdc.cmd ou cmdc.ps1. Deixe em branco para encontrar automaticamente.
 
 folder-containing-kiro-exe-or-the-executable-itself-leave-empty-t = Pasta com Kiro.exe ou o próprio executável. Deixe em branco para encontrar automaticamente.
@@ -1556,9 +1567,6 @@ this-provider-has-no-session-window-to-start = Este provedor não tem janela de 
 this-provider-does-not-use-a-config-folder = Este provedor não usa pasta de configuração.
 
 could-not-save-provider-settings-error-restoring-its-previous-cre = Não foi possível salvar as configurações do provedor ({ $error }); a restauração da credencial anterior também falhou ({ $rollback_error }).
-
-msg-5h-7d = 5h  ·  { $v0 }  ·  { $v1 }
-    7d  ·  { $v2 }  ·  { $v3 }
 
 api-key-count = { $v0 ->
     [one] { $v0 } chave de API
@@ -1614,6 +1622,9 @@ dec = dez
 quota-percent-used = { $value }% usado
 
 quota-percent-left = { $value }% restante
+quota-all = Todos
+quota-word-left = restante
+quota-word-used = usado
 
 cloud-amount-used = { $amount } de { $limit } usados
 
@@ -1711,16 +1722,17 @@ openrouter-keys-untrack-message = O Minibar esquece esta chave. Ela continua fun
 openrouter-keys-tracked-here = O Minibar acompanha esta chave.
 openrouter-keys-manage-hint = Adicione uma chave de gerenciamento nas Configurações para criar, editar e excluir chaves.
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notification-sounds = Sons de notificação
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 plays-a-short-sound-with-each-notification = Toca um som curto a cada notificação
 
 use-reset = Usar redefinição
 use-reset-short = Usar
 reset-using = Aplicando…
 reset-confirm-message = Usar uma redefinição acumulada nesta conta? Isso limpa os limites elegíveis e não pode ser desfeito.
+reset-confirm-selected = Usar “{ $name }”? Isso limpa os limites cobertos e não pode ser desfeito.
 reset-applied = Redefinição aplicada. Os limites elegíveis foram limpos.
 reset-nothing-to-reset = Nada para redefinir agora.
 reset-no-credit = Não há mais redefinições disponíveis.
@@ -1734,97 +1746,99 @@ reset-sign-in-again = Entre novamente no Claude para usar redefinições.
 reset-cli-login-required = Use o login do Claude CLI da mesma conta para aplicar redefinições.
 reset-invalid-grant = O Claude retornou uma redefinição inválida.
 
-# src/updater.rs
+# src/update.rs
 update-downloading = Baixando atualização
 
-# src/updater.rs
+# src/update.rs
 update-download-progress = { $downloaded } de { $total }
 
-# src/updater.rs
+# src/update.rs
 update-downloaded = { $downloaded } baixados
 
-# src/updater.rs
+# src/update.rs
 update-installing = Instalando atualização
 
-# src/updater.rs
+# src/update.rs
 update-unpacking = Descompactando arquivos…
 
-# src/updater.rs
+# src/update.rs
 update-restarting = Reiniciando o Codex Minibar
 
-# src/updater.rs
+# src/update.rs
 update-restarting-body = O app será reaberto em instantes.
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 provider-status = Status dos provedores
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 show-provider-incidents = Mostrar incidentes dos provedores
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 show-provider-incidents-description = Verifica as páginas de status públicas do Codex, Claude e Cursor a cada 5 minutos e mostra incidentes em andamento no pop-up
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 notify-about-new-incidents = Notificar sobre novos incidentes
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 notify-about-new-incidents-description = Mostra uma notificação quando uma página de status relata um novo incidente de um provedor ativado
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 open-status-page = Abrir página de status
+hide-incident = Ocultar incidente
+show-incident = Mostrar incidente
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 provider-incident-title = { $provider }: { $impact }
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 status-since = Desde { $time }
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-maintenance = Manutenção
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-degraded = Desempenho degradado
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-partial-outage = Interrupção parcial
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-impact-major-outage = Interrupção grave
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-investigating = Investigando
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-identified = Identificado
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-monitoring = Monitorando
 
-# src/provider_status.rs
+# src/providers/status.rs
 status-stage-in-progress = Em andamento
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 news-and-status = Novidades e status
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 no-summary-for-this-version = Ainda não há um resumo para esta versão. As notas completas estão no GitHub.
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 couldn-t-load-what-s-new = Não foi possível carregar as novidades. Verifique a conexão ou leia as notas no GitHub.
 
-# src/whats_new.rs
+# src/update/whats_new.rs
 full-release-notes = Notas completas
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 show-what-s-new-after-updating = Mostrar novidades após atualizar
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 a-short-summary-of-the-release-once-it-s-installed = Um breve resumo da versão, logo após a instalação.
 
-# src/settings_window/about.rs
+# src/ui/settings_window/about.rs
 view = Ver
 
-# src/settings_window/general.rs
+# src/ui/settings_window/general.rs
 popup-shortcut = Atalho do popup
 popup-shortcut-description = Pressione-o em qualquer lugar do Windows para mostrar ou ocultar o popup.
 shortcut-not-set = Não definido
@@ -1889,19 +1903,19 @@ taskbar-click-nearest = Início, ou a aba se não estiver no Início
 taskbar-click-tab = Aba do provedor
 taskbar-click-home = Início
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 follow-do-not-disturb = Pausar no modo Não incomodar
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 follow-do-not-disturb-description = Enquanto o Não incomodar ou o Foco do Windows estiver ativo, as notificações são ignoradas e os sons ficam desligados. Resultados de ações suas continuam aparecendo.
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 performance = Desempenho
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 game-mode = Modo jogo
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 game-mode-description = Verifica limites e uso com menos frequência, roda com prioridade baixa e pausa as notificações. Automático o ativa quando um jogo vem para a frente e o mantém até o jogo fechar.
 
 # src/settings.rs
@@ -1913,139 +1927,282 @@ game-mode-automatic = Automático
 # src/settings.rs
 game-mode-always = Sempre
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notify-game-mode-changes = Mudanças do modo jogo
 
-# src/settings_window/notifications.rs
+# src/ui/settings_window/notifications.rs
 notify-game-mode-changes-description = Avisa quando o modo jogo liga ou desliga
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-title = Modo jogo ligado
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-body = Limites verificados com menos frequência e notificações pausadas
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-on-game-body = { $game } está em execução. Limites verificados com menos frequência e notificações pausadas
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 not-a-game = Não é um jogo
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 add-a-game = Adicionar jogo
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 add-a-game-description = Jogos conhecidos pela Game Bar do Windows e jogos da Steam, Epic, GOG e Xbox são detectados sozinhos. Adicione aqui qualquer outro programa.
 
-# src/settings_window/advanced.rs
+# src/ui/settings_window/advanced.rs
 never-a-game-path = Nunca é um jogo · { $path }
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-off-title = Modo jogo desligado
 
-# src/notifications.rs
+# src/surfaces/notifications.rs
 game-mode-off-body = Verificações e notificações normais retomadas
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 command-palette = Command Palette
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 stream-deck = Stream Deck
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 install = Instalar
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-extension = Extensão da Command Palette
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-description = Adiciona o Minibar à Command Palette do PowerToys: digite um provedor para ver os limites ou fixe faixas no Dock. A instalação pede aprovação de administrador.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installed-hint = Instalada. Digite “minibar” ou o nome de um provedor na Command Palette, ou fixe faixas em Editar Dock.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-downloading = Baixando a extensão…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installing = Aguardando o instalador. Aprove a solicitação de administrador para continuar.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-installing-short = Instalando…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-removing = Removendo a extensão…
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-failed = Não foi possível instalar ou remover a extensão.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-reinstall = Reinstalar
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-dock-bands = Faixas do Dock
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-dock-bands-caption = Cada faixa aparece nas configurações do Dock da Command Palette. Fixe-a em Editar Dock e escolha onde ela fica.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-no-bands = Nenhuma faixa
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-no-bands-description = Adicione uma faixa para fixar os limites de um provedor no Dock.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-add-band = Adicionar faixa
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-band = Faixa { $v0 }
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-band-removed = Faixa removida
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-remove-band = Remover faixa
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-content-hint = O Dock mostra uma faixa como um título acima de um subtítulo.
 
-# src/settings_window/command_palette.rs
+# src/ui/settings_window/command_palette.rs
 cmdpal-indicators-hint = Até 2 cotas: uma preenche o título e o subtítulo; duas ocupam uma linha cada.
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 tibo-banked-reset = Tibo Banked Reset™
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 banked-reset-credit = Redefinição guardada
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 before-when = Antes de { $when }
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 time-ago = há { $time }
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 new-codex-banked-reset-info = Novas informações de redefinição guardada do Codex
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 a-possible-codex-reset-is-expected-before-when-within-countdown = Uma possível redefinição do Codex é esperada antes de { $when } (em até { $countdown })
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 label-possible-reset-before-when-within-countdown = { $label }: possível redefinição antes de { $when } (em até { $countdown })
 
-# src/popup_window/ui/cards.rs
+# src/ui/popup_window/ui/cards.rs
 time-late = { $time } de atraso
 
 # Floating usage panel
 popup-floating = Painel flutuante
+linux-popup-keep-open = Manter aberto
+linux-popup-keep-open-description = Manter o painel aberto ao alternar entre aplicativos. No Wayland, clique com o botão direito no cabeçalho e escolha «Sempre no topo» no menu de janelas do desktop, se disponível.
+linux-popup-unpin = Desafixar painel
 popup-floating-description = Mantenha o painel aberto e arraste o cabeçalho para outra posição ou monitor.
 popup-always-on-top = Sempre no topo
 popup-always-on-top-description = Manter o painel acima de outros aplicativos e aberto ao alternar entre eles.
 popup-position = Posição do painel
 popup-position-description = A posição é lembrada entre sessões.
 popup-reset-position = Redefinir posição
+popup-placement = Posição da janela
+popup-placement-description = Onde a janela abre na tela. Automático abre perto da bandeja ou da barra de tarefas.
+popup-placement-auto = Automático
+popup-placement-top-left = Superior esquerdo
+popup-placement-top-center = Superior central
+popup-placement-top-right = Superior direito
+popup-placement-bottom-left = Inferior esquerdo
+popup-placement-bottom-center = Inferior central
+popup-placement-bottom-right = Inferior direito
+linux-popup-placement-description = Onde a janela abre na tela.
+linux-popup-placement-wayland = No Wayland, o ambiente de trabalho decide onde as janelas abrem, então isso só se aplica a sessões X11.
 popup-drag-header = Arraste para mover
 popup-close = Fechar painel
 
 show-popup-action-bar = Mostrar barra de ações do popup
 show-popup-action-bar-description = Mostrar o título e as ações no popup normal. Painéis flutuantes sempre mostram esta barra.
+
+# src/ui/settings_window/activation.rs
+use-banked-resets-automatically = Usar redefinições acumuladas automaticamente
+
+# src/ui/settings_window/activation.rs
+spends-a-banked-reset-shortly-before-it-expires = Aplica uma redefinição acumulada pouco antes de expirar para que ela não seja perdida. Ignorado enquanto os limites não tiverem nada a limpar.
+
+# src/ui/settings_window/activation.rs
+use-before-expiry = Usar antes de expirar
+
+# src/ui/settings_window/activation.rs
+how-long-before-a-banked-reset-expires-it-is-applied = Quanto tempo antes de expirar uma redefinição acumulada é aplicada.
+
+# src/ui/settings_window/providers/page.rs
+automatic-resets = Redefinições automáticas
+
+# src/app/auto_reset.rs
+banked-reset-applied-automatically = Redefinição acumulada aplicada automaticamente
+
+# src/providers/instances.rs
+this-provider-has-no-banked-resets = Este provedor não tem redefinições acumuladas.
+
+# src/app/auto_reset.rs
+banked-reset-applies-in-minutes = A redefinição acumulada será aplicada em { $minutes } min
+
+# src/ui/settings_window/notifications.rs
+before-an-automatic-reset = Antes de uma redefinição automática
+
+# src/ui/settings_window/notifications.rs
+warns-before-a-banked-reset-is-applied-automatically = Avisa 10 minutos antes de uma redefinição acumulada ser aplicada automaticamente.
+
+# src/app/auto_reset.rs
+apply-reset-now = Aplicar agora
+
+# src/app/auto_reset.rs
+skip-automatic-reset = Cancelar
+
+# src/app/auto_reset.rs
+banked-reset-applied = Redefinição acumulada aplicada
+
+# src/ui/settings_window/providers/page.rs
+claude-other-account-needs-cli = Contas extras do Claude precisam da CLI do Claude Code. A cópia embutida no app do Claude só atende a conta do próprio app.
+# src/surfaces/tray.rs
+linux-no-tray-title = Bandeja do sistema não encontrada
+
+# src/surfaces/tray.rs
+linux-no-tray-body = Ative a extensão AppIndicator para ver o Codex Minibar no painel. Abra o Codex Minibar de novo para exibi-lo.
+
+# src/ui/settings_window/general.rs
+start-at-login = Iniciar ao entrar na sessão
+
+# src/ui/settings_window/general.rs
+linux-popup-shortcut-description = Adicione um atalho personalizado nas configurações de teclado do seu desktop que execute este comando para mostrar ou ocultar o pop-up.
+
+# src/ui/settings_window/general.rs
+copy-command = Copiar comando
+
+# src/ui/settings_window/general.rs
+command-copied = Comando copiado
+
+# src/ui/settings_window/about.rs
+linux-about-tagline = Companheiro gratuito e de código aberto para limites de uso, redefinições e gastos de assinaturas de IA, direto na bandeja do sistema.
+
+# src/ui/settings_window/advanced.rs
+linux-save-every-setting-to-a-toml-file-saved-keys-stay-in-windows-user = Salva todas as configurações em um arquivo .toml. As chaves salvas continuam criptografadas neste computador.
+
+# src/ui/settings_window/appearance.rs
+linux-windows = Sistema
+
+# src/ui/settings_window/appearance.rs
+linux-windows-follows-your-system-accent = Sistema segue a cor de destaque do seu desktop.
+
+# src/ui/settings_window/appearance.rs
+linux-windows-default = Padrão do sistema
+
+# src/ui/settings_window/appearance.rs
+linux-popup-theme-description = Altera apenas o pop-up. As configurações mantêm a própria aparência.
+
+# src/ui/settings_window/appearance.rs
+linux-glide-transitions-in-the-popup-and-settings-windows-own-animation = Transições suaves no pop-up e nas configurações. A configuração de animação do seu desktop também é respeitada.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-saved-in-windows-user-storage-never-in-the-settings-file = Criptografado com uma chave do chaveiro do sistema, nunca no arquivo de configurações.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-credential-saved-in-windows-user-storage = Credencial salva, criptografada com o chaveiro do sistema.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-api-key-saved-in-windows-user-storage = Chave de API salva, criptografada com o chaveiro do sistema.
+
+# src/ui/settings_window/providers/page.rs
+linux-saved-in-windows-user-storage = Criptografado com o chaveiro do sistema
+
+# src/ui/settings_window/general.rs
+linux-applies-immediately-to-every-app-window-and-notification-auto-fol = Aplica-se imediatamente a todas as janelas e notificações do aplicativo. Automático segue o idioma do sistema.
+
+# src/ui/settings_window/providers/dialog.rs
+linux-runs-claude-code-s-own-login-for-name-with-its-config-folder-as-c = Executa o login do próprio Claude Code para { $name }, usando sua pasta de configuração como CLAUDE_CONFIG_DIR. O login fica nessa pasta, onde o Claude Code o mantém atualizado.
+
+# src/ui/settings_window/advanced.rs
+linux-add-a-game-description = Jogos iniciados pelo Steam e jogos das bibliotecas do Steam ou Heroic são detectados sozinhos. Adicione aqui qualquer outro programa.
+linux-popup-shortcut-native-description = Salvo nas configurações de teclado do seu ambiente de trabalho. As alterações são aplicadas imediatamente.
+linux-popup-shortcut-choose = Definir atalho
+linux-popup-shortcut-dialog-hint = Pressione a combinação de teclas que deseja usar. Ela será salva como atalho personalizado nas configurações de teclado do seu ambiente de trabalho.
+linux-popup-shortcut-needs-modifier = Inclua Ctrl, Alt ou Super, ou use F13–F24.
+linux-popup-shortcut-save-failed = O ambiente de trabalho não aceitou o atalho. Tente novamente ou adicione o comando nas configurações de teclado dele.
+# src/ui/settings_window/providers.rs
+linux-reads-subscription-quota-from-your-existing-official-agy-windows = Lê a cota da assinatura a partir do seu login oficial existente do agy.
+linux-folder-with-agy-exe-agy-cmd-or-agy-ps1-leave-empty-to-find-it-aut = Pasta com o executável agy. Deixe em branco para encontrar automaticamente.
+
+linux-folder-with-grok-cli = Pasta com o executável grok. Deixe em branco para encontrá-lo automaticamente.
+linux-folder-with-command-code-cli = Pasta com command-code ou cmd. Deixe em branco para encontrá-lo automaticamente.
+
+usage-currency = Moeda dos custos
+usage-currency-description = Exibir os custos, incluindo o histórico, pela última taxa disponível.
+currency-unavailable = Taxa indisponível; exibindo USD
+currency-cached = Taxa salva
+currency-latest = Última taxa
+currency-usd = Moeda dos custos: USD
+currency-daily-cost = Custo diário na moeda selecionada
+currency-cost-by-model = Custo por modelo
+no-matching-currencies = Nenhuma moeda correspondente
+currency-symbol = Símbolo da moeda
+currency-symbol-description = Exibido exatamente como digitado, incluindo espaços. Deixe vazio para usar o padrão.
+currency-symbol-position = Posição do símbolo
+currency-symbol-before = Antes do valor
+currency-symbol-after = Depois do valor
+currency-source = Cotações da Exchange Rate API
+reads-workbuddy-token-history-from-your-local-workbuddy-transcripts = Lê o histórico de tokens dos seus registros locais de sessões do WorkBuddy.

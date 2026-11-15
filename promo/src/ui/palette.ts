@@ -1,4 +1,4 @@
-// Popup color tokens, mirrored from src/popup_window/ui/theme.rs.
+// Popup color tokens, mirrored from src/ui/popup_window/ui/theme.rs.
 
 export type ThemeName = "fluent" | "vercel" | "dracula" | "solarized";
 

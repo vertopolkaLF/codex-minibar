@@ -353,6 +353,12 @@ if (-not $SkipInstaller) {
 $artifacts = @()
 
 Push-Location $Root
+# rustc overflows its default 8 MB stack while compiling the release binary for
+# i686 (STATUS_ACCESS_VIOLATION), so give it room unless the caller set a size.
+$previousMinStack = $env:RUST_MIN_STACK
+if (-not $previousMinStack) {
+    $env:RUST_MIN_STACK = "268435456"
+}
 try {
     foreach ($archName in $Arch) {
         $triple = $TargetMap[$archName]
@@ -401,6 +407,7 @@ try {
     }
 }
 finally {
+    $env:RUST_MIN_STACK = $previousMinStack
     Pop-Location
 }
 

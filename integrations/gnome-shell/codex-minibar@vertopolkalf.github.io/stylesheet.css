@@ -1,0 +1,27 @@
+.codex-minibar-box {
+  spacing: 4px;
+}
+
+.codex-minibar-icon {
+  icon-size: 14px;
+}
+
+.codex-minibar-label {
+  font-feature-settings: "tnum";
+}
+
+.codex-minibar-gap {
+  margin-left: 8px;
+}
+
+.codex-minibar-warning {
+  color: #f6d32d;
+}
+
+.codex-minibar-critical {
+  color: #ff7b63;
+}
+
+.codex-minibar-quota {
+  padding-left: 24px;
+}

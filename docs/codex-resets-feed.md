@@ -68,7 +68,7 @@ again.
 
 The feed only says when a reset should land. The app decides per Codex instance
 whether it actually arrived by comparing consecutive quota samples
-(`src/reset_detection.rs`). The last sample and a week of detected events are
+(`src/quota/reset_detection.rs`). The last sample and a week of detected events are
 stored with the feed cache, and the first live sample after launch is compared
 with the persisted sample from the previous session, so detection also covers
 resets that landed while the app was closed.

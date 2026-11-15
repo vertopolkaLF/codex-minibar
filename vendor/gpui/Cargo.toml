@@ -42,6 +42,7 @@ default = [
     "windows-manifest",
 ]
 inspector = ["gpui_macros/inspector"]
+keep-alive = []
 leak-detection = ["backtrace"]
 macos-blade = [
     "blade-graphics",
@@ -433,6 +434,8 @@ features = [
     "cursor",
     "resource_manager",
     "sync",
+    # codex-minibar patch: `has_shm_present` in x11/window.rs.
+    "shm",
 ]
 optional = true
 

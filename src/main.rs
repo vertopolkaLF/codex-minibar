@@ -6,66 +6,57 @@ use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use codex_minibar::{
     app::AppState,
-    notifications,
-    provider::start_enabled_workers_with_limits,
-    provider_status, reset_feed,
-    scheduler::ActivationState,
-    settings::Settings,
-    single_instance::{self, SingleInstance},
-    store, troubleshoot,
-    updater::{
-        UpdateController, show_post_update_success_if_needed, sync_installed_display_version,
-    },
-    worker::WorkerEvent,
+    app::event::AppEvent,
+    app::single_instance::{self, SingleInstance},
+    app::troubleshoot,
+    platform::logger,
+    platform::paths,
+    providers::scheduler::ActivationState,
+    providers::start_enabled_workers,
+    providers::status,
+    quota::reset_feed,
+    settings::runtime,
+    store,
+    surfaces::notifications,
+    update::{self, UpdateController},
 };
 
 fn run() -> Result<()> {
+    codex_minibar::quota::banked_reset::mark_process_start();
+    codex_minibar::app::install_notification_host();
     notifications::initialize();
-    sync_installed_display_version();
-    let path = Settings::default_path()?;
-    codex_minibar::logger::initialize(&path)?;
-    if let Err(error) = codex_minibar::pricing::initialize() {
-        eprintln!("failed to hydrate pricing catalog: {error:#}");
+    update::sync_installed_display_version();
+    let path = paths::settings()?;
+    if paths::fake_sandbox() {
+        codex_minibar::providers::fake::seed_settings()?;
     }
-    let mut settings = Settings::load_or_create(&path)?;
-    settings.language.apply();
-    let just_updated = show_post_update_success_if_needed();
-    if let Err(error) = settings.reconcile_startup_from_registry(&path) {
-        eprintln!("failed to reconcile startup setting: {error:#}");
+    // Bootstrap order: logger, settings and every process-wide effect of
+    // them (language first), then workers, then windows.
+    logger::initialize(&paths::log()?)?;
+    #[cfg(not(windows))]
+    codex_minibar::platform::linux::vulkan::log_outcome();
+    #[cfg(not(windows))]
+    if let Err(error) =
+        futures::executor::block_on(codex_minibar::platform::linux::identity::register_portal())
+    {
+        logger::info(format!("Linux desktop portal identity: {error:#}"));
     }
-    if let Err(error) = settings.apply_runtime_effects() {
-        eprintln!("failed to apply startup registration: {error:#}");
+    if let Err(error) = codex_minibar::providers::claude::cleanup_abandoned_logins() {
+        logger::info(format!(
+            "could not clean abandoned Claude sign-in directories: {error:#}"
+        ));
     }
-    std::thread::spawn(|| {
-        // Let the update helper that relaunched us finish and drop its own
-        // staging before the install directory is swept.
-        std::thread::sleep(std::time::Duration::from_secs(30));
-        codex_minibar::updater::cleanup_install_dir();
-    });
-    std::thread::spawn(|| {
-        if let Err(error) = codex_minibar::discovery::cleanup() {
-            codex_minibar::logger::info(format!(
-                "Codex CLI startup cache cleanup deferred: {error:#}"
-            ));
-        }
-    });
-    let activation_path = path.with_file_name("activation.toml");
-    let last_activation_at: Option<DateTime<Utc>> =
-        ActivationState::load_or_default(&activation_path)
-            .ok()
-            .and_then(|state| state.last_attempt_at);
-
-    let (worker_events_tx, worker_events_rx) = mpsc::channel::<WorkerEvent>();
-    let reset_feed_worker = reset_feed::start_worker(
-        &settings,
-        reset_feed::cache_path(&path),
-        worker_events_tx.clone(),
-    );
-    let provider_status_worker = provider_status::start_worker(
-        &settings,
-        provider_status::cache_path(&path),
-        worker_events_tx.clone(),
-    );
+    if let Err(error) = codex_minibar::providers::codex::cleanup_abandoned_logins() {
+        logger::info(format!(
+            "could not clean abandoned Codex sign-in directories: {error:#}"
+        ));
+    }
+    if let Err(error) = codex_minibar::usage::pricing::initialize() {
+        logger::info(format!("failed to hydrate pricing catalog: {error:#}"));
+    }
+    let settings = runtime::load_at_startup(&path)?;
+    // Cached rates load before the first paint; refreshes run on their own thread.
+    codex_minibar::format::currency::initialize(path.with_file_name("exchange-rates.json"));
     let hydrated_limits = store::shared()
         .and_then(|shared| {
             let store = shared
@@ -73,29 +64,66 @@ fn run() -> Result<()> {
                 .map_err(|_| anyhow!("provider store lock poisoned"))?;
             // Drop rows of removed instances; disabled instances keep their data.
             if let Err(error) = store.prune_unknown_providers(&settings.provider_ids()) {
-                eprintln!("failed to prune unknown providers: {error:#}");
+                logger::info(format!("failed to prune unknown providers: {error:#}"));
             }
             store.hydrate_provider_limits(&settings.provider_ids(), settings.history_retention_days)
         })
         .unwrap_or_else(|error| {
-            eprintln!("failed to hydrate provider store: {error:#}");
+            logger::info(format!("failed to hydrate provider store: {error:#}"));
             Default::default()
         });
-    let (workers, startup_provider_errors) = start_enabled_workers_with_limits(
-        &settings,
-        activation_path.clone(),
-        worker_events_tx.clone(),
-        &hydrated_limits,
-    );
+    // Settings start the taskbar widgets; they open on the stored quotas.
+    codex_minibar::surfaces::taskbar::publish_limits(&hydrated_limits);
+    let (settings_tx, settings_rx) = mpsc::channel();
+    runtime::start(&settings, settings_tx);
+    update::finish_startup();
+    std::thread::spawn(|| {
+        if let Err(error) = codex_minibar::providers::codex::discovery::cleanup() {
+            logger::info(format!(
+                "Codex CLI startup cache cleanup deferred: {error:#}"
+            ));
+        }
+        #[cfg(not(windows))]
+        if let Err(error) =
+            codex_minibar::platform::linux::keybinding::refresh_extracted_appimage_command()
+        {
+            logger::info(format!("popup shortcut command refresh: {error:#}"));
+        }
+    });
+    let activation_path = paths::activation_state()?;
+    let last_activation_at: Option<DateTime<Utc>> =
+        match ActivationState::load_or_default(&activation_path) {
+            Ok(state) => state.last_attempt_at,
+            Err(error) => {
+                logger::info(format!("failed to load activation state: {error:#}"));
+                None
+            }
+        };
+
+    let (worker_events_tx, worker_events_rx) = mpsc::channel::<AppEvent>();
+    let reset_feed_worker = reset_feed::start_worker(&settings, paths::reset_feed_cache()?, {
+        let events = worker_events_tx.clone();
+        move |snapshot| {
+            let _ = events.send(AppEvent::ForcedResetsUpdated(snapshot));
+        }
+    });
+    let provider_status_worker =
+        status::start_worker(&settings, paths::provider_status_cache()?, {
+            let events = worker_events_tx.clone();
+            move |snapshot| {
+                let _ = events.send(AppEvent::ProviderStatusUpdated(snapshot));
+            }
+        });
+    let (workers, startup_provider_errors) =
+        start_enabled_workers(&settings, activation_path.clone(), worker_events_tx.clone());
     let commands = workers
         .iter()
         .map(|(provider, worker)| (*provider, worker.commands.clone()))
         .collect();
-    let (settings_tx, settings_rx) = mpsc::channel();
     let (usage_actions_tx, usage_actions_rx) = mpsc::channel();
     let updates = UpdateController::new();
     if settings.check_for_updates {
-        updates.check_async(true, settings.notifications.update_available);
+        updates.check_on_startup(settings.notifications.update_available);
     }
     let onboarding_needed = !settings.onboarding_completed;
     let state = Arc::new(AppState {
@@ -103,6 +131,7 @@ fn run() -> Result<()> {
         limits: Mutex::new(hydrated_limits),
         forced_resets: Mutex::new(Vec::new()),
         provider_statuses: Mutex::new(Vec::new()),
+        changes: Default::default(),
         commands: Mutex::new(commands),
         workers: Mutex::new(workers),
         worker_events_rx: Mutex::new(Some(worker_events_rx)),
@@ -112,25 +141,24 @@ fn run() -> Result<()> {
         activation_path,
         startup_provider_errors,
         last_activation_at,
-        settings_tx,
         settings_rx: Mutex::new(Some(settings_rx)),
         usage_actions_tx,
         usage_actions_rx: Mutex::new(Some(usage_actions_rx)),
         updates: Arc::clone(&updates),
     });
-    codex_minibar::game_mode::set_settings_writer(state.settings_tx.clone());
-    codex_minibar::updater::install_runtime(Arc::clone(&updates), {
+    codex_minibar::update::install_runtime(Arc::clone(&updates), {
         let state = Arc::clone(&state);
         move || state.shutdown_worker()
     });
 
-    // Initializes the tray accent before any popup can be shown.
-    codex_minibar::theme::apply_appearance(state.settings.theme, state.settings.accent_color);
-    codex_minibar::popup_window::start(Arc::clone(&state));
-    codex_minibar::whats_new::start(&state.settings, just_updated);
+    codex_minibar::app::start(Arc::clone(&state));
+    codex_minibar::update::whats_new::start(&state.settings);
+    #[cfg(windows)]
     if onboarding_needed {
-        codex_minibar::settings_window::open_onboarding();
+        codex_minibar::ui::settings_window::open_onboarding();
     }
+    #[cfg(not(windows))]
+    codex_minibar::platform::linux::instance::show_initial_window(onboarding_needed);
     // The GPUI thread owns every window and the bridge thread owns the tray;
     // both exit the process directly, so the main thread only stays alive.
     loop {
@@ -141,18 +169,11 @@ fn run() -> Result<()> {
 fn show_error(message: &str) {
     #[cfg(windows)]
     {
-        use std::ffi::OsStr;
-        use std::os::windows::ffi::OsStrExt;
+        use codex_minibar::platform::win32::wide;
         use windows_sys::Win32::UI::WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW};
 
-        let text: Vec<u16> = OsStr::new(message)
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        let caption: Vec<u16> = OsStr::new("Codex Minibar")
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
+        let text = wide(message);
+        let caption = wide("Codex Minibar");
         unsafe {
             MessageBoxW(
                 std::ptr::null_mut(),
@@ -169,6 +190,14 @@ fn show_error(message: &str) {
 }
 
 fn main() {
+    #[cfg(not(windows))]
+    // SAFETY: this is the first statement of main, before any thread exists.
+    unsafe {
+        codex_minibar::platform::linux::appimage_launch::restore_user_tmpdir();
+    }
+    if codex_minibar::surfaces::status::is_cli_request() {
+        std::process::exit(codex_minibar::surfaces::status::run_cli());
+    }
     if troubleshoot::is_cli_request() {
         if let Err(error) = troubleshoot::launch_cli_picker() {
             show_error(&format!(
@@ -178,6 +207,13 @@ fn main() {
         return;
     }
 
+    #[cfg(not(windows))]
+    // SAFETY: only argument checks have run on this path. Capture before
+    // single-instance activation or any other app code can start threads.
+    // The terminal-only CLI path above forwards its launch context directly.
+    unsafe {
+        codex_minibar::platform::linux::instance::capture_startup_activation_token();
+    }
     let instance = match SingleInstance::acquire_or_activate_existing() {
         Ok(Some(instance)) => instance,
         Ok(None) => return,
@@ -189,12 +225,6 @@ fn main() {
         }
     };
     single_instance::SingleInstance::hold(instance);
-    if let Err(error) = codex_minibar::claude::cleanup_abandoned_logins() {
-        eprintln!("could not clean abandoned Claude sign-in directories: {error:#}");
-    }
-    if let Err(error) = codex_minibar::codex::cleanup_abandoned_logins() {
-        eprintln!("could not clean abandoned Codex sign-in directories: {error:#}");
-    }
     if let Err(error) = run() {
         show_error(&format!("Codex Minibar failed: {error:#}"));
     }

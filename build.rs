@@ -50,7 +50,7 @@ fn collect_files(root: &Path, dir: &Path, files: &mut Vec<String>) {
 
 /// Embed the application manifest: Common Controls v6 (GPUI and the popup
 /// host import TaskDialogIndirect/SetWindowSubclass) and per-monitor v2 DPI
-/// awareness, which both GPUI windows rely on for crisp scaling.
+/// awareness, which the GPUI windows rely on for crisp scaling.
 fn embed_application_manifest() {
     // Read the directory at run time: `env!` bakes in the checkout the build
     // script was compiled from, which goes stale when worktrees share `target`.

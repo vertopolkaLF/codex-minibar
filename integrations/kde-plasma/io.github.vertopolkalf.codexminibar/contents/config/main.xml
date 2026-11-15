@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kcfg xmlns="http://www.kde.org/standards/kcfg/1.0"
+      xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+      xsi:schemaLocation="http://www.kde.org/standards/kcfg/1.0 http://www.kde.org/standards/kcfg/1.0/kcfg.xsd">
+  <kcfgfile name=""/>
+  <group name="General">
+    <entry name="executable" type="String">
+      <label>Fallback executable when D-Bus status is unavailable, e.g. an AppImage path.</label>
+      <default>codex-minibar</default>
+    </entry>
+    <entry name="intervalSeconds" type="Int">
+      <label>Seconds between updates.</label>
+      <default>30</default>
+      <min>5</min>
+      <max>3600</max>
+    </entry>
+  </group>
+</kcfg>

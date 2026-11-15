@@ -19,7 +19,7 @@ public sealed class Endpoint
 
 /// <summary>
 /// Any bridge reply: `palette` fills the bands and providers, `accepted` and
-/// `error` only the status. Mirrors `Response` in `src/streamdeck.rs`.
+/// `error` only the status. Mirrors `Response` in `src/surfaces/streamdeck.rs`.
 /// </summary>
 public sealed class Reply
 {

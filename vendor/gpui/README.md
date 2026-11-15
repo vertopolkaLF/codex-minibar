@@ -5,6 +5,30 @@ for Rust, designed to support a wide variety of applications.
 
 ## Getting Started
 
+### Local Wayland geometry fix
+
+Programmatic resize reports surface-local window geometry in logical units,
+matching configure handling. Desktop position and device-pixel scaling must not
+enter this rectangle: KWin uses it for interactive moves and can otherwise clip
+the window outside its buffer.
+
+### Local tray application support
+
+The local `keep-alive` feature keeps the Linux Wayland and X11 event loops running
+after the last window closes. Tray applications can then reopen windows without
+keeping an invisible window alive. It does not change other platforms or explicit
+application quit requests; without this feature, upstream last-window behavior is
+unchanged.
+
+The local `Window::set_always_on_top` API sends an explicit EWMH add/remove
+request for `_NET_WM_STATE_ABOVE` on X11. Other backends leave stacking unchanged;
+standard Wayland has no equivalent request. `App::compositor_name()` identifies
+the active backend, including X11 selected inside a Wayland desktop session.
+
+The local `Window::activate_window_with_token` API accepts activation tokens from
+desktop portals. Wayland uses the supplied token to focus the window after a global
+shortcut; other backends use their ordinary window activation behavior.
+
 GPUI is still in active development as we work on the Zed code editor, and is still pre-1.0. There will often be breaking changes between versions. You'll also need to use the latest version of stable Rust and be on macOS or Linux. Add the following to your `Cargo.toml`:
 
 ```toml

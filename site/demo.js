@@ -1,5 +1,5 @@
 /* Interactive mockup of the real Codex Minibar popup.
-   Layout, wording and metrics mirror src/popup_window/* so the site preview
+   Layout, wording and metrics mirror src/ui/popup_window/* so the site preview
    stays honest about what the app actually shows. */
 (() => {
   const mock = document.querySelector(".popup-mock");

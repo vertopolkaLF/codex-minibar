@@ -1,0 +1,8 @@
+{
+  "uuid": "codex-minibar@vertopolkalf.github.io",
+  "name": "Codex Minibar",
+  "description": "Shows the AI subscription quotas of the running Codex Minibar app in the top bar.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "url": "https://github.com/vertopolkaLF/codex-minibar",
+  "version-name": "1.0"
+}

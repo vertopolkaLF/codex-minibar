@@ -841,13 +841,25 @@ impl PlatformWindow for WaylandWindow {
     fn resize(&mut self, size: Size<Pixels>) {
         let state = self.borrow();
         let state_ptr = self.0.clone();
-        let dp_size = size.to_device_pixels(self.scale_factor());
-
+        // xdg_surface geometry is surface-local and uses logical units.
+        // bounds.origin is the requested desktop position, which Wayland
+        // cannot honor. Using it here can put the geometry outside the buffer
+        // and make KWin clip away the window during an interactive move.
+        let geometry = inset_by_tiling(
+            Bounds {
+                origin: Point::default(),
+                size,
+            },
+            state.inset(),
+            state.tiling,
+        )
+        .map(|value| value.0 as i32)
+        .map_size(|value| value.max(1));
         state.xdg_surface.set_window_geometry(
-            state.bounds.origin.x.0 as i32,
-            state.bounds.origin.y.0 as i32,
-            dp_size.width.0,
-            dp_size.height.0,
+            geometry.origin.x,
+            geometry.origin.y,
+            geometry.size.width,
+            geometry.size.height,
         );
 
         state
@@ -925,6 +937,16 @@ impl PlatformWindow for WaylandWindow {
             token.set_serial(serial, &state.globals.seat);
             token.set_surface(&state.surface);
             token.commit();
+        }
+    }
+
+    fn activate_with_token(&self, token: String) {
+        let state = self.borrow();
+        if let Some(activation) = &state.globals.activation {
+            activation.activate(token, &state.surface);
+        } else {
+            drop(state);
+            self.activate();
         }
     }
 
