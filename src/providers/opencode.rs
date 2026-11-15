@@ -320,7 +320,9 @@ impl OpenCodeClient {
                 snapshot.weekly = weekly;
                 snapshot.monthly = monthly;
             }
-            Err(error) => snapshot.error = Some(format!("{error:#}")),
+            // Key-local errors reach the log, the store and the provider tab;
+            // servers occasionally echo credentials in error bodies.
+            Err(error) => snapshot.error = Some(redact_secret(&value, format!("{error:#}"))),
         }
         snapshot
     }
@@ -771,6 +773,16 @@ fn worst_window<'a>(windows: impl Iterator<Item = &'a LimitWindow>) -> LimitWind
     worst.cloned().unwrap_or_default()
 }
 
+/// Removes a credential from text that can reach logs, the store or the UI.
+/// The masked form keeps the error recognizable without exposing the key.
+fn redact_secret(secret: &str, message: String) -> String {
+    let secret = secret.trim();
+    if secret.is_empty() || !message.contains(secret) {
+        return message;
+    }
+    message.replace(secret, &secrets::masked_hint(secret))
+}
+
 /// Why one key produced no sample, phrased for the provider tab and the
 /// worker's error line.
 fn go_missing_key_message(key: &TrackedKey) -> String {
@@ -979,6 +991,16 @@ mod tests {
             limits.opencode_go_keys[1].error.as_deref(),
             Some("OpenCode Go API returned HTTP 429")
         );
+    }
+
+    #[test]
+    fn key_errors_never_carry_the_credential() {
+        let key = "oc_sk_live_0123456789abcdef";
+        let message = format!("OpenCode Go API returned HTTP 401: invalid key {key}");
+        let redacted = redact_secret(key, message);
+        assert!(!redacted.contains("0123456789abcdef"));
+        assert!(redacted.contains('…'));
+        assert_eq!(redact_secret(key, "HTTP 429".into()), "HTTP 429");
     }
 
     #[test]
