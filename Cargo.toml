@@ -31,7 +31,7 @@ serde_json = "1"
 sha2 = "0.10"
 toml = "0.9"
 tempfile = "3"
-ureq = { version = "2", default-features = false, features = ["tls", "native-tls"] }
+ureq = { version = "2", default-features = false, features = ["tls", "native-tls", "proxy-from-env"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 zip = "2"
 zeroize = "1"
