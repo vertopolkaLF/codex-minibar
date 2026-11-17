@@ -522,46 +522,73 @@ impl ClaudeClient {
     }
 
     pub(crate) fn consume_reset(&mut self, requested: Option<&str>) -> Result<Outcome> {
-        let folder = match &self.login {
-            ClaudeLogin::Folder(folder) => folder.clone(),
-            ClaudeLogin::Ambient => credentials_path()
-                .and_then(|path| path.parent().map(Path::to_path_buf))
-                .context("locate Claude CLI credentials")?,
-            ClaudeLogin::Manual(_) => bail!("{}", crate::i18n::tr("reset-cli-login-required")),
-        };
         let agent = self.agent()?;
-        let file = folder.join(".credentials.json");
-        let credentials =
-            self.with_refresh(&agent, Some(&folder), || load_cli_credentials_at(&file))?;
-        // Ambient quota may belong to Claude Desktop. Its CLI account must
-        // never be redeemed on behalf of a different displayed login.
-        if matches!(self.login, ClaudeLogin::Ambient)
-            && load_credentials()?.access_token != credentials.access_token
-        {
-            bail!("{}", crate::i18n::tr("reset-cli-login-required"));
-        }
-        let config = if matches!(self.login, ClaudeLogin::Ambient) {
-            BaseDirs::new()
-                .context("locate home directory")?
-                .home_dir()
-                .join(".claude.json")
-        } else {
-            folder.join(".claude.json")
+        // Redeem with the very login whose quota the popup shows, so a reset
+        // is never spent on behalf of a different account.
+        let (scope, access_token, sign_in_hint, organization) = match self.login.clone() {
+            ClaudeLogin::Folder(folder) => {
+                let file = folder.join(".credentials.json");
+                let credentials =
+                    self.with_refresh(&agent, Some(&folder), || load_cli_credentials_at(&file))?;
+                let organization = fs::read(folder.join(".claude.json"))
+                    .ok()
+                    .and_then(|config| serde_json::from_slice::<Value>(&config).ok())
+                    .and_then(|config| {
+                        config
+                            .pointer("/oauthAccount/organizationUuid")
+                            .and_then(Value::as_str)
+                            .map(str::to_owned)
+                    });
+                (
+                    folder,
+                    credentials.access_token,
+                    FOLDER_SIGN_IN_HINT,
+                    organization,
+                )
+            }
+            // Claude Desktop's session when present, otherwise the CLI's: the
+            // same choice `read_rate_limits` makes for this login.
+            ClaudeLogin::Ambient => {
+                let credentials = self.with_refresh(&agent, None, load_credentials)?;
+                let hint = credentials.source.sign_in_hint();
+                (
+                    PathBuf::from("ambient"),
+                    credentials.access_token,
+                    hint,
+                    None,
+                )
+            }
+            ClaudeLogin::Manual(instance_id) => {
+                let token = load_manual_credential(&instance_id)?
+                    .as_deref()
+                    .and_then(manual_oauth_token)
+                    .with_context(|| crate::i18n::tr("reset-cli-login-required"))?;
+                (
+                    PathBuf::from("manual").join(&instance_id),
+                    token,
+                    MANUAL_CREDENTIAL_HINT,
+                    None,
+                )
+            }
         };
-        let config: Value = serde_json::from_slice(
-            &fs::read(config).context("read Claude account configuration")?,
-        )?;
-        let organization = config
-            .pointer("/oauthAccount/organizationUuid")
-            .and_then(Value::as_str)
-            .filter(|id| {
-                !id.is_empty() && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
-            })
-            .context("Claude account has no organization UUID")?;
-        let limits =
-            self.read_oauth(&agent, &credentials.access_token, FOLDER_SIGN_IN_HINT, None)?;
+        // Only CLI folders record the organization locally; every OAuth login
+        // can look it up from its profile.
+        let organization = match organization {
+            Some(organization) => organization,
+            None => fetch_profile(&agent, &access_token)?
+                .organization_uuid
+                .context("Claude account has no organization UUID")?,
+        };
+        anyhow::ensure!(
+            !organization.is_empty()
+                && organization
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'-'),
+            "Claude account has no organization UUID"
+        );
+        let limits = self.read_oauth(&agent, &access_token, sign_in_hint, None)?;
         let grant = redeemable_grant(limits.reset_credits, requested);
-        let account = crate::quota::banked_reset::account_key("claude", &folder, organization);
+        let account = crate::quota::banked_reset::account_key("claude", &scope, &organization);
         crate::quota::banked_reset::redeem(account, grant, |key, grant| {
             if grant.is_empty() {
                 return Ok(Outcome::NoCredit);
@@ -577,7 +604,7 @@ impl ClaudeClient {
                 agent.post(&format!(
                     "https://api.anthropic.com/api/organizations/{organization}/reset_rate_limits"
                 )),
-                &credentials.access_token,
+                &access_token,
                 grant,
                 key,
             )
@@ -1351,6 +1378,19 @@ fn load_cli_credentials_at(path: &Path) -> Result<Credentials> {
     })
 }
 
+/// The OAuth access token in a pasted credential, read the way
+/// `read_credential` reads it. Cookies and Admin API keys have none.
+fn manual_oauth_token(credential: &str) -> Option<String> {
+    if credential.trim_start().starts_with('{') {
+        let session: Value = serde_json::from_str(credential).ok()?;
+        return session["accessToken"].as_str().map(str::to_owned);
+    }
+    match Credential::parse(credential).ok()? {
+        Credential::OAuth(token) => Some(token),
+        Credential::Cookie(_) | Credential::AdminKey(_) => None,
+    }
+}
+
 fn load_desktop_credentials() -> Result<Credentials> {
     let session = desktop::load_session()?;
     Ok(Credentials {
@@ -1398,6 +1438,7 @@ struct OAuthProfileAccount {
 
 #[derive(Deserialize)]
 struct OAuthProfileOrganization {
+    uuid: Option<String>,
     name: Option<String>,
     organization_type: Option<String>,
     seat_tier: Option<String>,
@@ -1645,6 +1686,8 @@ fn parse_cloud_session_credits(value: &Value) -> Option<crate::quota::limits::Cl
 struct AccountProfile {
     account_name: Option<String>,
     plan_type: Option<String>,
+    /// Needed to redeem banked resets for logins without a CLI `.claude.json`.
+    organization_uuid: Option<String>,
 }
 
 fn fetch_profile(agent: &ureq::Agent, access_token: &str) -> Result<AccountProfile> {
@@ -1679,6 +1722,10 @@ fn parse_profile(response: &str) -> Result<AccountProfile> {
                     account.has_claude_pro.unwrap_or_default(),
                 )
             });
+    let organization_uuid = profile
+        .organization
+        .as_ref()
+        .and_then(|organization| non_empty(organization.uuid.clone()));
     let (organization_name, plan_type) =
         profile.organization.map_or((None, None), |organization| {
             (
@@ -1696,6 +1743,7 @@ fn parse_profile(response: &str) -> Result<AccountProfile> {
         });
     Ok(AccountProfile {
         account_name: person_name.or(organization_name).or(email),
+        organization_uuid,
         plan_type: plan_type.or_else(|| {
             // Personal entitlement flags only matter when no organization
             // named a plan, so a team seat is not relabelled by them.
