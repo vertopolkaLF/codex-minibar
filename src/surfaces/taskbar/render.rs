@@ -39,6 +39,8 @@ const PAD_START: f32 = 8.0;
 const PAD_END: f32 = 10.0;
 const ICON: f32 = 20.0;
 const ICON_GAP: f32 = 8.0;
+const ROW_ICON: f32 = 12.0;
+const ROW_ICON_GAP: f32 = 4.0;
 const LABEL_GAP: f32 = 4.0;
 const RING: f32 = 28.0;
 const RING_GAP: f32 = 6.0;
@@ -497,6 +499,9 @@ impl Renderer {
 
     /// Leading provider mark; returns the x where content continues.
     fn leading_icon(view: &WidgetView, metrics: Metrics, prims: &mut Vec<Prim>) -> f32 {
+        if view.row_icons() {
+            return PAD_START;
+        }
         let Some(icon) = view.icon.clone() else {
             return PAD_START + 2.0;
         };
@@ -508,6 +513,48 @@ impl Renderer {
             size,
         });
         PAD_START + size + ICON_GAP
+    }
+
+    fn row_icon(row: &Row, x: f32, center: f32, size: f32, prims: &mut Vec<Prim>) {
+        prims.push(Prim::Icon {
+            icon: row.icon.clone(),
+            x,
+            y: center - size / 2.0,
+            size,
+        });
+    }
+
+    fn row_stack(
+        view: &WidgetView,
+        lines: Vec<Runs>,
+        x: f32,
+        metrics: Metrics,
+        prims: &mut Vec<Prim>,
+    ) -> f32 {
+        if !view.row_icons() {
+            return Self::stack(lines, x, metrics, false, prims);
+        }
+        let pitch = lines
+            .iter()
+            .map(runs_height)
+            .fold(ROW_ICON, f32::max)
+            .min(metrics.inner() / lines.len().max(1) as f32);
+        let size = ROW_ICON.min(pitch);
+        let block = lines.iter().map(runs_width).fold(0.0, f32::max);
+        let top = (metrics.thickness - pitch * lines.len() as f32) / 2.0;
+        for (index, (runs, row)) in lines.into_iter().zip(&view.rows).enumerate() {
+            let center = top + pitch * (index as f32 + 0.5);
+            let height = runs_height(&runs);
+            Self::row_icon(row, x, center, size, prims);
+            Self::place_runs(
+                runs,
+                x + size + ROW_ICON_GAP,
+                center - height / 2.0,
+                height,
+                prims,
+            );
+        }
+        size + ROW_ICON_GAP + block
     }
 
     /// Stacks lines vertically centered in the taskbar, left-aligned at `x`
@@ -636,7 +683,7 @@ impl Renderer {
         metrics: Metrics,
         prims: &mut Vec<Prim>,
     ) -> windows::core::Result<f32> {
-        if !view.has_text() {
+        if !view.has_text() && !view.row_icons() {
             return Ok(0.0);
         }
         let font = metrics.rows_font(view.rows.len());
@@ -644,7 +691,7 @@ impl Renderer {
         for row in &view.rows {
             lines.push(self.row_runs(view, row, font, Weight::Semibold)?);
         }
-        Ok(Self::stack(lines, x, metrics, false, prims))
+        Ok(Self::row_stack(view, lines, x, metrics, prims))
     }
 
     fn glance(&mut self, view: &WidgetView, metrics: Metrics) -> windows::core::Result<Content> {
@@ -660,7 +707,7 @@ impl Renderer {
             }
             lines
         };
-        let block = Self::stack(lines, x, metrics, false, &mut prims);
+        let block = Self::row_stack(view, lines, x, metrics, &mut prims);
         Ok(Content {
             length: x + block + PAD_END,
             prims,
@@ -669,7 +716,12 @@ impl Renderer {
 
     fn bars(&mut self, view: &WidgetView, metrics: Metrics) -> windows::core::Result<Content> {
         let mut prims = Vec::new();
-        let x = Self::leading_icon(view, metrics, &mut prims);
+        let mut x = Self::leading_icon(view, metrics, &mut prims);
+        let icon_x = x;
+        let row_icon_size = ROW_ICON.min(metrics.inner() / view.rows.len().max(1) as f32);
+        if view.row_icons() {
+            x += row_icon_size + ROW_ICON_GAP;
+        }
         if !view.has_text() {
             // The bars alone, evenly spaced around the middle.
             let width = if view.rows.len() > 1 {
@@ -677,9 +729,22 @@ impl Renderer {
             } else {
                 BAR_SINGLE
             };
-            let pitch = 8.0;
+            let pitch = if view.row_icons() {
+                (row_icon_size + 2.0).min(metrics.inner() / view.rows.len().max(1) as f32)
+            } else {
+                8.0
+            };
             let top = (metrics.thickness - pitch * (view.rows.len() as f32 - 1.0)) / 2.0;
             for (index, row) in view.rows.iter().enumerate() {
+                if view.row_icons() {
+                    Self::row_icon(
+                        row,
+                        icon_x,
+                        top + pitch * index as f32,
+                        row_icon_size,
+                        &mut prims,
+                    );
+                }
                 prims.push(Prim::Bar {
                     x,
                     y: top + pitch * index as f32,
@@ -808,6 +873,9 @@ impl Renderer {
         };
         for (index, ((label, value, reset), row)) in cells.into_iter().zip(&view.rows).enumerate() {
             let center = top + pitch * (index as f32 + 0.5);
+            if view.row_icons() {
+                Self::row_icon(row, icon_x, center, row_icon_size.min(pitch), &mut prims);
+            }
             if let Some(label) = label {
                 prims.push(Prim::Text {
                     x,
@@ -930,7 +998,10 @@ impl Renderer {
             y: metrics.thickness / 2.0,
         };
         let hole = Self::concentric(view, center, diameter, &mut prims);
-        if inside && let Some(icon) = view.icon.clone() {
+        if inside
+            && !view.row_icons()
+            && let Some(icon) = view.icon.clone()
+        {
             let size = hole.min(16.0).floor();
             if size >= 8.0 {
                 prims.push(Prim::Icon {
@@ -942,7 +1013,7 @@ impl Renderer {
             }
         }
         x += diameter;
-        if view.has_text() {
+        if view.has_text() || view.row_icons() {
             x += RING_GAP + 2.0;
             x += self.values_beside(view, x, metrics, &mut prims)?;
         }
@@ -999,12 +1070,22 @@ impl Renderer {
         let mut prims = Vec::new();
         let diameter = DIAL.min(metrics.inner() - 6.0).max(18.0);
         let mut x = Self::leading_icon(view, metrics, &mut prims);
-        if view.icon.is_some() {
+        if view.icon.is_some() && !view.row_icons() {
             x -= ICON_GAP - DIAL_GAP;
         }
         for index in 0..view.rows.len() {
             if index > 0 {
                 x += DIAL_GAP;
+            }
+            if view.row_icons() {
+                Self::row_icon(
+                    &view.rows[index],
+                    x,
+                    metrics.thickness / 2.0,
+                    ROW_ICON,
+                    &mut prims,
+                );
+                x += ROW_ICON + ROW_ICON_GAP;
             }
             let center = Vector2 {
                 x: x + diameter / 2.0,
@@ -1045,7 +1126,7 @@ impl Renderer {
         let mut x = Self::leading_icon(view, metrics, &mut prims);
         let height = (metrics.inner() - 10.0).max(12.0);
         x += Self::columns(view, x, metrics.thickness / 2.0, height, &mut prims);
-        if view.has_text() {
+        if view.has_text() || view.row_icons() {
             x += ICON_GAP;
             x += self.values_beside(view, x, metrics, &mut prims)?;
         }
@@ -1069,7 +1150,10 @@ impl Renderer {
         let icon_inside = style == TaskbarWidgetStyle::Rings
             || (style == TaskbarWidgetStyle::Nested && view.rows.len() <= 2);
         let icon_first = !icon_inside;
-        if icon_first && let Some(icon) = view.icon.clone() {
+        if icon_first
+            && !view.row_icons()
+            && let Some(icon) = view.icon.clone()
+        {
             let size = Self::icon_size(metrics).min(room);
             prims.push(Prim::Icon {
                 icon,
@@ -1086,7 +1170,7 @@ impl Renderer {
             || (matches!(
                 style,
                 TaskbarWidgetStyle::Nested | TaskbarWidgetStyle::Meters
-            ) && view.show_values);
+            ) && (view.show_values || view.row_icons()));
         match style {
             TaskbarWidgetStyle::Rings | TaskbarWidgetStyle::Dials => {
                 let diameter = if style == TaskbarWidgetStyle::Dials {
@@ -1101,6 +1185,20 @@ impl Renderer {
                         y: y + diameter / 2.0,
                     };
                     if style == TaskbarWidgetStyle::Dials {
+                        if view.row_icons() {
+                            Self::row_icon(
+                                row,
+                                middle - ROW_ICON / 2.0,
+                                y + ROW_ICON / 2.0,
+                                ROW_ICON,
+                                &mut prims,
+                            );
+                            y += ROW_ICON + ROW_ICON_GAP;
+                        }
+                        let center = Vector2 {
+                            x: middle,
+                            y: y + diameter / 2.0,
+                        };
                         self.dial(view, index, center, diameter, &mut prims)?;
                         y += diameter + DIAL_GAP;
                         continue;
@@ -1141,7 +1239,10 @@ impl Renderer {
                     y: y + diameter / 2.0,
                 };
                 let hole = Self::concentric(view, center, diameter, &mut prims);
-                if !icon_first && let Some(icon) = view.icon.clone() {
+                if !icon_first
+                    && !view.row_icons()
+                    && let Some(icon) = view.icon.clone()
+                {
                     let size = hole.min(16.0).floor();
                     if size >= 8.0 {
                         prims.push(Prim::Icon {
@@ -1170,7 +1271,7 @@ impl Renderer {
             TaskbarWidgetStyle::Bars => {
                 let width = room;
                 for (index, row) in view.rows.iter().enumerate() {
-                    if view.show_values {
+                    if view.show_values || view.row_icons() {
                         y += self.centered(view, row, font, middle, room, y, &mut prims)? + 3.0;
                     }
                     prims.push(Prim::Bar {
@@ -1224,6 +1325,13 @@ impl Renderer {
         prims: &mut Vec<Prim>,
     ) -> windows::core::Result<f32> {
         let mut runs = self.row_runs(view, row, font, weight)?;
+        let show_icon = view.row_icons() && view.style != TaskbarWidgetStyle::Rings;
+        let icon_width = if show_icon {
+            ROW_ICON + ROW_ICON_GAP
+        } else {
+            0.0
+        };
+        let room = room - icon_width;
         // Too wide for the taskbar: drop the label, then the reset time.
         if runs.len() > 1 && view.show_labels && runs_width(&runs) > room {
             runs.remove(0);
@@ -1231,9 +1339,13 @@ impl Renderer {
         if runs.len() > 1 && row.reset.is_some() && runs_width(&runs) > room {
             runs.pop();
         }
-        let width = runs_width(&runs);
-        let height = runs_height(&runs);
-        Self::place_runs(runs, middle - width / 2.0, y, height, prims);
+        let width = runs_width(&runs) + icon_width;
+        let height = runs_height(&runs).max(if show_icon { ROW_ICON } else { 0.0 });
+        let x = middle - width / 2.0;
+        if show_icon {
+            Self::row_icon(row, x, y + height / 2.0, ROW_ICON, prims);
+        }
+        Self::place_runs(runs, x + icon_width, y, height, prims);
         Ok(height)
     }
 
@@ -2135,5 +2247,85 @@ pub(crate) fn snapshot(
             height: height as u32,
             rgba,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        providers::{instances::ProviderId, registry::ProviderKind},
+        quota::limits::ProviderLimits,
+        settings::TaskbarWidget,
+        surfaces::taskbar::model::resolve,
+    };
+
+    #[test]
+    fn mixed_widget_marks_follow_rows_in_every_layout() {
+        let mut renderer = Renderer::new().unwrap();
+        let codex = ProviderId::primary(ProviderKind::Codex);
+        let claude = ProviderId::primary(ProviderKind::Claude);
+        let mut widget = TaskbarWidget::for_provider(codex);
+        widget.indicators.truncate(1);
+        widget
+            .indicators
+            .push(TaskbarWidget::for_provider(claude).indicators.remove(0));
+        let appearance = Appearance {
+            light: false,
+            colored_icons: true,
+            accent: [0, 120, 212],
+        };
+        for style in [
+            TaskbarWidgetStyle::Glance,
+            TaskbarWidgetStyle::Bars,
+            TaskbarWidgetStyle::Rings,
+            TaskbarWidgetStyle::Nested,
+            TaskbarWidgetStyle::Dials,
+            TaskbarWidgetStyle::Meters,
+        ] {
+            widget.style = style;
+            for vertical in [false, true] {
+                for text in [false, true] {
+                    let mut view = resolve(&widget, &ProviderLimits::default(), appearance);
+                    view.show_labels = text;
+                    view.show_values = text;
+                    for scale in [1.0, 1.5, 2.0] {
+                        let metrics = Metrics {
+                            scale,
+                            thickness: 48.0,
+                            vertical,
+                        };
+                        let content = renderer.content(&view, metrics).unwrap();
+                        let icons = content
+                            .prims
+                            .iter()
+                            .filter_map(|prim| match prim {
+                                Prim::Icon { icon, size, .. } => Some((icon, size)),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            icons.len(),
+                            view.rows.len(),
+                            "{style:?}, vertical={vertical}, text={text}"
+                        );
+                        for ((icon, size), row) in icons.iter().zip(&view.rows) {
+                            assert_eq!(*icon, &row.icon);
+                            assert!(**size <= 14.0);
+                        }
+                        view.icon = None;
+                        assert!(
+                            !renderer
+                                .content(&view, metrics)
+                                .unwrap()
+                                .prims
+                                .iter()
+                                .any(|prim| matches!(prim, Prim::Icon { .. }))
+                        );
+                        view.icon = Some(view.rows[0].icon.clone());
+                    }
+                }
+            }
+        }
     }
 }

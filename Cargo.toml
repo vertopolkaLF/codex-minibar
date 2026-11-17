@@ -123,3 +123,6 @@ ttf-parser = { opt-level = 3 }
 # Translucent windows otherwise draw anti-aliased edges as gray hairlines.
 [patch.crates-io]
 gpui = { path = "vendor/gpui" }
+
+# HTTPS CONNECT tunnels use origin-form request targets (Cursor rejects absolute-form).
+ureq = { path = "vendor/ureq" }

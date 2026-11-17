@@ -140,6 +140,15 @@ pub(crate) struct CardSection {
 }
 
 impl WidgetView {
+    /// Mixed instances need their own mark beside each indicator.
+    pub(crate) fn row_icons(&self) -> bool {
+        self.icon.is_some()
+            && self
+                .rows
+                .first()
+                .is_some_and(|first| self.rows.iter().any(|row| row.provider != first.provider))
+    }
+
     /// Whether anything is written beside or under the graphic.
     pub(crate) fn has_text(&self) -> bool {
         self.show_values || self.show_labels || self.rows.iter().any(|row| row.reset.is_some())
