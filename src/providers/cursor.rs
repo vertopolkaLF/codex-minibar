@@ -812,20 +812,16 @@ fn billing_cycle(
     summary: Option<&Value>,
     usage: Option<&Value>,
 ) -> (Option<DateTime<Utc>>, Option<u32>) {
-    let start = summary
-        .and_then(|value| value.get("billingCycleStart"))
-        .and_then(Value::as_str)
-        .and_then(parse_time)
-        .or_else(|| {
-            usage
-                .and_then(|usage| usage.get("startOfMonth"))
-                .and_then(Value::as_str)
-                .and_then(parse_time)
-        });
-    let end = summary
-        .and_then(|value| value.get("billingCycleEnd"))
-        .and_then(Value::as_str)
-        .and_then(parse_time);
+    // The REST summary uses RFC 3339 strings; the Connect usage response
+    // carries the same cycle as epoch-millisecond strings. Either source is
+    // enough, so the cycle survives when cursor.com is unreachable.
+    let field = |value: Option<&Value>, key: &str| {
+        value.and_then(|value| value.get(key)).and_then(time_value)
+    };
+    let start = field(summary, "billingCycleStart")
+        .or_else(|| field(usage, "billingCycleStart"))
+        .or_else(|| field(usage, "startOfMonth"));
+    let end = field(summary, "billingCycleEnd").or_else(|| field(usage, "billingCycleEnd"));
     let duration = match (start, end) {
         (Some(start), Some(end)) if end > start => u32::try_from((end - start).num_minutes()).ok(),
         _ => Some(31 * 24 * 60),
@@ -834,6 +830,21 @@ fn billing_cycle(
         start.map(|start| start + chrono::Duration::minutes(i64::from(duration.unwrap_or(44_640))))
     });
     (reset, duration)
+}
+
+/// Accepts RFC 3339 text or epoch milliseconds (as a JSON string or number).
+fn time_value(value: &Value) -> Option<DateTime<Utc>> {
+    if let Some(text) = value.as_str() {
+        let text = text.trim();
+        return parse_time(text).or_else(|| text.parse::<i64>().ok().and_then(epoch_millis));
+    }
+    value.as_i64().and_then(epoch_millis)
+}
+
+fn epoch_millis(millis: i64) -> Option<DateTime<Utc>> {
+    (millis > 0)
+        .then(|| DateTime::<Utc>::from_timestamp_millis(millis))
+        .flatten()
 }
 
 fn parse_time(value: &str) -> Option<DateTime<Utc>> {
@@ -1053,6 +1064,26 @@ mod tests {
         assert_eq!(limits.additional_limits[1].title, "All Models");
         assert_eq!(limits.additional_limits[1].window.used_percent, Some(25));
         assert_eq!(limits.secondary.duration_minutes, Some(31 * 24 * 60));
+    }
+
+    #[test]
+    fn reads_billing_cycle_from_connect_epoch_millis_without_summary() {
+        let usage = json!({
+            "billingCycleStart": "1794295225000",
+            "billingCycleEnd": "1796887225000",
+            "planUsage": {"autoPercentUsed": 15.4, "apiPercentUsed": 86.9}
+        });
+        let limits = map_usage(Some(&usage), None, None, None).unwrap();
+        assert_eq!(
+            limits.secondary.resets_at,
+            chrono::DateTime::<chrono::Utc>::from_timestamp_millis(1_796_887_225_000)
+        );
+        assert_eq!(limits.secondary.duration_minutes, Some(30 * 24 * 60));
+        assert_eq!(limits.secondary.used_percent, Some(15));
+        assert_eq!(
+            limits.additional_limits[0].window.resets_at,
+            limits.secondary.resets_at
+        );
     }
 
     #[test]
