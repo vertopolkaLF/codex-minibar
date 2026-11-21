@@ -981,11 +981,16 @@ try {{
         marker = UPDATE_SUCCESS_MARKER,
         version = escape_ps_single_quoted_str(&update.version),
     );
-    fs::write(&script_path, script).context("write update helper script")?;
+    write_powershell_script(&script_path, &script).context("write update helper script")?;
     spawn_hidden_helper(&script_path).context("spawn update helper")?;
     report_restart();
 
     Ok(())
+}
+
+fn write_powershell_script(path: &Path, script: &str) -> std::io::Result<()> {
+    // Windows PowerShell 5.1 needs a BOM to read non-ASCII paths as UTF-8.
+    fs::write(path, format!("\u{feff}{script}"))
 }
 
 #[cfg(windows)]
@@ -1078,6 +1083,18 @@ fn payload_root_from_extracted(destination: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn powershell_helper_preserves_unicode_paths_with_a_utf8_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("apply-update.ps1");
+        let script = r"$install = 'D:\测试\Codex Minibar'";
+
+        write_powershell_script(&path, script).unwrap();
+
+        let bytes = fs::read(path).unwrap();
+        assert_eq!(bytes.strip_prefix(b"\xef\xbb\xbf"), Some(script.as_bytes()));
+    }
 
     #[test]
     fn poisoned_update_state_recovers_without_a_second_panic() {
