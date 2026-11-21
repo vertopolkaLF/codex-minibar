@@ -981,11 +981,16 @@ try {{
         marker = UPDATE_SUCCESS_MARKER,
         version = escape_ps_single_quoted_str(&update.version),
     );
-    fs::write(&script_path, script).context("write update helper script")?;
+    write_powershell_script(&script_path, &script).context("write update helper script")?;
     spawn_hidden_helper(&script_path).context("spawn update helper")?;
     report_restart();
 
     Ok(())
+}
+
+fn write_powershell_script(path: &Path, script: &str) -> std::io::Result<()> {
+    // Windows PowerShell 5.1 needs a BOM to read non-ASCII paths as UTF-8.
+    fs::write(path, format!("\u{feff}{script}"))
 }
 
 #[cfg(windows)]
@@ -1019,11 +1024,19 @@ fn spawn_hidden_helper(_script_path: &Path) -> Result<()> {
 }
 
 fn escape_ps_single_quoted(value: &Path) -> String {
-    value.display().to_string().replace('\'', "''")
+    escape_ps_single_quoted_str(&value.to_string_lossy())
 }
 
 fn escape_ps_single_quoted_str(value: &str) -> String {
-    value.replace('\'', "''")
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        escaped.push(character);
+        // PowerShell also recognizes U+2018 through U+201B as single quotes.
+        if matches!(character, '\'' | '\u{2018}'..='\u{201b}') {
+            escaped.push(character);
+        }
+    }
+    escaped
 }
 
 /// Reports `(entries done, entries)` as it goes.
@@ -1078,6 +1091,23 @@ fn payload_root_from_extracted(destination: &Path) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn powershell_helper_preserves_unicode_paths_with_a_utf8_bom() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("apply-update.ps1");
+        let install = Path::new(r"D:\测试\O’Neil's ‘Minibar‚‛");
+        let script = format!("$install = '{}'", escape_ps_single_quoted(install));
+
+        write_powershell_script(&path, &script).unwrap();
+
+        let bytes = fs::read(path).unwrap();
+        let expected = r"$install = 'D:\测试\O’’Neil''s ‘‘Minibar‚‚‛‛'";
+        assert_eq!(
+            bytes.strip_prefix(b"\xef\xbb\xbf"),
+            Some(expected.as_bytes())
+        );
+    }
 
     #[test]
     fn poisoned_update_state_recovers_without_a_second_panic() {
