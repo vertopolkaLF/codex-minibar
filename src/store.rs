@@ -645,6 +645,49 @@ impl ProviderStore {
         Ok(())
     }
 
+    /// Replaces a full scan, including its recent hours and conversation days.
+    pub(crate) fn replace_usage_rollup(
+        &self,
+        provider: ProviderId,
+        rollup: &Rollup,
+        files: &[(String, DailyTokenUsage)],
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM usage_hourly WHERE provider = ?1",
+            [provider.id()],
+        )?;
+        tx.execute(
+            "DELETE FROM usage_file_daily WHERE provider = ?1",
+            [provider.id()],
+        )?;
+        {
+            let mut insert = tx.prepare(
+                "INSERT INTO usage_file_daily(
+                    provider, path, date, input_tokens, cached_input_tokens, output_tokens,
+                    requests, estimated_cost_microusd, priced_requests, cache_savings_microusd
+                 ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            )?;
+            for (path, entry) in files {
+                insert.execute(params![
+                    provider.id(),
+                    path,
+                    entry.date.to_string(),
+                    entry.usage.input_tokens as i64,
+                    entry.usage.cached_input_tokens as i64,
+                    entry.usage.output_tokens as i64,
+                    entry.usage.requests as i64,
+                    entry.usage.estimated_cost_microusd as i64,
+                    entry.usage.priced_requests as i64,
+                    entry.usage.cache_savings_microusd as i64,
+                ])?;
+            }
+        }
+        self.write_rollup(provider, rollup, None)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     fn write_rollup(
         &self,
         provider: ProviderId,
@@ -2830,6 +2873,60 @@ mod tests {
             .unwrap();
         assert_eq!(hourly[&hour].requests, 2);
         assert_eq!(hourly[&hour].input_tokens, 20);
+    }
+
+    #[test]
+    fn replacing_usage_rollup_removes_old_hours_and_sessions_for_that_provider() {
+        let dir = tempdir().unwrap();
+        let store = test_store(&dir.path().join("test.sqlite"));
+        let antigravity = id(ProviderKind::Antigravity);
+        let cursor = id(ProviderKind::Cursor);
+        let hour = truncate_hour(Local::now());
+        let date = hour.date_naive();
+        let usage = TokenUsage {
+            requests: 3,
+            ..Default::default()
+        };
+        let files = [(
+            "conversation.db".into(),
+            DailyTokenUsage {
+                date,
+                usage: usage.clone(),
+            },
+        )];
+        let rollup = Rollup {
+            hourly: vec![(hour, usage)],
+            ..Default::default()
+        };
+        store.save_rollup(cursor, &rollup, None).unwrap();
+        store
+            .replace_usage_rollup(antigravity, &rollup, &files)
+            .unwrap();
+        assert_eq!(
+            store.count_session_paths(antigravity, date, date).unwrap(),
+            1
+        );
+        assert_eq!(
+            store.load_usage_hourly(antigravity, hour, hour).unwrap()[&hour].requests,
+            3
+        );
+        store
+            .replace_usage_rollup(antigravity, &Rollup::default(), &[])
+            .unwrap();
+        assert!(
+            store
+                .load_usage_hourly(antigravity, hour, hour)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store.count_session_paths(antigravity, date, date).unwrap(),
+            0
+        );
+        assert_eq!(
+            store.load_usage_hourly(cursor, hour, hour).unwrap()[&hour].requests,
+            3
+        );
     }
 
     #[test]

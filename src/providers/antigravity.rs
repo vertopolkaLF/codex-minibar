@@ -1,6 +1,8 @@
 //! Antigravity subscription quota using the official `agy` session: Windows
 //! Credential Manager on Windows, the Secret Service login keyring on Linux.
 
+mod usage;
+
 use std::{
     env,
     path::{Path, PathBuf},
@@ -18,9 +20,8 @@ use crate::{
     },
     providers::instances::ProviderInstance,
     providers::support,
-    providers::worker::{LimitProvider, UsageProvider, WorkerHandle, WorkerOptions},
+    providers::worker::{LimitProvider, WorkerHandle, WorkerOptions},
     quota::limits::{AdditionalLimit, LimitWindow, RateLimits},
-    usage::UsageStatistics,
 };
 
 /// `agy` stores its session with go-keyring under this service and user:
@@ -82,17 +83,6 @@ impl LimitProvider for AntigravityClient {
     }
 }
 
-impl UsageProvider for AntigravityClient {
-    fn load_cached_usage_statistics(&mut self, _history_days: u16) -> Result<UsageStatistics> {
-        Ok(UsageStatistics::default())
-    }
-
-    fn refresh_usage_statistics(&mut self, _history_days: u16) -> Result<UsageStatistics> {
-        // Provider quota is intentionally separate from local token/API billing.
-        Ok(UsageStatistics::default())
-    }
-}
-
 pub(crate) static DRIVER: Driver = Driver {
     start: start_worker,
     detect,
@@ -109,8 +99,8 @@ fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<W
     }
     let client = AntigravityClient::new(path);
     Ok(crate::providers::worker::start_worker(
-        client.clone(),
         client,
+        usage::Reader::new(instance.provider_id()),
         None,
         options,
     ))

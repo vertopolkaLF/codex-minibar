@@ -552,6 +552,65 @@ fn granted_credit_amounts_render_as_a_progress_card() {
 }
 
 #[test]
+fn antigravity_limits_group_under_family_headings() {
+    use crate::providers::registry::{
+        ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID, ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID,
+    };
+    let mut limits = plan_limits("Google AI Pro");
+    limits.limit_name = Some("Gemini".into());
+    limits.secondary_limit_name = Some("Claude + GPT".into());
+    for (id, title) in [
+        (
+            ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID,
+            "Claude + GPT weekly",
+        ),
+        (ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID, "Gemini weekly"),
+    ] {
+        limits
+            .additional_limits
+            .push(crate::quota::limits::AdditionalLimit {
+                id: id.into(),
+                title: title.into(),
+                window: LimitWindow {
+                    used_percent: Some(5),
+                    ..Default::default()
+                },
+            });
+    }
+    let cards = test_cards(
+        ProviderKind::Antigravity,
+        true,
+        &limits,
+        &all_visible(),
+        PopupSurface::ProviderTab,
+        true,
+        false,
+        false,
+    );
+    let layout = cards
+        .iter()
+        .filter_map(|card| match card {
+            Card::LimitGroupHeading { title, .. } => Some(format!("# {title}")),
+            Card::Limit { title, window, .. } => {
+                Some(format!("{title} {}", window.used_percent.unwrap_or(0)))
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        layout,
+        vec![
+            "# Gemini",
+            "5H SESSION 20",
+            "WEEKLY 5",
+            "# Claude + GPT",
+            "5H SESSION 40",
+            "WEEKLY 5",
+        ]
+    );
+}
+
+#[test]
 fn provider_cards_include_each_additional_limit() {
     let mut limits = plan_limits("plus");
     limits

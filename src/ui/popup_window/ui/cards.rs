@@ -268,6 +268,14 @@ impl PopupRoot {
                 };
                 row.px(px(4.0)).mt(px(8.0)).into_any_element()
             }
+            Card::LimitGroupHeading { title, first } => {
+                let heading = nowrap(components::caption_strong(
+                    title.clone(),
+                    self.palette.text_secondary,
+                ))
+                .px(px(4.0));
+                if *first { heading } else { heading.mt(px(6.0)) }.into_any_element()
+            }
             Card::AnnouncedReset(row) => self.render_announced_reset(row, cx),
             Card::ProviderIncidents(status) => {
                 self.render_provider_incidents(status, self.card_inner_width(surface), window, cx)

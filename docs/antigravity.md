@@ -30,3 +30,15 @@ Genuine 100%-remaining summary buckets are valid and display 0% used.
 
 Protocol reference:
 [CodexBar's Antigravity remote fetcher](https://github.com/steipete/CodexBar/blob/main/Sources/CodexBarCore/Providers/Antigravity/AntigravityRemoteUsageFetcher.swift).
+
+## Local usage history
+
+Usage reads Antigravity conversation databases from `~/.gemini/antigravity*`,
+`~/.config/antigravity`, and local T3 Code ACP profiles. Set
+`ANTIGRAVITY_DATA_DIR` to a comma-separated list of data directories to override
+the native Antigravity paths. `T3CODE_HOME` overrides the T3 Code base directory
+(`~/.t3` by default).
+
+The scanner opens the databases read-only and uses recorded token counts.
+Usage includes hourly and daily totals, a model breakdown, and API-equivalent
+costs for models with known rates.

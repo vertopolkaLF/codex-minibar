@@ -155,6 +155,13 @@ pub(crate) enum Card<'a> {
         name: &'a str,
         balance_microusd: Option<u64>,
     },
+    /// Small heading above the quota windows of one model family, such as
+    /// Antigravity's Gemini or Claude + GPT pools.
+    LimitGroupHeading {
+        title: String,
+        /// The first group sits right under the instance heading.
+        first: bool,
+    },
     /// One announced Codex reset with this instance's reception state.
     AnnouncedReset(AnnouncedResetRow<'a>),
     /// Ongoing incidents on the driver's public status page.
@@ -397,6 +404,7 @@ pub(crate) fn provider_cards<'a>(
         })
         .flatten();
     let mut fable_merged = false;
+    let limits_start = cards.len();
     for section in popup_sections(kind, limits, false)
         .into_iter()
         .filter(|_| !key_rows_only && !key_lanes)
@@ -478,6 +486,9 @@ pub(crate) fn provider_cards<'a>(
             disabled: false,
             overlay: None,
         });
+    }
+    if kind == ProviderKind::Antigravity {
+        group_antigravity_limits(provider, limits, &mut cards, limits_start);
     }
     // With the key list off, every key keeps its ordinary lanes under its own
     // name instead of one aggregate set for the whole instance.
@@ -576,6 +587,95 @@ pub(crate) fn provider_cards<'a>(
         }
     }
     cards
+}
+
+/// Antigravity reports a 5h session and a weekly window for each model
+/// family. Regroup the limit cards built from `start` under a small family
+/// heading so every card keeps a short cadence title. Card keys stay the
+/// same, so progress animations survive the regrouping.
+fn group_antigravity_limits<'a>(
+    provider: ProviderId,
+    limits: &RateLimits,
+    cards: &mut Vec<Card<'a>>,
+    start: usize,
+) {
+    use crate::providers::registry::{
+        ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID, ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID,
+    };
+    const SESSION: usize = 0;
+    const WEEKLY: usize = 1;
+    let slot_of = |key: &str| {
+        let additional = |id: &str| card_key(provider, &format!("additional-{id}"));
+        if key == card_key(provider, PopupSection::FiveHour.key()) {
+            Some((0, SESSION))
+        } else if key == additional(ANTIGRAVITY_GEMINI_WEEKLY_LIMIT_ID) {
+            Some((0, WEEKLY))
+        } else if key == card_key(provider, PopupSection::Weekly.key())
+            || key == card_key(provider, PopupSection::Monthly.key())
+        {
+            // The secondary window is the Claude + GPT 5h session.
+            Some((1, SESSION))
+        } else if key == additional(ANTIGRAVITY_THIRD_PARTY_WEEKLY_LIMIT_ID) {
+            Some((1, WEEKLY))
+        } else {
+            None
+        }
+    };
+    let titles = [
+        crate::i18n::tr("msg-5h-session").to_uppercase(),
+        crate::i18n::tr("weekly").to_uppercase(),
+    ];
+    let mut groups: [[Option<Card<'a>>; 2]; 2] = Default::default();
+    let mut rest = Vec::new();
+    for card in cards.drain(start..) {
+        let slot = match &card {
+            Card::Limit { key, .. } => slot_of(key),
+            _ => None,
+        };
+        match (card, slot) {
+            (
+                Card::Limit {
+                    key,
+                    window,
+                    usage_amount,
+                    disabled,
+                    overlay,
+                    ..
+                },
+                Some((family, cadence)),
+            ) => {
+                groups[family][cadence] = Some(Card::Limit {
+                    key,
+                    title: titles[cadence].clone(),
+                    window,
+                    usage_amount,
+                    disabled,
+                    overlay,
+                });
+            }
+            (other, _) => rest.push(other),
+        }
+    }
+    let names = [
+        limits.limit_name.as_deref().unwrap_or("Gemini"),
+        limits
+            .secondary_limit_name
+            .as_deref()
+            .unwrap_or("Claude + GPT"),
+    ];
+    let mut first = true;
+    for (name, group) in names.into_iter().zip(groups) {
+        if group.iter().all(Option::is_none) {
+            continue;
+        }
+        cards.push(Card::LimitGroupHeading {
+            title: name.to_owned(),
+            first,
+        });
+        first = false;
+        cards.extend(group.into_iter().flatten());
+    }
+    cards.extend(rest);
 }
 
 fn spending_card(key: String, spending: &SpendingSummary) -> Card<'_> {
