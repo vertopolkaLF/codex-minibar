@@ -432,6 +432,24 @@ fn zen_without_quota_windows_does_not_render_placeholder_limit_cards() {
 fn plan_names_use_sentence_case() {
     assert_eq!(capitalize_plan_name("PLUS"), "Plus");
     assert_eq!(capitalize_plan_name("  pro  "), "Pro");
+    assert_eq!(capitalize_plan_name("Google AI Pro"), "Google AI Pro");
+
+    let limits = plan_limits("Google AI Pro");
+    let visibility = all_visible();
+    let cards = test_cards(
+        ProviderKind::Antigravity,
+        true,
+        &limits,
+        &visibility,
+        PopupSurface::HomeTab,
+        true,
+        false,
+        false,
+    );
+    let Some(Card::Heading(heading)) = cards.first() else {
+        panic!("expected heading card first");
+    };
+    assert_eq!(heading.plan.as_deref(), Some("Google AI Pro"));
 }
 
 #[test]

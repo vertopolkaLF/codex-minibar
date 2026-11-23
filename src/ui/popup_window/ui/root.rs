@@ -1482,7 +1482,7 @@ impl PopupRoot {
         }
     }
 
-    pub(super) fn card_inner_width(&self, surface: PopupSurface) -> f32 {
+    pub(super) fn column_width(&self, surface: PopupSurface) -> f32 {
         let home = surface == PopupSurface::HomeTab;
         let width = if home {
             self.page_width(PopupView::Home)
@@ -1490,13 +1490,21 @@ impl PopupRoot {
             crate::ui::popup::POPUP_WIDTH as f32
         };
         let content = width - CHROME_INSET * 2.0 - PAGE_PADDING * 2.0;
-        let column = if home && self.two_columns() {
+        if home && self.two_columns() {
             (content - super::home::COLUMN_GAP) / 2.0
         } else {
             content
-        };
+        }
+    }
+
+    pub(super) fn card_inner_width(&self, surface: PopupSurface) -> f32 {
         // Card border and the 12 DIP padding on each side.
-        (column - 26.0).max(0.0)
+        (self.column_width(surface) - 26.0).max(0.0)
+    }
+
+    pub(super) fn heading_inner_width(&self, surface: PopupSurface) -> f32 {
+        // Heading rows sit directly in the column with 4 DIP padding per side.
+        (self.column_width(surface) - 8.0).max(0.0)
     }
 
     fn target_width(&self, view: PopupView) -> f32 {

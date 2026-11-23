@@ -18,6 +18,7 @@ use crate::ui::gui::{color::HslaExt, fx};
 use crate::ui::popup_window::{model::*, *};
 
 pub(super) const COLUMN_GAP: f32 = 20.0;
+pub(super) const WIDGET_GRIP_WIDTH: f32 = 32.0;
 const HEADING_TOP: f32 = 8.0;
 
 /// Payload carried while a Home widget is dragged.
@@ -56,6 +57,14 @@ impl Render for WidgetDrag {
 }
 
 impl PopupRoot {
+    pub(super) fn widget_grip_reveal(&mut self, widget: &HomeWidgetId) -> f32 {
+        self.fx.toggle(
+            fx::key(("widget-grip", widget.id())),
+            self.home_editing,
+            fx::FAST,
+        )
+    }
+
     /// Heading trailing content plus the reorder grip, which slides in only
     /// while Home is in edit mode.
     pub(super) fn with_widget_grip(
@@ -64,20 +73,25 @@ impl PopupRoot {
         widget: HomeWidgetId,
         cx: &mut Context<Self>,
     ) -> gpui::Div {
-        let reveal = self.fx.toggle(
-            fx::key(("widget-grip", widget.id())),
-            self.home_editing,
-            fx::FAST,
-        );
-        // The wrapper takes whatever width the caller gives the trailing
-        // group (half the heading row beside an account name); the group
-        // fills it so its content stays against the end, ahead of the grip.
+        let reveal = self.widget_grip_reveal(&widget);
+        self.with_widget_grip_revealed(trailing, widget, reveal, cx)
+    }
+
+    pub(super) fn with_widget_grip_revealed(
+        &mut self,
+        trailing: gpui::Div,
+        widget: HomeWidgetId,
+        reveal: f32,
+        cx: &mut Context<Self>,
+    ) -> gpui::Div {
+        // Keep trailing at its natural (or fixed) width instead of flex_1(),
+        // so it stays flush against the end ahead of the grip.
         let row = div()
             .flex()
             .flex_row()
             .items_center()
             .justify_end()
-            .child(trailing.flex_1().min_w_0());
+            .child(trailing.min_w_0());
         if reveal < 0.001 {
             return row;
         }
@@ -86,7 +100,7 @@ impl PopupRoot {
                 .flex_none()
                 .flex()
                 .justify_end()
-                .w(px(32.0 * reveal))
+                .w(px(WIDGET_GRIP_WIDTH * reveal))
                 .overflow_hidden()
                 .opacity(reveal)
                 .child(self.widget_drag_handle(widget, cx)),

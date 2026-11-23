@@ -52,7 +52,84 @@ pub fn format_token_count(tokens: u64) -> String {
 
 pub fn capitalize_plan_name(plan: &str) -> String {
     let plan = plan.trim();
-    let mut characters = plan.chars();
+    if plan.is_empty() {
+        return String::new();
+    }
+    if let Some(formatted) = format_google_plan_name(plan) {
+        return formatted;
+    }
+    if has_mixed_case(plan) {
+        return plan.to_owned();
+    }
+    sentence_case(plan)
+}
+
+fn format_google_plan_name(plan: &str) -> Option<String> {
+    let has_whitespace = plan.chars().any(char::is_whitespace);
+    let words: Vec<&str> = plan
+        .split(|ch: char| ch.is_whitespace() || ch == '_' || (!has_whitespace && ch == '-'))
+        .filter(|part| !part.is_empty())
+        .collect();
+    let first = *words.first()?;
+    if !first.eq_ignore_ascii_case("google") && !first.eq_ignore_ascii_case("gemini") {
+        return None;
+    }
+    Some(
+        words
+            .into_iter()
+            .enumerate()
+            .map(|(index, word)| format_google_plan_word(index, word))
+            .collect::<Vec<_>>()
+            .join(" "),
+    )
+}
+
+fn format_google_plan_word(index: usize, word: &str) -> String {
+    let Some((start, _)) = word.char_indices().find(|(_, ch)| ch.is_alphanumeric()) else {
+        return word.to_owned();
+    };
+    let Some((last_idx, last_ch)) = word.char_indices().rfind(|(_, ch)| ch.is_alphanumeric())
+    else {
+        return word.to_owned();
+    };
+    let end = last_idx + last_ch.len_utf8();
+    let prefix = &word[..start];
+    let core = &word[start..end];
+    let suffix = &word[end..];
+
+    if core.eq_ignore_ascii_case("ai") {
+        return format!("{prefix}AI{suffix}");
+    }
+    if index > 0
+        && prefix.is_empty()
+        && suffix.is_empty()
+        && matches!(
+            word.to_ascii_lowercase().as_str(),
+            "for" | "of" | "and" | "to" | "in" | "on" | "with" | "the"
+        )
+    {
+        return word.to_ascii_lowercase();
+    }
+    if has_mixed_case(word) {
+        return word.to_owned();
+    }
+    let mut chars = core.chars();
+    let Some(first) = chars.next().filter(|ch| ch.is_alphabetic()) else {
+        return word.to_owned();
+    };
+    format!(
+        "{prefix}{}{}{suffix}",
+        first.to_uppercase(),
+        chars.as_str().to_lowercase()
+    )
+}
+
+fn has_mixed_case(text: &str) -> bool {
+    text.chars().any(char::is_uppercase) && text.chars().any(char::is_lowercase)
+}
+
+fn sentence_case(text: &str) -> String {
+    let mut characters = text.chars();
     let Some(first) = characters.next() else {
         return String::new();
     };
@@ -176,5 +253,45 @@ mod tests {
             countdown(now + chrono::Duration::minutes(3 * 1440 + 240), now),
             "3d 4h"
         );
+    }
+
+    #[test]
+    fn google_and_general_plan_names_format_cleanly() {
+        for (input, expected) in [
+            ("Google AI Pro", "Google AI Pro"),
+            ("Google ai pro", "Google AI Pro"),
+            ("Google Ai Pro", "Google AI Pro"),
+            ("google ai pro", "Google AI Pro"),
+            ("GOOGLE AI PRO", "Google AI Pro"),
+            ("GOOGLE_AI_PRO", "Google AI Pro"),
+            ("google-ai-pro", "Google AI Pro"),
+            ("  Google AI Pro  ", "Google AI Pro"),
+            ("Google AI Ultra", "Google AI Ultra"),
+            ("google ai ultra", "Google AI Ultra"),
+            ("GOOGLE_AI_ULTRA", "Google AI Ultra"),
+            ("Google AI Plus", "Google AI Plus"),
+            ("GOOGLE_AI_PLUS", "Google AI Plus"),
+            ("Google AI Free", "Google AI Free"),
+            ("Google AI Pro for Business", "Google AI Pro for Business"),
+            ("GOOGLE_AI_PRO_FOR_BUSINESS", "Google AI Pro for Business"),
+            ("Google One AI Premium", "Google One AI Premium"),
+            ("google one ai premium", "Google One AI Premium"),
+            ("Gemini Code Assist Standard", "Gemini Code Assist Standard"),
+            (
+                "GEMINI_CODE_ASSIST_FOR_INDIVIDUALS",
+                "Gemini Code Assist for Individuals",
+            ),
+            ("PLUS", "Plus"),
+            ("  pro  ", "Pro"),
+            ("max 5x", "Max 5x"),
+            ("SUPERGROK", "Supergrok"),
+            ("Zen · 2 models", "Zen · 2 models"),
+            ("Go · 2 keys", "Go · 2 keys"),
+            ("Pro Max", "Pro Max"),
+            ("", ""),
+            ("   ", ""),
+        ] {
+            assert_eq!(capitalize_plan_name(input), expected, "input: {input:?}");
+        }
     }
 }

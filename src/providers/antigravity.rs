@@ -684,15 +684,37 @@ fn limit_window(item: QuotaObservation) -> LimitWindow {
 
 fn plan_name(value: &Value) -> Option<String> {
     [
-        value.pointer("/paidTier/name"),
-        value.pointer("/planInfo/planType"),
-        value.pointer("/currentTier/name"),
+        nonempty_str(value.pointer("/paidTier/name")),
+        known_tier_name(value.pointer("/paidTier/id")),
+        nonempty_str(value.pointer("/planInfo/planType"))
+            .map(|plan| known_tier_name_str(plan).unwrap_or(plan)),
+        nonempty_str(value.pointer("/currentTier/name")),
+        known_tier_name(value.pointer("/currentTier/id")),
     ]
     .into_iter()
     .flatten()
-    .filter_map(Value::as_str)
-    .find(|value| !value.trim().is_empty())
-    .map(str::to_owned)
+    .map(crate::format::capitalize_plan_name)
+    .find(|plan| !plan.is_empty())
+}
+
+fn nonempty_str(value: Option<&Value>) -> Option<&str> {
+    value
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+fn known_tier_name(value: Option<&Value>) -> Option<&'static str> {
+    nonempty_str(value).and_then(known_tier_name_str)
+}
+
+fn known_tier_name_str(tier_id: &str) -> Option<&'static str> {
+    match tier_id.trim().to_ascii_lowercase().as_str() {
+        "g1-plus-tier" => Some("Google AI Plus"),
+        "g1-pro-tier" => Some("Google AI Pro"),
+        "g1-ultra-tier" => Some("Google AI Ultra"),
+        _ => None,
+    }
 }
 
 fn parse_timestamp(value: &str) -> Option<DateTime<Utc>> {
@@ -1166,5 +1188,50 @@ mod tests {
         ] {
             assert!(limits_from_summary(&summary, None).is_err());
         }
+    }
+
+    #[test]
+    fn plan_name_normalizes_google_tiers_and_falls_back_to_tier_ids() {
+        assert_eq!(
+            plan_name(&json!({
+                "currentTier": {"name": "Antigravity"},
+                "planInfo": {"planType": "Free"},
+                "paidTier": {"name": "Google AI Pro"}
+            }))
+            .as_deref(),
+            Some("Google AI Pro")
+        );
+        assert_eq!(
+            plan_name(&json!({"paidTier": {"name": "google ai ultra"}})).as_deref(),
+            Some("Google AI Ultra")
+        );
+        assert_eq!(
+            plan_name(&json!({"paidTier": {"name": "GOOGLE_AI_PRO"}})).as_deref(),
+            Some("Google AI Pro")
+        );
+        assert_eq!(
+            plan_name(&json!({"paidTier": {"id": "g1-pro-tier"}})).as_deref(),
+            Some("Google AI Pro")
+        );
+        assert_eq!(
+            plan_name(&json!({"paidTier": {"id": "g1-ultra-tier"}})).as_deref(),
+            Some("Google AI Ultra")
+        );
+        assert_eq!(
+            plan_name(&json!({"paidTier": {"id": "g1-plus-tier"}})).as_deref(),
+            Some("Google AI Plus")
+        );
+        assert_eq!(
+            plan_name(&json!({
+                "planInfo": {"planType": "FREE"},
+                "currentTier": {"name": "Antigravity"}
+            }))
+            .as_deref(),
+            Some("Free")
+        );
+        assert_eq!(
+            plan_name(&json!({"currentTier": {"name": "Antigravity"}})).as_deref(),
+            Some("Antigravity")
+        );
     }
 }

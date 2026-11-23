@@ -5,7 +5,7 @@ use std::{cell::Cell, rc::Rc};
 use gpui::{
     AnyElement, Bounds, ClickEvent, Context, Div, Hsla, InteractiveElement, IntoElement,
     ParentElement, PathBuilder, Pixels, SharedString, StatefulInteractiveElement, Styled,
-    Transformation, Window, canvas, div, point, px, radians, relative,
+    Transformation, Window, canvas, div, point, px, radians,
 };
 
 use super::{
@@ -46,6 +46,28 @@ fn compact_title_fits(available: f32, title: f32, usage: f32, reset: f32) -> boo
     title + usage + reset + 20.0 <= available
 }
 
+const HEADING_ACCOUNT_MIN_SHARE: f32 = 0.30;
+
+fn heading_account_slot(available: f32, leading: f32, name: f32) -> Option<f32> {
+    let available = available.max(0.0);
+    let leading = leading.max(0.0);
+    let name = name.max(0.0);
+    if leading + name <= available {
+        return None;
+    }
+    let leftover = (available - leading).max(0.0);
+    let min_slot = available * HEADING_ACCOUNT_MIN_SHARE;
+    let slot = leftover.max(min_slot).min(name);
+    (slot < name).then_some(slot)
+}
+
+#[derive(Clone, Copy)]
+enum AccountNameWidth {
+    Fill,
+    Natural,
+    Fixed(f32),
+}
+
 impl PopupRoot {
     /// Compare against the final laid-out label width, not a guessed number
     /// of characters. Only a genuinely clipped name gets a full-value tip.
@@ -54,10 +76,25 @@ impl PopupRoot {
         key: u64,
         name: String,
         strong: bool,
+        width: AccountNameWidth,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = &self.palette;
         let display_name = name.replace(['\r', '\n', '\t'], " ");
+        let id = eid(format!("account-name-{key}"));
+        if matches!(width, AccountNameWidth::Natural) {
+            let label = if strong {
+                components::body_strong(display_name, palette.text_secondary)
+            } else {
+                caption(display_name, palette.text_tertiary)
+            };
+            return div()
+                .id(id)
+                .relative()
+                .flex_none()
+                .child(label.whitespace_nowrap())
+                .into_any_element();
+        }
         let measured = Rc::new(Cell::new(false));
         let probe_state = Rc::clone(&measured);
         let font = palette.font_family.clone();
@@ -90,11 +127,14 @@ impl PopupRoot {
                 .flex()
                 .justify_end()
         };
-        div()
-            .id(eid(format!("account-name-{key}")))
-            .relative()
-            .w_full()
-            .min_w_0()
+        let container = match width {
+            AccountNameWidth::Fill => div().id(id).relative().w_full().min_w_0(),
+            AccountNameWidth::Fixed(slot) => {
+                div().id(id).relative().w(px(slot)).flex_none().min_w_0()
+            }
+            AccountNameWidth::Natural => unreachable!(),
+        };
+        container
             .on_hover(cx.listener(move |this, hovered: &bool, window, cx| {
                 if *hovered && measured.get() {
                     this.show_tip(
@@ -150,7 +190,7 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         match card_spec {
-            Card::Heading(heading) => self.render_heading(heading, surface, cx),
+            Card::Heading(heading) => self.render_heading(heading, surface, window, cx),
             Card::Limit {
                 key,
                 title,
@@ -216,6 +256,7 @@ impl PopupRoot {
                     )),
                     name.to_string(),
                     true,
+                    AccountNameWidth::Fill,
                     cx,
                 );
                 let row = match balance_microusd {
@@ -800,8 +841,11 @@ impl PopupRoot {
         &mut self,
         heading: &HeadingCard,
         surface: PopupSurface,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
+        const TITLE_GAP: f32 = 4.0;
+
         let palette = self.palette.clone();
         let provider = heading.provider;
         self.fx
@@ -816,14 +860,75 @@ impl PopupRoot {
             link && self.hovered(link_id),
             fx::TEXT_FADE,
         );
+        let row_width = self.heading_inner_width(surface);
+        let metrics = self.metrics(window);
+        let grip_reveal = if heading.drag_handle {
+            self.widget_grip_reveal(&HomeWidgetId::provider(heading.provider))
+        } else {
+            0.0
+        };
+        let grip_width = if grip_reveal >= 0.001 {
+            super::home::WIDGET_GRIP_WIDTH * grip_reveal
+        } else {
+            0.0
+        };
+        let incident_mark = self.incident_mark(heading, surface, cx);
+
+        let driver = heading.provider.kind();
+        let show_mark = matches!(surface, PopupSurface::HomeTab) || heading.show_icon;
+        let mark_width = show_mark.then(|| {
+            16.0 + if heading.provider.badge().is_some() {
+                10.0
+            } else {
+                4.0
+            }
+        });
+        let driver_width = metrics.strong(driver.display_name());
+        let plan_width = heading.plan.as_deref().map(|plan| metrics.body(plan));
+        let incident_width = incident_mark.as_ref().map(|(_, width)| *width);
+        let error_width = heading.error.is_some().then_some(16.0);
+
+        let title_parts = [
+            mark_width,
+            Some(driver_width),
+            plan_width,
+            incident_width,
+            error_width,
+        ];
+        let present_count = title_parts.into_iter().flatten().count();
+        let leading_width = title_parts.into_iter().flatten().sum::<f32>()
+            + TITLE_GAP * present_count.saturating_sub(1) as f32;
+        let fixed_leading_width = leading_width - plan_width.unwrap_or(0.0);
+
+        let balance_text = heading.balance_microusd.map(format_micro_usd);
+        let balance_width = balance_text
+            .as_deref()
+            .map(|text| metrics.strong(text))
+            .unwrap_or(0.0);
+
+        let (account_slot, actual_trailing) = if let Some(name) = heading.account_name.as_deref() {
+            let display_name = name.replace(['\r', '\n', '\t'], " ");
+            let name_width = metrics.caption(&display_name);
+            let other_trailing =
+                grip_width + balance_width + if balance_text.is_some() { 4.0 } else { 0.0 };
+            let available_for_pair = (row_width - components::SPLIT_GAP - other_trailing).max(0.0);
+            let account_slot = heading_account_slot(available_for_pair, leading_width, name_width);
+            let actual_trailing = account_slot.unwrap_or(name_width) + other_trailing;
+            (account_slot, actual_trailing)
+        } else {
+            (None, grip_width + balance_width)
+        };
+        let title_budget = (row_width - components::SPLIT_GAP - actual_trailing).max(0.0);
+        let plan_slot = (leading_width > title_budget && heading.plan.is_some())
+            .then(|| (title_budget - fixed_leading_width).max(0.0));
+
         let mut title = div()
             .flex()
             .flex_row()
             .items_center()
-            .gap(px(4.0))
+            .gap(px(TITLE_GAP))
             .min_w_0();
-        let driver = heading.provider.kind();
-        if matches!(surface, PopupSurface::HomeTab) || heading.show_icon {
+        if show_mark {
             title = title.child(
                 crate::ui::gui::mark::provider_mark(
                     crate::providers::registry::icon(driver),
@@ -839,17 +944,21 @@ impl PopupRoot {
                 })),
             );
         }
-        title = title.child(nowrap(components::body_strong(
-            driver.display_name(),
-            palette.text_secondary.mix(palette.accent_text, link_hover),
-        )));
+        title = title.child(
+            nowrap(components::body_strong(
+                driver.display_name(),
+                palette.text_secondary.mix(palette.accent_text, link_hover),
+            ))
+            .flex_shrink_0(),
+        );
         if let Some(plan) = heading.plan.as_ref() {
-            title = title.child(nowrap(components::body(
-                plan.clone(),
-                palette.text_tertiary,
-            )));
+            let mut plan_label = nowrap(components::body(plan.clone(), palette.text_tertiary));
+            if let Some(slot) = plan_slot {
+                plan_label = plan_label.w(px(slot)).min_w_0();
+            }
+            title = title.child(plan_label);
         }
-        if let Some(mark) = self.incident_mark(heading, surface, cx) {
+        if let Some((mark, _)) = incident_mark {
             title = title.child(mark);
         }
         if let Some(error) = heading.error.as_ref() {
@@ -861,6 +970,7 @@ impl PopupRoot {
                         provider.id(),
                         heading.first
                     )))
+                    .flex_none()
                     .on_hover(self.hover_listener(
                         id,
                         Some(crate::i18n::localize_error(error).into()),
@@ -873,31 +983,31 @@ impl PopupRoot {
             );
         }
         let mut trailing = div().flex().flex_row().items_center().gap(px(4.0));
-        let has_account_name = heading.account_name.is_some();
         if let Some(name) = heading.account_name.clone() {
-            trailing =
-                trailing
-                    .min_w_0()
-                    .child(div().flex_1().min_w_0().child(self.account_name_label(
-                        fx::key((
-                            "heading-account-name",
-                            provider.id(),
-                            surface == PopupSurface::HomeTab,
-                        )),
-                        name,
-                        false,
-                        cx,
-                    )));
-        }
-        if let Some(balance) = heading.balance_microusd {
-            trailing = trailing.child(components::body_strong(
-                format_micro_usd(balance),
-                palette.accent_text,
+            let width = account_slot.map_or(AccountNameWidth::Natural, AccountNameWidth::Fixed);
+            trailing = trailing.child(self.account_name_label(
+                fx::key((
+                    "heading-account-name",
+                    provider.id(),
+                    surface == PopupSurface::HomeTab,
+                )),
+                name,
+                false,
+                width,
+                cx,
             ));
         }
+        if let Some(balance) = balance_text {
+            trailing = trailing
+                .child(components::body_strong(balance, palette.accent_text).flex_shrink_0());
+        }
         if heading.drag_handle {
-            trailing =
-                self.with_widget_grip(trailing, HomeWidgetId::provider(heading.provider), cx);
+            trailing = self.with_widget_grip_revealed(
+                trailing,
+                HomeWidgetId::provider(heading.provider),
+                grip_reveal,
+                cx,
+            );
         }
         let title = if link {
             div()
@@ -912,20 +1022,8 @@ impl PopupRoot {
         } else {
             title.into_any_element()
         };
-        let row = if has_account_name {
-            div()
-                .flex()
-                .items_center()
-                .w_full()
-                .gap(px(components::SPLIT_GAP))
-                .child(div().flex_1().min_w_0().child(title))
-                // Definite width makes ellipsis resolve against the actual
-                // available slot while retaining the driver/plan on the left.
-                .child(trailing.w(relative(0.5)).flex_none())
-        } else {
-            components::split_row(title, trailing)
-        };
-        row.px(px(4.0))
+        components::split_row(title, trailing)
+            .px(px(4.0))
             .mt(px(if heading.first { 0.0 } else { 8.0 }))
             .mb(px(2.0))
             .into_any_element()
@@ -2000,7 +2098,7 @@ impl PopupRoot {
         heading: &HeadingCard,
         surface: PopupSurface,
         cx: &mut Context<Self>,
-    ) -> Option<AnyElement> {
+    ) -> Option<(AnyElement, f32)> {
         const SIZE: f32 = 16.0;
         let provider = heading.provider;
         let kind = provider.kind();
@@ -2049,11 +2147,12 @@ impl PopupRoot {
                 cx.notify();
             }))
             .child(icon("fluent-warning", SIZE, color));
+        let width = SIZE * shown.min(1.0);
         let mut slot = div().flex().flex_none().opacity(shown).child(mark);
         if shown < 1.0 {
-            slot = slot.overflow_hidden().w(px(SIZE * shown));
+            slot = slot.overflow_hidden().w(px(width));
         }
-        Some(slot.into_any_element())
+        Some((slot.into_any_element(), width))
     }
 
     fn render_provider_incidents(
@@ -2553,12 +2652,26 @@ fn theme_gray() -> gpui::Hsla {
 
 #[cfg(test)]
 mod layout_tests {
-    use super::compact_title_fits;
+    use super::{compact_title_fits, heading_account_slot};
 
     #[test]
     fn compact_card_requires_room_for_the_entire_name() {
         assert!(compact_title_fits(320.0, 80.0, 100.0, 120.0));
         assert!(!compact_title_fits(320.0, 81.0, 100.0, 120.0));
         assert!(compact_title_fits(340.0, 81.0, 100.0, 120.0));
+    }
+
+    #[test]
+    fn heading_account_slot_sizes_to_name_and_remaining_space() {
+        // Short name + long title that both fit -> natural width, no forced slot.
+        assert_eq!(heading_account_slot(330.0, 190.0, 35.0), None);
+        // Long name + medium title -> takes leftover space while keeping full title intact.
+        assert_eq!(heading_account_slot(330.0, 190.0, 220.0), Some(140.0));
+        // Very long name + short title -> uses more than 50% when title doesn't need it.
+        assert_eq!(heading_account_slot(330.0, 100.0, 260.0), Some(230.0));
+        // Very long title + short name -> short name stays natural, never expands.
+        assert_eq!(heading_account_slot(330.0, 310.0, 35.0), None);
+        // Very long title + long name -> reserves 30% minimum share for account name.
+        assert_eq!(heading_account_slot(300.0, 260.0, 180.0), Some(90.0));
     }
 }

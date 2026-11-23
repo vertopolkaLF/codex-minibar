@@ -1211,20 +1211,26 @@ fn provider_heading(alert: &LimitAlert, prefs: DisplayPrefs, palette: &Palette) 
             )
             .mr(px(if badge.is_some() { 10.0 } else { 4.0 })),
         )
-        .child(nowrap(components::body_strong(
-            driver.display_name(),
-            palette.text_secondary,
-        )));
+        .child(
+            nowrap(components::body_strong(
+                driver.display_name(),
+                palette.text_secondary,
+            ))
+            .flex_shrink_0(),
+        );
     if let Some(plan) = alert
         .limits
         .plan_type
         .as_deref()
         .filter(|plan| !plan.trim().is_empty())
     {
-        title = title.child(nowrap(components::body(
-            capitalize_plan_name(plan),
-            palette.text_tertiary,
-        )));
+        title = title.child(
+            nowrap(components::body(
+                capitalize_plan_name(plan),
+                palette.text_tertiary,
+            ))
+            .min_w_0(),
+        );
     }
     let account = Some(provider.display_name())
         .filter(|name| name != driver.display_name())
