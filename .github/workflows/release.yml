@@ -90,7 +90,12 @@ jobs:
 
       - name: Build portable zip and NSIS installer
         shell: pwsh
-        run: .\build.ps1 -Arch ${{ matrix.arch }}
+        run: |
+          # rustc 1.95.0 crashes during x64 code generation with ThinLTO.
+          if ('${{ matrix.arch }}' -eq 'x64') {
+            $env:CARGO_PROFILE_RELEASE_LTO = 'off'
+          }
+          .\build.ps1 -Arch ${{ matrix.arch }}
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v7
