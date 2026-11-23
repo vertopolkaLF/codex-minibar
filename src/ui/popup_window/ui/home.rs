@@ -182,7 +182,7 @@ impl PopupRoot {
                         &options,
                     );
                     let layout = ui.home_card_layout(provider);
-                    let has_limits = cards.iter().any(|card| matches!(card, Card::Limit { .. }));
+                    let has_limits = cards.iter().any(Card::has_limits);
                     let mut body = self.render_home_cards(&cards, layout, window, cx);
                     let heading = body.drain(..1.min(body.len())).collect::<Vec<_>>();
                     // A changed layout fades in instead of popping.

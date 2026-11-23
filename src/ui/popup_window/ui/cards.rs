@@ -175,17 +175,31 @@ impl PopupRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        let inner_width = self.card_inner_width(surface);
+        self.render_cards_styled_with_width(cards, surface, style, inner_width, window, cx)
+    }
+
+    fn render_cards_styled_with_width(
+        &mut self,
+        cards: &[Card<'_>],
+        surface: PopupSurface,
+        style: CardStyle,
+        inner_width: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         cards
             .iter()
-            .map(|card| self.render_card(card, surface, style, window, cx))
+            .map(|card| self.render_card_with_width(card, surface, style, inner_width, window, cx))
             .collect()
     }
 
-    fn render_card(
+    fn render_card_with_width(
         &mut self,
         card_spec: &Card<'_>,
         surface: PopupSurface,
         style: CardStyle,
+        inner_width: f32,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
@@ -206,7 +220,7 @@ impl PopupRoot {
                 *disabled,
                 overlay.as_ref(),
                 style,
-                self.card_inner_width(surface),
+                inner_width,
                 window,
             ),
             Card::Spending {
@@ -228,7 +242,7 @@ impl PopupRoot {
                 *expires_at,
                 delete.clone(),
                 style,
-                self.card_inner_width(surface),
+                inner_width,
                 window,
                 cx,
             ),
@@ -268,14 +282,17 @@ impl PopupRoot {
                 };
                 row.px(px(4.0)).mt(px(8.0)).into_any_element()
             }
-            Card::LimitGroupHeading { title, first } => {
-                let heading = nowrap(components::caption_strong(
-                    title.clone(),
-                    self.palette.text_secondary,
-                ))
-                .px(px(4.0));
-                if *first { heading } else { heading.mt(px(6.0)) }.into_any_element()
-            }
+            Card::LimitGroup { kind, title, cards } => self.render_limit_group(
+                *kind,
+                title,
+                cards,
+                surface,
+                None,
+                style,
+                inner_width,
+                window,
+                cx,
+            ),
             Card::AnnouncedReset(row) => self.render_announced_reset(row, cx),
             Card::ProviderIncidents(status) => {
                 self.render_provider_incidents(status, self.card_inner_width(surface), window, cx)
@@ -357,15 +374,35 @@ impl PopupRoot {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let style = self.card_style();
+        let inner_width = self.card_inner_width(PopupSurface::HomeTab);
+        self.render_home_cards_with_width(cards, layout, style, inner_width, window, cx)
+    }
+
+    fn render_home_cards_with_width(
+        &mut self,
+        cards: &[Card<'_>],
+        layout: HomeCardLayout,
+        style: CardStyle,
+        inner_width: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         if matches!(layout, HomeCardLayout::Cards | HomeCardLayout::Classic) {
             // Classic keeps the header, thin bar and footer card design.
             let style = CardStyle {
                 compact: layout == HomeCardLayout::Cards,
                 ..style
             };
-            return self.render_cards_styled(cards, PopupSurface::HomeTab, style, window, cx);
+            return self.render_cards_styled_with_width(
+                cards,
+                PopupSurface::HomeTab,
+                style,
+                inner_width,
+                window,
+                cx,
+            );
         }
-        let paired = self.card_inner_width(PopupSurface::HomeTab) >= RING_PAIR_MIN_WIDTH;
+        let paired = inner_width >= RING_PAIR_MIN_WIDTH;
         let mut out = Vec::new();
         let mut rings = Vec::new();
         for card_spec in cards {
@@ -403,7 +440,7 @@ impl PopupRoot {
                                 compact: true,
                                 ..style
                             },
-                            self.card_inner_width(PopupSurface::HomeTab),
+                            inner_width,
                             window,
                         ));
                     } else {
@@ -418,6 +455,24 @@ impl PopupRoot {
                         ));
                     }
                 }
+                Card::LimitGroup {
+                    kind,
+                    title,
+                    cards: group_cards,
+                } => {
+                    flush_rings(&mut out, &mut rings, paired);
+                    out.push(self.render_limit_group(
+                        *kind,
+                        title,
+                        group_cards,
+                        PopupSurface::HomeTab,
+                        Some(layout),
+                        style,
+                        inner_width,
+                        window,
+                        cx,
+                    ));
+                }
                 Card::BankedResets {
                     provider,
                     limits,
@@ -428,19 +483,116 @@ impl PopupRoot {
                         *provider,
                         limits,
                         expansion_key,
-                        self.card_inner_width(PopupSurface::HomeTab),
+                        inner_width,
                         window,
                         cx,
                     ));
                 }
                 _ => {
                     flush_rings(&mut out, &mut rings, paired);
-                    out.push(self.render_card(card_spec, PopupSurface::HomeTab, style, window, cx));
+                    out.push(self.render_card_with_width(
+                        card_spec,
+                        PopupSurface::HomeTab,
+                        style,
+                        inner_width,
+                        window,
+                        cx,
+                    ));
                 }
             }
         }
         flush_rings(&mut out, &mut rings, paired);
         out
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_limit_group(
+        &mut self,
+        kind: LimitGroupKind,
+        title: &str,
+        cards: &[Card<'_>],
+        surface: PopupSurface,
+        layout: Option<HomeCardLayout>,
+        style: CardStyle,
+        inner_width: f32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        const TRAY_PADDING: f32 = 6.0;
+        let palette = self.palette.clone();
+        let colored = self.ui.settings.use_colored_provider_icons;
+        let tray_inset = TRAY_PADDING * 2.0 + if palette.borders { 2.0 } else { 0.0 };
+        let child_width = (inner_width - tray_inset).max(0.0);
+        let group_radius = if palette.card_radius > 0.0 {
+            palette.card_radius + 4.0
+        } else {
+            0.0
+        };
+        let marks: AnyElement = match kind {
+            LimitGroupKind::Gemini => {
+                let color = if colored {
+                    crate::ui::gui::color::rgb8(if palette.dark {
+                        (138, 180, 248)
+                    } else {
+                        (26, 115, 232)
+                    })
+                } else {
+                    palette.mono_provider_icon
+                };
+                icon("gemini", 13.0, color).into_any_element()
+            }
+            LimitGroupKind::ClaudeAndGpt => div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap(px(4.0))
+                .flex_none()
+                .child(icon(
+                    "claude",
+                    12.5,
+                    palette.provider_icon(ProviderKind::Claude, colored),
+                ))
+                .child(icon(
+                    "codex",
+                    12.5,
+                    palette.provider_icon(ProviderKind::Codex, colored),
+                ))
+                .into_any_element(),
+        };
+        let header = div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(6.0))
+            .w_full()
+            .px(px(6.0))
+            .pt(px(2.0))
+            .child(marks)
+            .child(nowrap(components::caption_strong(
+                title.to_owned(),
+                palette.text_primary,
+            )))
+            .child(div().flex_1().h(px(1.0)).bg(palette.divider).ml(px(2.0)));
+        let children = match layout {
+            Some(layout) => {
+                self.render_home_cards_with_width(cards, layout, style, child_width, window, cx)
+            }
+            None => {
+                self.render_cards_styled_with_width(cards, surface, style, child_width, window, cx)
+            }
+        };
+        let mut tray = div()
+            .flex()
+            .flex_col()
+            .gap(px(6.0))
+            .w_full()
+            .p(px(TRAY_PADDING))
+            .rounded(px(group_radius))
+            .bg(palette.subtle_fill);
+        if palette.borders {
+            tray = tray.border_1().border_color(palette.divider);
+        }
+        tray.child(header).children(children).into_any_element()
     }
 
     /// Animated segment length and copy of a sub-limit merged into a quota

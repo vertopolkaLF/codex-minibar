@@ -109,6 +109,13 @@ pub(crate) struct HeadingCard {
     pub(crate) closed_incident: Option<crate::providers::status::IncidentImpact>,
 }
 
+/// Model family behind a [`Card::LimitGroup`], used to pick its header marks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum LimitGroupKind {
+    Gemini,
+    ClaudeAndGpt,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum Card<'a> {
     Heading(HeadingCard),
@@ -155,12 +162,13 @@ pub(crate) enum Card<'a> {
         name: &'a str,
         balance_microusd: Option<u64>,
     },
-    /// Small heading above the quota windows of one model family, such as
-    /// Antigravity's Gemini or Claude + GPT pools.
-    LimitGroupHeading {
+    /// Model-family quota group (such as Antigravity's Gemini or Claude + GPT
+    /// pools) rendered in a subtle tray that binds the family header to its
+    /// quota windows.
+    LimitGroup {
+        kind: LimitGroupKind,
         title: String,
-        /// The first group sits right under the instance heading.
-        first: bool,
+        cards: Vec<Card<'a>>,
     },
     /// One announced Codex reset with this instance's reception state.
     AnnouncedReset(AnnouncedResetRow<'a>),
@@ -203,6 +211,17 @@ impl Card<'_> {
         match self {
             Self::OpenRouterKeys { .. } => true,
             Self::Group { cards } => cards.iter().any(Self::has_key_list),
+            _ => false,
+        }
+    }
+
+    /// Whether this card is, or a group carries, a quota limit window.
+    pub(crate) fn has_limits(&self) -> bool {
+        match self {
+            Self::Limit { .. } => true,
+            Self::LimitGroup { cards, .. } | Self::Group { cards } => {
+                cards.iter().any(Self::has_limits)
+            }
             _ => false,
         }
     }
@@ -656,24 +675,29 @@ fn group_antigravity_limits<'a>(
             (other, _) => rest.push(other),
         }
     }
-    let names = [
-        limits.limit_name.as_deref().unwrap_or("Gemini"),
-        limits
-            .secondary_limit_name
-            .as_deref()
-            .unwrap_or("Claude + GPT"),
+    let families = [
+        (
+            LimitGroupKind::Gemini,
+            limits.limit_name.as_deref().unwrap_or("Gemini"),
+        ),
+        (
+            LimitGroupKind::ClaudeAndGpt,
+            limits
+                .secondary_limit_name
+                .as_deref()
+                .unwrap_or("Claude + GPT"),
+        ),
     ];
-    let mut first = true;
-    for (name, group) in names.into_iter().zip(groups) {
-        if group.iter().all(Option::is_none) {
+    for ((kind, name), group) in families.into_iter().zip(groups) {
+        let group_cards = group.into_iter().flatten().collect::<Vec<_>>();
+        if group_cards.is_empty() {
             continue;
         }
-        cards.push(Card::LimitGroupHeading {
+        cards.push(Card::LimitGroup {
+            kind,
             title: name.to_owned(),
-            first,
+            cards: group_cards,
         });
-        first = false;
-        cards.extend(group.into_iter().flatten());
     }
     cards.extend(rest);
 }

@@ -68,6 +68,7 @@ pub fn svg_source(name: &str) -> Option<&'static str> {
         "opencode" => include_str!("../../assets/icons/opencode-iconify.svg"),
         "openrouter" => include_str!("../../assets/icons/openrouter-iconify.svg"),
         "antigravity" => include_str!("../../assets/icons/antigravity.svg"),
+        "gemini" => include_str!("../../assets/icons/gemini-iconify.svg"),
         "grok" => include_str!("../../assets/icons/grok.svg"),
         "kiro" => include_str!("../../assets/icons/kiro-iconify.svg"),
         "commandcode" => include_str!("../../assets/icons/commandcode.svg"),
@@ -260,5 +261,6 @@ mod tests {
             assert!(svg_source(descriptor.icon).is_some(), "{}", descriptor.icon);
         }
         assert!(svg_source("chatgpt").is_some());
+        assert!(svg_source("gemini").is_some());
     }
 }

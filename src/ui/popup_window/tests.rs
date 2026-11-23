@@ -587,23 +587,30 @@ fn antigravity_limits_group_under_family_headings() {
         false,
         false,
     );
+    assert!(cards.iter().any(Card::has_limits));
     let layout = cards
         .iter()
         .filter_map(|card| match card {
-            Card::LimitGroupHeading { title, .. } => Some(format!("# {title}")),
-            Card::Limit { title, window, .. } => {
-                Some(format!("{title} {}", window.used_percent.unwrap_or(0)))
+            Card::LimitGroup { kind, title, cards } => {
+                let mut entries = vec![format!("# {kind:?} {title}")];
+                for inner in cards {
+                    if let Card::Limit { title, window, .. } = inner {
+                        entries.push(format!("{title} {}", window.used_percent.unwrap_or(0)));
+                    }
+                }
+                Some(entries)
             }
             _ => None,
         })
+        .flatten()
         .collect::<Vec<_>>();
     assert_eq!(
         layout,
         vec![
-            "# Gemini",
+            "# Gemini Gemini",
             "5H SESSION 20",
             "WEEKLY 5",
-            "# Claude + GPT",
+            "# ClaudeAndGpt Claude + GPT",
             "5H SESSION 40",
             "WEEKLY 5",
         ]
