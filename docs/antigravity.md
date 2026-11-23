@@ -1,7 +1,39 @@
 # Antigravity quotas
 
-Authentication reuses the official `agy` session from Windows Credential Manager
-(`gemini:antigravity`). Expired sessions are refreshed through `agy models`.
+With an empty profile folder, the first Antigravity instance reuses the
+default `agy` session from Windows Credential Manager or the Linux login
+keyring (with a file fallback on Linux). Expired default sessions are refreshed
+through `agy models`.
+
+## Additional Google accounts
+
+In Settings > Providers, add an Antigravity instance for each account. Set
+**Antigravity profile folder** to the absolute path of that account's
+`GEMINI_HOME`. For a signed-in T3 Code account, choose the directory
+`<T3CODE_HOME>/userdata/providers/antigravity/<profile>` that contains
+`antigravity-acp`.
+
+You can also use the new instance's suggested folder and sign in with
+`agy` 1.5.x. Create an empty directory at that path and run the following in
+a terminal, substituting your profile folder:
+
+| Shell | Command |
+| --- | --- |
+| PowerShell | `$env:GEMINI_HOME = 'C:\path\to\profile'; $env:SSH_CONNECTION = '127.0.0.1 0 127.0.0.1 0'; agy acp --login` |
+| Bash | `GEMINI_HOME='/path/to/profile' SSH_CONNECTION='127.0.0.1 0 127.0.0.1 0' agy acp --login` |
+
+Open the Google link printed by `agy`, choose the account and paste the
+authorization code back into that terminal. SSH mode makes `agy` write
+`antigravity-acp/antigravity-oauth-token` inside the profile. Run an
+Antigravity session with the same environment when that file's access token
+expires, then refresh Minibar. Profiles using the older ACP
+`antigravity-acp/acp_token.json` format refresh directly through Google OAuth.
+If both files are present, Minibar uses the CLI sign-in. Each configured
+profile supplies its own quota and local history.
+
+[T3 Code's Antigravity profile isolation](https://github.com/pingdotgg/t3code/blob/main/docs/internals/providers.md)
+
+## Quota requests
 
 Quota requests use the Hub compatibility User-Agent
 `antigravity/hub/2.9.1 windows/amd64`:
@@ -33,8 +65,9 @@ Protocol reference:
 
 ## Local usage history
 
-Usage reads Antigravity conversation databases from `~/.gemini/antigravity*`,
-`~/.config/antigravity`, and local T3 Code ACP profiles. Set
+The default instance reads Antigravity conversation databases from
+`~/.gemini/antigravity*`, `~/.config/antigravity`, and local T3 Code ACP
+profiles that are not assigned to another Minibar instance. Set
 `ANTIGRAVITY_DATA_DIR` to a comma-separated list of data directories to override
 the native Antigravity paths. `T3CODE_HOME` overrides the T3 Code base directory
 (`~/.t3` by default).

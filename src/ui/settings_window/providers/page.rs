@@ -472,6 +472,9 @@ impl SettingsWindow {
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
         let provider = instance.provider_id();
+        if instance.driver == ProviderKind::Antigravity {
+            return Vec::new();
+        }
         match crate::providers::drivers::settings_copy(instance.driver).credential {
             Credential::KeyAccounts => return self.openrouter_section(instance, k, cx),
             Credential::ApiKey if instance.driver == ProviderKind::OpenCodeGo => {
@@ -991,9 +994,19 @@ impl SettingsWindow {
                 window,
                 cx,
             );
-            let mut row = Row::new("instance-config-folder", crate::i18n::tr("config-folder"))
-                .description(
-                    k,
+            let (label, description) = if instance.driver == ProviderKind::Antigravity {
+                (
+                    crate::i18n::tr("antigravity-profile-folder"),
+                    crate::i18n::tr(if instance.is_primary() {
+                        "antigravity-default-profile"
+                    } else {
+                        "antigravity-isolated-profile"
+                    })
+                    .into(),
+                )
+            } else {
+                (
+                    crate::i18n::tr("config-folder"),
                     crate::i18n::format(
                         "passed-to-the-cli-as-env-leave-empty-to-use",
                         &[
@@ -1009,7 +1022,9 @@ impl SettingsWindow {
                             ),
                         ],
                     ),
-                );
+                )
+            };
+            let mut row = Row::new("instance-config-folder", label).description(k, description);
             row = row.detail(div().pt(px(8.0)).child(picker).into_any_element());
             if let Some(other) =
                 crate::providers::instances::folder_conflicts(&self.settings.instances)

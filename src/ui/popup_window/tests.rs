@@ -1324,7 +1324,8 @@ pub(crate) fn instance_fixture() -> Settings {
 
 #[test]
 fn every_enabled_instance_combination_has_matching_tabs() {
-    let base = instance_fixture();
+    let mut base = instance_fixture();
+    base.add_instance(ProviderInstance::new(ProviderKind::Antigravity, "Work"));
     let count = base.instances.len();
     for mask in 0..(1_u32 << count) {
         let mut settings = base.clone();

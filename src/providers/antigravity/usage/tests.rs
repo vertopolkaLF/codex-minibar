@@ -3,7 +3,7 @@ use rusqlite::params;
 use super::*;
 
 fn reader() -> Reader {
-    Reader::new(ProviderId::primary(ProviderKind::Antigravity))
+    Reader::new(ProviderId::primary(ProviderKind::Antigravity), None)
 }
 
 fn varint(mut value: u64) -> Vec<u8> {
@@ -98,7 +98,7 @@ fn pairs_mirrors_without_response_ids_and_retains_distinct_retries() {
         .unwrap();
 
     let scan = reader()
-        .scan(vec![root.clone(), root.join("conversations")], now)
+        .scan(vec![root.clone(), root.join("conversations")], &[], now)
         .unwrap();
     assert_eq!(scan.files.len(), 1);
     assert_eq!(scan.files[0].1.usage.requests, 3);
@@ -149,7 +149,7 @@ fn merges_response_ids_across_files_and_prefers_recorded_timestamp_and_model() {
         &[message(4, &unrelated), message(9, &timestamp(4, now))].concat(),
     );
 
-    let scan = reader().scan(vec![root], now).unwrap();
+    let scan = reader().scan(vec![root], &[], now).unwrap();
     assert_eq!(scan.files.len(), 2);
     assert!(scan.files[0].0.ends_with("a.db"));
     assert_eq!(scan.files[0].1.date, yesterday.date_naive());
@@ -180,7 +180,7 @@ fn discovers_managed_profiles_and_reloads_when_the_wal_changes() {
     let mut reader = reader();
     assert!(
         reader
-            .scan(roots.clone(), now)
+            .scan(roots.clone(), &[], now)
             .unwrap()
             .rollup
             .daily
@@ -194,10 +194,19 @@ fn discovers_managed_profiles_and_reloads_when_the_wal_changes() {
     .unwrap();
     add_step(&db, 1, message(9, &usage(100)));
     assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), before);
-    let rollup = reader.scan(roots, now).unwrap().rollup;
+    let rollup = reader.scan(roots.clone(), &[], now).unwrap().rollup;
     assert_eq!(rollup.daily[0].usage.requests, 1);
     assert_eq!(rollup.daily[0].date, now.date_naive());
     assert_eq!(rollup.models[0].0, "claude-opus-4-6");
+    let excluded = roots.last().unwrap().canonicalize().unwrap();
+    assert!(
+        reader
+            .scan(roots, &[excluded], now)
+            .unwrap()
+            .rollup
+            .daily
+            .is_empty()
+    );
 }
 
 #[test]
@@ -210,17 +219,25 @@ fn keeps_the_last_successful_database_when_a_rescan_fails() {
     add_step(&db, 1, message(9, &usage(100)));
     let mut cached = reader();
     assert_eq!(
-        cached.scan(vec![root.clone()], now).unwrap().rollup.daily[0]
+        cached
+            .scan(vec![root.clone()], &[], now)
+            .unwrap()
+            .rollup
+            .daily[0]
             .usage
             .requests,
         1
     );
     add_step(&db, 2, vec![0x80]);
     assert_eq!(
-        cached.scan(vec![root.clone()], now).unwrap().rollup.daily[0]
+        cached
+            .scan(vec![root.clone()], &[], now)
+            .unwrap()
+            .rollup
+            .daily[0]
             .usage
             .requests,
         1
     );
-    assert!(reader().scan(vec![root], now).is_err());
+    assert!(reader().scan(vec![root], &[], now).is_err());
 }

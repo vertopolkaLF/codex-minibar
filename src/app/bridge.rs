@@ -524,6 +524,9 @@ impl Bridge {
             state.updates.check_async(false);
         }
         let previous = Arc::clone(&self.ui.settings);
+        let antigravity_profiles_changed =
+            crate::providers::antigravity::configured_profiles(&previous.instances)
+                != crate::providers::antigravity::configured_profiles(&settings.instances);
         let providers_changed = previous.enabled_providers() != settings.enabled_providers()
             || previous.instances.len() != settings.instances.len();
         let restart = instances_needing_restart(&previous.instances, &settings.instances);
@@ -594,6 +597,17 @@ impl Bridge {
             let _ = commands.send(WorkerCommand::SetUsageCollectionEnabled(
                 settings.usage_stats_collection_enabled(provider),
             ));
+            if antigravity_profiles_changed
+                && provider == ProviderId::primary(ProviderKind::Antigravity)
+                && !restart.contains(&provider)
+                && previous.is_enabled(provider)
+                && settings.usage_stats_collection_enabled(provider)
+                && settings
+                    .instance(provider)
+                    .is_some_and(|instance| instance.config_folder().is_none())
+            {
+                let _ = commands.send(WorkerCommand::Refresh);
+            }
         }
         notify_new_forced_reset_info(
             &state.current_forced_resets(),

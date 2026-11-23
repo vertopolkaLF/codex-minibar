@@ -518,16 +518,8 @@ impl PopupRoot {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        const TRAY_PADDING: f32 = 6.0;
         let palette = self.palette.clone();
         let colored = self.ui.settings.use_colored_provider_icons;
-        let tray_inset = TRAY_PADDING * 2.0 + if palette.borders { 2.0 } else { 0.0 };
-        let child_width = (inner_width - tray_inset).max(0.0);
-        let group_radius = if palette.card_radius > 0.0 {
-            palette.card_radius + 4.0
-        } else {
-            0.0
-        };
         let marks: AnyElement = match kind {
             LimitGroupKind::Gemini => {
                 let color = if colored {
@@ -575,24 +567,20 @@ impl PopupRoot {
             .child(div().flex_1().h(px(1.0)).bg(palette.divider).ml(px(2.0)));
         let children = match layout {
             Some(layout) => {
-                self.render_home_cards_with_width(cards, layout, style, child_width, window, cx)
+                self.render_home_cards_with_width(cards, layout, style, inner_width, window, cx)
             }
             None => {
-                self.render_cards_styled_with_width(cards, surface, style, child_width, window, cx)
+                self.render_cards_styled_with_width(cards, surface, style, inner_width, window, cx)
             }
         };
-        let mut tray = div()
+        div()
             .flex()
             .flex_col()
             .gap(px(6.0))
             .w_full()
-            .p(px(TRAY_PADDING))
-            .rounded(px(group_radius))
-            .bg(palette.subtle_fill);
-        if palette.borders {
-            tray = tray.border_1().border_color(palette.divider);
-        }
-        tray.child(header).children(children).into_any_element()
+            .child(header)
+            .children(children)
+            .into_any_element()
     }
 
     /// Animated segment length and copy of a sub-limit merged into a quota

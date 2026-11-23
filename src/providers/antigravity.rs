@@ -1,6 +1,6 @@
-//! Antigravity subscription quota using the official `agy` session: Windows
-//! Credential Manager on Windows, the Secret Service login keyring on Linux.
+//! Antigravity subscription quota using official agy and ACP sign-ins.
 
+mod profile;
 mod usage;
 
 use std::{
@@ -40,17 +40,21 @@ const CLI_NAMES: &[&str] = &["agy.exe", "agy.cmd", "agy.ps1", "agy.bat"];
 #[cfg(not(windows))]
 const CLI_NAMES: &[&str] = &["agy"];
 
-#[derive(Clone)]
 pub struct AntigravityClient {
     agent: ureq::Agent,
     cli_folder: Option<PathBuf>,
+    profile: Option<profile::Profile>,
 }
 
 impl AntigravityClient {
     pub fn new(cli_folder: Option<PathBuf>) -> Self {
         Self {
-            agent: ureq::AgentBuilder::new().timeout(REQUEST_TIMEOUT).build(),
+            agent: ureq::AgentBuilder::new()
+                .timeout(REQUEST_TIMEOUT)
+                .redirects(0)
+                .build(),
             cli_folder,
+            profile: None,
         }
     }
 
@@ -78,8 +82,24 @@ impl Default for AntigravityClient {
 
 impl LimitProvider for AntigravityClient {
     fn read_limits(&mut self) -> Result<RateLimits> {
+        if let Some(profile) = &mut self.profile {
+            let (session, project) = profile.session(&self.agent)?;
+            return read_remote_limits_for_project(
+                &self.agent,
+                API_BASE,
+                QUOTA_API_BASE,
+                &session.access_token,
+                project,
+            );
+        }
         let session = self.fresh_session()?;
-        read_remote_limits(&self.agent, API_BASE, QUOTA_API_BASE, &session.access_token)
+        read_remote_limits_for_project(
+            &self.agent,
+            API_BASE,
+            QUOTA_API_BASE,
+            &session.access_token,
+            None,
+        )
     }
 }
 
@@ -97,10 +117,12 @@ fn start_worker(instance: &ProviderInstance, options: WorkerOptions) -> Result<W
     if let Some(executable) = cli_available(path.as_deref()) {
         crate::platform::logger::info(format!("Antigravity executable: {}", executable.display()));
     }
-    let client = AntigravityClient::new(path);
+    let folder = profile_folder(instance)?;
+    let mut client = AntigravityClient::new(path);
+    client.profile = folder.clone().map(profile::Profile::new);
     Ok(crate::providers::worker::start_worker(
         client,
-        usage::Reader::new(instance.provider_id()),
+        usage::Reader::new(instance.provider_id(), folder),
         None,
         options,
     ))
@@ -119,7 +141,11 @@ fn detect(instance: &ProviderInstance) -> InstallStatus {
         app: app.as_deref().map(display_path),
         cli: cli.as_deref().map(display_path),
         used,
-        signed_in: signed_in(),
+        signed_in: match profile_folder(instance) {
+            Ok(Some(folder)) => profile::Profile::new(folder).signed_in(),
+            Ok(None) => signed_in(),
+            Err(_) => false,
+        },
         ..InstallStatus::none(instance)
     }
 }
@@ -143,12 +169,33 @@ fn settings_copy() -> SettingsCopy {
         )],
         found: crate::i18n::tr("found-an-official-agy-sign-in-on-this-pc"),
         not_found: crate::i18n::tr("not-found-sign-in-with-agy-before-enabling-it"),
+        config_env: "GEMINI_HOME",
         ..SettingsCopy::new(crate::i18n::tr(if cfg!(windows) {
             "reads-subscription-quota-from-your-existing-official-agy-windows"
         } else {
             "linux-reads-subscription-quota-from-your-existing-official-agy-windows"
         }))
     }
+}
+
+fn profile_folder(instance: &ProviderInstance) -> Result<Option<PathBuf>> {
+    let folder = instance.config_folder();
+    anyhow::ensure!(
+        folder.is_some() || instance.is_primary(),
+        "Antigravity profile directory is unavailable"
+    );
+    Ok(folder)
+}
+
+pub(crate) fn configured_profiles(
+    instances: &[ProviderInstance],
+) -> std::collections::BTreeSet<PathBuf> {
+    instances
+        .iter()
+        .filter(|instance| instance.driver == crate::providers::registry::ProviderKind::Antigravity)
+        .filter_map(ProviderInstance::config_folder)
+        .filter(|folder| folder.is_absolute())
+        .collect()
 }
 
 /// Resolves a standalone `agy` launcher. An explicit folder is searched first;
@@ -171,6 +218,7 @@ pub fn desktop_app(explicit: Option<&Path>) -> Option<PathBuf> {
         .or_else(known_desktop_app)
 }
 
+#[derive(Clone)]
 struct AntigravitySession {
     access_token: String,
     expires_at: Option<DateTime<Utc>>,
@@ -435,11 +483,12 @@ struct QuotaObservation {
     duration_minutes: Option<u32>,
 }
 
-fn read_remote_limits(
+fn read_remote_limits_for_project(
     agent: &ureq::Agent,
     base: &str,
     quota_base: &str,
     access_token: &str,
+    project: Option<&str>,
 ) -> Result<RateLimits> {
     let metadata = json!({
         "metadata": {
@@ -449,7 +498,7 @@ fn read_remote_limits(
         }
     });
     let code_assist = post_json(agent, base, "loadCodeAssist", access_token, &metadata)?;
-    let project = project_id(&code_assist);
+    let project = project.or_else(|| project_id(&code_assist));
     if project.is_none()
         && code_assist.get("currentTier").is_none_or(Value::is_null)
         && code_assist
@@ -1017,7 +1066,8 @@ mod tests {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(5))
             .build();
-        let limits = read_remote_limits(&agent, &base, &base, "test-token").unwrap();
+        let limits =
+            read_remote_limits_for_project(&agent, &base, &base, "test-token", None).unwrap();
         let requests = peer.join().unwrap();
         assert_eq!(requests.len(), 2);
         for (headers, _) in &requests {
@@ -1054,7 +1104,8 @@ mod tests {
             let agent = ureq::AgentBuilder::new()
                 .timeout(Duration::from_secs(5))
                 .build();
-            let error = read_remote_limits(&agent, &base, &base, "test-token").unwrap_err();
+            let error = read_remote_limits_for_project(&agent, &base, &base, "test-token", None)
+                .unwrap_err();
             assert_eq!(
                 crate::platform::net::is_rate_limited_error(&error),
                 status == 429
@@ -1074,7 +1125,8 @@ mod tests {
         let agent = ureq::AgentBuilder::new()
             .timeout(Duration::from_secs(5))
             .build();
-        let error = read_remote_limits(&agent, &base, &base, "test-token").unwrap_err();
+        let error =
+            read_remote_limits_for_project(&agent, &base, &base, "test-token", None).unwrap_err();
         assert!(error.to_string().contains("run `agy` and sign in again"));
         assert_eq!(peer.join().unwrap().len(), 1);
     }

@@ -33,6 +33,7 @@ use crate::{
 
 pub(super) struct Reader {
     provider: ProviderId,
+    profile: Option<PathBuf>,
     databases: BTreeMap<PathBuf, CachedDatabase>,
     cancelled: Arc<AtomicBool>,
 }
@@ -88,16 +89,22 @@ impl Fingerprint {
 }
 
 impl Reader {
-    pub(super) fn new(provider: ProviderId) -> Self {
+    pub(super) fn new(provider: ProviderId, profile: Option<PathBuf>) -> Self {
         Self {
             provider,
+            profile,
             databases: BTreeMap::new(),
             cancelled: Arc::default(),
         }
     }
 
-    fn scan(&mut self, roots: Vec<PathBuf>, now: DateTime<Local>) -> Result<Scan> {
-        let paths = conversation_databases(roots)?;
+    fn scan(
+        &mut self,
+        roots: Vec<PathBuf>,
+        excluded: &[PathBuf],
+        now: DateTime<Local>,
+    ) -> Result<Scan> {
+        let paths = conversation_databases(roots, excluded)?;
         self.databases.retain(|path, _| paths.contains(path));
         let mut incomplete = false;
         for path in paths {
@@ -193,13 +200,24 @@ impl UsageProvider for Reader {
     }
 
     fn refresh_usage_statistics(&mut self, history_days: u16) -> Result<UsageStatistics> {
-        let home = directories::BaseDirs::new();
-        let roots = data_roots(
-            home.as_ref().map(directories::BaseDirs::home_dir),
-            env::var("ANTIGRAVITY_DATA_DIR").ok().as_deref(),
-            env::var("T3CODE_HOME").ok().as_deref(),
-        )?;
-        let scan = self.scan(roots, Local::now())?;
+        let (roots, excluded) = if let Some(profile) = &self.profile {
+            (vec![profile.join("antigravity-acp")], Vec::new())
+        } else {
+            let home = directories::BaseDirs::new();
+            let roots = data_roots(
+                home.as_ref().map(directories::BaseDirs::home_dir),
+                env::var("ANTIGRAVITY_DATA_DIR").ok().as_deref(),
+                env::var("T3CODE_HOME").ok().as_deref(),
+            )?;
+            // Explicit profiles publish their own usage. Keep discovering
+            // other T3 profiles for existing setups with one Minibar instance.
+            let excluded = super::configured_profiles(&crate::settings::store::read().instances)
+                .into_iter()
+                .filter_map(|profile| profile.join("antigravity-acp").canonicalize().ok())
+                .collect();
+            (roots, excluded)
+        };
+        let scan = self.scan(roots, &excluded, Local::now())?;
         store::with_store(|store| {
             self.check_cancelled()?;
             store.replace_usage_rollup(self.provider, &scan.rollup, &scan.files)
@@ -292,7 +310,7 @@ fn children(path: &Path) -> Result<Vec<(PathBuf, fs::FileType)>> {
     read().with_context(|| format!("list Antigravity history directory {}", path.display()))
 }
 
-fn conversation_databases(roots: Vec<PathBuf>) -> Result<BTreeSet<PathBuf>> {
+fn conversation_databases(roots: Vec<PathBuf>, excluded: &[PathBuf]) -> Result<BTreeSet<PathBuf>> {
     let mut pending = Vec::new();
     for root in roots {
         let nested = root.join("conversations");
@@ -313,7 +331,7 @@ fn conversation_databases(roots: Vec<PathBuf>) -> Result<BTreeSet<PathBuf>> {
         else {
             continue;
         };
-        if !visited.insert(dir.clone()) {
+        if excluded.iter().any(|profile| dir.starts_with(profile)) || !visited.insert(dir.clone()) {
             continue;
         }
         for (path, kind) in children(&dir)? {

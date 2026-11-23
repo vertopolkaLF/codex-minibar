@@ -1929,6 +1929,9 @@ cursor-app = Приложение Cursor
 
 # src/ui/settings_window/providers.rs
 antigravity-app = Приложение Antigravity
+antigravity-profile-folder = Папка профиля Antigravity
+antigravity-default-profile = Оставьте поле пустым для основного аккаунта agy или укажите GEMINI_HOME профиля, в котором уже выполнен вход.
+antigravity-isolated-profile = Выберите профиль T3 Code с выполненным входом или укажите эту папку в GEMINI_HOME и выполните agy acp --login в режиме SSH.
 
 # src/ui/settings_window/providers.rs
 grok-cli = Grok CLI

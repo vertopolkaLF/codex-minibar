@@ -493,7 +493,7 @@ impl ProviderInstance {
         }
     }
 
-    /// The folder handed to the CLI as `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+    /// The folder used by the CLI for this instance's configuration.
     /// `None` means the CLI's own default location.
     pub fn config_folder(&self) -> Option<PathBuf> {
         match &self.source {
@@ -634,7 +634,7 @@ pub enum PathField {
     App,
     KiroCrew,
     KiroCli,
-    /// `CLAUDE_CONFIG_DIR` / `CODEX_HOME`.
+    /// The provider's configuration or profile directory.
     ConfigFolder,
 }
 
@@ -729,8 +729,7 @@ pub fn badge_text(explicit: &str, name: &str) -> String {
     text.to_uppercase()
 }
 
-/// App-managed `CLAUDE_CONFIG_DIR` / `CODEX_HOME` for an instance without an
-/// explicit folder.
+/// App-managed configuration folder for an instance without an explicit path.
 pub fn managed_folder(id: &str) -> anyhow::Result<PathBuf> {
     Ok(crate::platform::paths::managed_instances()?.join(sanitize_id(id)))
 }
@@ -840,7 +839,7 @@ impl Capabilities {
             auto_reset: descriptor.banked_resets
                 != crate::providers::registry::BankedResets::Unsupported
                 && !manual,
-            sign_in: folder_driver,
+            sign_in: folder_driver && instance.driver != ProviderKind::Antigravity,
             config_folder: folder_driver,
             multiple_instances: descriptor.supports_multiple_instances,
         }
